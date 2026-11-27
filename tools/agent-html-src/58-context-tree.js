@@ -98,6 +98,11 @@ const ContextTree = (() => {
     const p = parseMaybeJSON(payload, null);
     if (!p) return;
     if (type === 'context.policy') { const cp = policyApi(); if (cp) { try { cp.onEvent(type, p); } catch (e) { console.warn('context policy event', e); } } }
+    // Every chat (the main one and each sub-agent) sends its own tree on the
+    // same event bus: only the open chat's may land here, or a sub-agent's
+    // checklist and memory would show another chat's rows.
+    if ((type === 'context.tree' || type === 'context.checklist' || type === 'context.tree_action' || type === 'context.tree_changed')
+      && p.sessionKey && activeKey() && p.sessionKey !== activeKey()) return;
     if (type === 'context.tree' || type === 'context.checklist') {
       state = {
         rev: p.rev ?? state.rev,
@@ -108,7 +113,8 @@ const ContextTree = (() => {
         stage: p.stage ?? state.stage,
         model: p.model || state.model,
         // The chat memory as checklist groups (memory_checklist.rs).
-        memory: p.memory && typeof p.memory === 'object' && Array.isArray(p.memory.groups) ? p.memory : state.memory,
+        memory: p.memory && typeof p.memory === 'object' && Array.isArray(p.memory.groups) ? p.memory : (p.sessionKey && p.sessionKey !== state.sessionKey ? null : state.memory),
+        sessionKey: p.sessionKey || state.sessionKey || null,
         // Every model request per turn (request_log.rs): one turn is many requests.
         requests: p.requests && typeof p.requests === 'object' && Array.isArray(p.requests.turns) ? p.requests : state.requests,
         // The person's checklists and the model's own (store.rs ucl/…, cat/…, task/pick).
@@ -1489,8 +1495,8 @@ const ContextTree = (() => {
     const left = items.filter((r) => r.colour === 'left_out').length;
     const sent = items.filter((r) => r.colour === 'sent' || r.colour === 'pinned').length;
     const body = open ? `<div class="cc-kids">${main.map(memRow).join('')}${shownMore.map(memRow).join('')}${hidden > 0 ? `<button class="cc-link cc-mem-more cc-mc-show_more" type="button" data-tw="${esc(id)}/more">Show ${hidden} more</button>` : ''}${kids.map((k) => memGroup(k, byParent)).join('')}</div>` : '';
-    return `<div class="cc-node cc-group cc-g-memory cc-mem-group" data-mem-group="${esc(g.id)}" role="treeitem">
-      <div class="cc-row cc-head">${twisty(id, g.title)}<span class="cc-dot"></span><span class="ct-title cc-group-name">${esc(g.title)}</span><span class="ct-cost">${sent}/${total}${left ? ` \u00b7 <span class="cc-mc-left_out cc-mem-count">${left} left out</span>` : ''}</span>${groupOps(g)}</div>${body}</div>`;
+    return `<div class="cc-node cc-group cc-g-memory cc-mem-group${g.readOnly ? ' cc-mem-ro' : ''}" data-mem-group="${esc(g.id)}" role="treeitem">
+      <div class="cc-row cc-head">${twisty(id, g.title)}<span class="cc-dot"></span><span class="ct-title cc-group-name">${esc(g.title)}</span>${g.readOnly ? '<span class="cc-badge cc-ro" title="Shared from the parent agent: it can be sent, not changed here">Read-only</span>' : ''}<span class="ct-cost">${sent}/${total}${left ? ` \u00b7 <span class="cc-mc-left_out cc-mem-count">${left} left out</span>` : ''}</span>${groupOps(g)}</div>${body}</div>`;
   }
 
   /** One tap for a whole group (and its child groups): send all, leave all
@@ -1522,7 +1528,7 @@ const ContextTree = (() => {
     const legend = `<div class="cc-mem-legend" aria-label="Colours">${Object.entries(MEM_COLOURS).map(([k, v]) => `<span class="cc-mc-${k}"><span class="cc-mem-dot"></span>${esc(v)}</span>`).join('')}</div>`;
     const tags = Array.isArray(m.tags) && m.tags.length ? `<div class="cc-mem-tags">${m.tags.slice(0, 30).map(tagChip).join('')}</div>` : '';
     return `<div class="cc-node cc-group cc-g-memory cc-mem-root" data-group="chat-memory" role="treeitem">
-      <div class="cc-row cc-head">${twisty(id, 'Chat memory')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Chat memory</span><span class="ct-cost">${esc(c.sent || 0)} sent \u00b7 <span class="cc-mc-left_out cc-mem-count">${esc(c.leftOut || 0)} left out</span> \u00b7 <span class="cc-mc-show_more cc-mem-count">${esc(c.showMore || 0)} more</span></span>${infoBtn('memory')}</div>${tip('memory')}
+      <div class="cc-row cc-head">${twisty(id, 'Chat memory')}<span class="cc-dot"></span><span class="ct-title cc-group-name">${scopeInfo().sub ? 'Sub-agent memory' : 'Chat memory'}</span><span class="ct-cost">${esc(c.sent || 0)} sent \u00b7 <span class="cc-mc-left_out cc-mem-count">${esc(c.leftOut || 0)} left out</span> \u00b7 <span class="cc-mc-show_more cc-mem-count">${esc(c.showMore || 0)} more</span></span>${infoBtn('memory')}</div>${tip('memory')}
       ${open ? `<div class="cc-kids">${legend}${tags}${inner}</div>` : ''}</div>`;
   }
 
@@ -2042,9 +2048,41 @@ const ContextTree = (() => {
   let marksQueued = false;
   const scheduleMarks = () => { if (marksQueued) return; marksQueued = true; (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : setTimeout)(() => { marksQueued = false; try { paintMainMarks(); } catch (e) { /* never break the chat */ } }); };
 
+  /** Whose brain the card shows: the main agent or one sub-agent (its own
+   * checklist, summary and long-term memory), from the engine's `scope`. */
+  function scopeInfo() {
+    const key = memKey() || '';
+    const sc = (state.memory && state.memory.scope && (!state.sessionKey || state.sessionKey === activeKey()) && key === activeKey()) ? state.memory.scope : null;
+    const sub = sc ? sc.kind === 'subagent' : /^subagent:/.test(key);
+    let name = sc && sc.name ? sc.name : '';
+    if (!name && sub) {
+      try {
+        const it = appRef && appRef.chat && appRef.chat.items && appRef.chat.items.get && appRef.chat.items.get(key);
+        name = (appRef && appRef.chat && appRef.chat.titles && appRef.chat.titles[key]) || (it && it.title) || '';
+      } catch (e) { /* no chat list */ }
+    }
+    return { sub, key, name: name || (sub ? key.replace(/^subagent:/, '') : 'Main agent'), mode: (sc && sc.mode) || (sub ? 'private' : ''), readsParent: !!(sc && sc.readsParent) };
+  }
+  const MODE_LABEL = { private: 'Own memory', read_parent: 'Own memory \u00b7 reads parent', shared: 'Shares parent memory' };
+  const MODE_HINT = {
+    private: 'Its checklist, summary and long-term memory are its own. Nothing from the main chat or other sub-agents is sent.',
+    read_parent: 'Its checklist, summary and long-term memory are its own. The parent\u2019s long-term memory is shown read-only, in its own group.',
+    shared: 'Its checklist and summary are its own; it reads and writes its parent\u2019s long-term memory.',
+  };
+  function scopeHead() {
+    const s = scopeInfo();
+    if (!s.sub) return '';
+    const short = s.key.replace(/^subagent:/, '').slice(0, 8);
+    return `<div class="cc-scope" role="status" data-slot="brain-scope" data-scope="subagent" data-mode="${esc(s.mode)}">
+      <span class="cc-scope-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 8V4H8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="4" y="8" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 13v2M15 13v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+      <span class="cc-scope-txt"><span class="cc-scope-name">${esc(clip(s.name, 40))}</span><span class="cc-scope-sub">Sub-agent session \u00b7 ${esc(short)}</span></span>
+      <span class="cc-badge cc-scope-mode" title="${esc(MODE_HINT[s.mode] || '')}">${esc(MODE_LABEL[s.mode] || 'Own memory')}</span>
+    </div>`;
+  }
+
   function tabItems() {
     // Always on: there is no "off" screen and no "Turn on" button.
-    return `${errorNote()}${stageNote()}${meter()}${actionsTop(countHidden())}<div class="cc-tree ct-list${act.select ? ' cc-selecting' : ''}" role="tree" aria-label="Checklist"${act.select ? ' aria-multiselectable="true"' : ''}>${tree()}</div>${resetNote()}${selectBar()}`;
+    return `${errorNote()}${scopeHead()}${stageNote()}${meter()}${actionsTop(countHidden())}<div class="cc-tree ct-list${act.select ? ' cc-selecting' : ''}" role="tree" aria-label="Checklist"${act.select ? ' aria-multiselectable="true"' : ''}>${tree()}</div>${resetNote()}${selectBar()}`;
   }
 
   /** Every range with its version and changes, and what the request sends
@@ -2097,7 +2135,7 @@ const ContextTree = (() => {
     const d = md && md.data;
     const m = d && d.memory;
     const at = m && (m.updatedAt || m.createdAt);
-    const sub = panel.memKey ? `<div class="cc-sub-note" role="status"><span class="cc-badge">Sub-agent</span><span class="ct-title">${esc(clip(String(panel.memKey).replace(/^subagent:/, ''), 40))}</span><button class="cc-link" type="button" data-mem-back="1">This chat</button></div>` : '';
+    const sub = panel.memKey ? `<div class="cc-sub-note" role="status"><span class="cc-badge">Sub-agent</span><span class="ct-title">${esc(clip(String(panel.memKey).replace(/^subagent:/, ''), 40))}</span><button class="cc-link" type="button" data-mem-back="1">This chat</button></div>` : scopeHead();
     const head = `${sub}<div class="cc-sumhead"><span class="cc-badge cc-always">Chosen per request</span>${m && m.throughTurn ? `<span class="cc-when">Turns 1\u2013${esc(num(m.throughTurn))}</span>` : ''}${m && m.version ? `<span class="cc-when">v${esc(num(m.version))}</span>` : ''}${at ? `<span class="cc-when" data-slot="summary-created">${esc(when(at))}</span>` : ''}${infoBtn('summary')}</div>${tip('summary')}`;
     if (!memApi()) return head + '<p class="ct-empty">No summary yet.</p>';
     return `${head}<div class="cc-mem" data-mem="summary"></div>${rangesBlock(key, m)}${d ? dataBlock(d, m) : ''}
@@ -2111,7 +2149,7 @@ const ContextTree = (() => {
 
   function tabSettings() {
     const unknown = settings == null;
-    return `${errorNote()}
+    return `${errorNote()}${scopeHead()}
       <div class="cc-set"><span class="cc-set-name">Context checklist</span>${infoBtn('tree')}
         <span class="cc-badge cc-always-on" role="status" aria-label="Always on"${unknown ? ' data-unknown="true"' : ''}>Always on</span></div>${tip('tree')}
       ${policyOn() ? '<div class="cc-set"><span class="cc-set-name">Context Policies</span><button class="cc-btn cc-btn-quiet" type="button" data-cp-open="1">Open</button></div>' : ''}

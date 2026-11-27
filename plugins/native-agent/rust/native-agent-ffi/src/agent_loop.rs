@@ -324,6 +324,76 @@ fn policy_now_ms() -> i64 {
 
 /// One turn, with its temp-context task opened and closed around it
 /// (`context_policy::lifecycle`).
+/// Bring the checklist's long-term group of this chat in line with the
+/// memory it really uses (see [`sync_own_memory`]), else the provider (the
+/// main agent, or a `shared` sub-agent, which writes its parent's memory).
+fn sync_long_term_mirror(ctx: &AgentLoopContext<'_>) {
+    use crate::context_tree::memory_checklist as mc;
+    let Ok(conn) = crate::db::open_db(&ctx.config.db_path) else {
+        return;
+    };
+    if let Some(sub) = ctx.subagents.as_ref() {
+        if sync_own_memory(&conn, &ctx.session_key, &sub.manager) {
+            return;
+        }
+    }
+    let Some(provider) = ctx.memory_provider.as_ref() else {
+        return;
+    };
+    let own = mc::mem_scope(&conn, &ctx.session_key).own;
+    let keys = mc::parse_long_term_keys(&provider.list(None, Some(200)));
+    let p = provider.clone();
+    mc::sync_long_term(
+        &conn,
+        &own,
+        keys.as_deref(),
+        &|k| mc::parse_long_term_text(&p.search(k.to_string(), 10), k),
+        now_millis(),
+    );
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// For a sub-agent's chat: record whose memory it uses, and mirror a
+/// `private` / `read_parent` sub-agent's own store (read straight from the
+/// manager, without the parent's entries a `read_parent` list mixes in) into
+/// its own scope. True when the mirror is done; false for the main agent and
+/// a `shared` sub-agent (their provider is the source).
+pub(crate) fn sync_own_memory(
+    conn: &rusqlite::Connection,
+    session_key: &str,
+    manager: &crate::subagents::SubagentManager,
+) -> bool {
+    use crate::context_tree::memory_checklist as mc;
+    if !session_key.starts_with(mc::SUBAGENT_KEY_PREFIX) {
+        return false;
+    }
+    let Some((name, mode, parent)) = manager.memory_scope_of(session_key) else {
+        return false;
+    };
+    let now = now_millis();
+    let _ = mc::save_scope(conn, session_key, &name, mode.as_str(), &parent, now);
+    if mode == crate::subagents::MemoryMode::Shared {
+        return false;
+    }
+    let mut texts: HashMap<String, String> = HashMap::new();
+    let mut keys: Vec<String> = Vec::new();
+    for e in manager.memory_entries(&name).into_iter().rev() {
+        if !texts.contains_key(&e.key) {
+            keys.push(e.key.clone());
+            texts.insert(e.key, e.text);
+        }
+    }
+    let own = mc::mem_scope(conn, session_key).own;
+    mc::sync_long_term(conn, &own, Some(&keys), &|k| texts.get(k).cloned(), now);
+    true
+}
+
 pub async fn run_agent_turn(
     ctx: AgentLoopContext<'_>,
 ) -> Result<AgentTurnResult, NativeAgentError> {
@@ -695,30 +765,11 @@ async fn run_agent_turn_inner(
         if tree_enabled {
             // The long-term memory (every chat) is a group of the checklist tree:
             // bring its mirror in line with the provider before the tree is read.
-            if let (Some(provider), Ok(conn)) = (
-                ctx.memory_provider.as_ref(),
-                crate::db::open_db(&ctx.config.db_path),
-            ) {
-                let keys = crate::context_tree::memory_checklist::parse_long_term_keys(
-                    &provider.list(None, Some(200)),
-                );
-                let p = provider.clone();
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
-                crate::context_tree::memory_checklist::sync_long_term(
-                    &conn,
-                    keys.as_deref(),
-                    &|k| {
-                        crate::context_tree::memory_checklist::parse_long_term_text(
-                            &p.search(k.to_string(), 10),
-                            k,
-                        )
-                    },
-                    now,
-                );
-            }
+            // Each agent has its own long-term memory: a sub-agent's chat
+            // mirrors its own store (kept per name) into its own scope, so
+            // the main agent's entries and other sub-agents' never show up
+            // (or get removed) here.
+            sync_long_term_mirror(&ctx);
             // No separate memory tools while the checklist is on: `ctx memory`
             // reads every group, `ctx recall` reads summarized turns and stored
             // results, `ctx remember` / `ctx forget` write the long-term group.
@@ -2170,6 +2221,7 @@ async fn run_agent_turn_inner(
                         crate::context_tree::memory_checklist::long_term_action(
                             &ctx.config.db_path,
                             ctx.memory_provider.as_ref(),
+                            &ctx.session_key,
                             act,
                             &tool_call.input,
                         )

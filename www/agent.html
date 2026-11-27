@@ -3097,6 +3097,20 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 /* The header's ··· menu holds every control: it scrolls inside the screen rather than run off it. */
 .popover.sa-more-menu { max-height: min(34rem, calc(100dvh - 16px)); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; min-width: 15rem; }
 .popover.sa-more-menu .menu-label { position: sticky; top: -0.375rem; z-index: 1; background: var(--popover); }
+
+/* Provider and model pickers (14-model-picker.js): an input-sized button with the
+   choice and a muted second line, opening the main chat's searchable model popover. */
+.sa-pick { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; height: auto; padding: 6px 10px; text-align: left; cursor: pointer; }
+.sa-pick:focus-visible { outline: 2px solid var(--ring, var(--primary)); outline-offset: 1px; }
+.sa-pick[data-state="open"] { border-color: var(--primary); }
+.sa-pick-text { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.25; }
+.sa-pick-main { font-size: 14px; color: var(--foreground); }
+.sa-pick-sub { font-size: 12px; color: var(--muted-foreground); }
+.sa-pick[data-warn="true"] .sa-pick-sub { color: var(--destructive, #dc2626); }
+.sa-pick-chev { flex: none; width: 16px; height: 16px; color: var(--muted-foreground); transition: transform .15s; }
+.sa-pick[data-state="open"] .sa-pick-chev { transform: rotate(180deg); }
+.sa-pick-note:empty { display: none; }
+.sa-pick-pop { width: min(360px, calc(100vw - 24px)); }
 /* @@END css:14-agent-view */
 /* @@BEGIN css:15-agent-team */
 /* Team, Graph and Main-agent view (15-agent-team.js) */
@@ -4327,6 +4341,17 @@ ol.sw-group-order li::before { counter-increment: sw-ord; content: counter(sw-or
 .cc-more-in { margin-left: 4px; }
 .cc-json { max-height: 260px; overflow: auto; font-size: 0.625rem; }
 .cc-sub-note { display: flex; align-items: center; gap: 6px; min-height: 26px; margin-bottom: 4px; }
+
+/* whose brain this is: a sub-agent's chat names the sub-agent, its session and its memory mode */
+.cc-scope { display: flex; align-items: center; gap: 8px; padding: 6px 8px; margin: 0 0 6px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in oklab, var(--primary) 6%, var(--background)); }
+.cc-scope-ico { display: inline-grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 7px; color: var(--primary); background: color-mix(in oklab, var(--primary) 14%, transparent); }
+.cc-scope-txt { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.2; }
+.cc-scope-name { font-size: 13px; font-weight: 600; color: var(--foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-scope-sub { font-size: 11px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-scope-mode { flex: none; white-space: nowrap; }
+.cc-scope[data-mode="shared"] .cc-scope-mode { color: var(--cc-st-always); border-color: currentColor; }
+.cc-ro { margin-left: 4px; font-size: 10px; color: var(--muted-foreground); }
+.cc-mem-ro > .cc-row .cc-group-name { font-style: italic; }
 
 /* the reused memory parts read as compact as the rest of the card: no intro
    or hint text (the (i) buttons hold it), labels beside their inputs */
@@ -23860,8 +23885,8 @@ const AgentTabs = (() => {
   const FIELDS = [
     ['title', 'Title', 'text', { maxLength: 120, hint: 'A short label shown under its name. Up to 120 characters.' }],
     ['description', 'Description', 'textarea', { maxLength: 1000, hint: 'What it is for. Up to 1,000 characters.' }],
-    ['model', 'Model', 'text', { hint: 'Empty = the main agent\u2019s model.' }],
-    ['provider', 'Provider', 'text', { hint: 'Empty = the main agent\u2019s provider.' }],
+    ['provider', 'Provider', 'pick', { hint: 'Default = the main agent\u2019s provider. Only providers with a connected key (and the Free Router) can be picked; it applies from its next run.' }],
+    ['model', 'Model', 'pick', { hint: 'The models of the provider above. Default = that provider\u2019s default (or the main agent\u2019s model when the provider is Default). Type an id to use one that is not listed.' }],
     ['temperature', 'Temperature', 'number', { min: 0, max: 2, step: 0.1, nullable: true, hint: '0\u20132. Empty = the app\u2019s setting.' }],
     ['systemPrompt', 'System prompt', 'textarea', { hint: 'Added to its instructions. Empty = none.' }],
     ['maxChildDepth', 'Levels it may start below itself', 'int', { min: 0, max: 3, nullable: true, hint: '0 = it cannot start agents. Empty = the chat limit.' }],
@@ -23874,7 +23899,7 @@ const AgentTabs = (() => {
   function validate(kind, raw, o) {
     const v = String(raw ?? '').trim();
     if (o.maxLength && v.length > o.maxLength) return { ok: false, msg: `At most ${o.maxLength} characters (now ${v.length}).` };
-    if (kind === 'text' || kind === 'textarea' || kind === 'select') return { ok: true, value: v };
+    if (kind === 'text' || kind === 'textarea' || kind === 'select' || kind === 'pick') return { ok: true, value: v };
     if (!v) return o.nullable ? { ok: true, value: null } : { ok: false, msg: 'Needs a value.' };
     const n = Number(v);
     if (!Number.isFinite(n) || (kind === 'int' && !Number.isInteger(n))) return { ok: false, msg: kind === 'int' ? 'Whole number.' : 'A number.' };
@@ -23886,10 +23911,19 @@ const AgentTabs = (() => {
     const { r } = ctx;
     const teamOk = ctx.can('subagentTeam');
     const inputs = new Map();
+    // Provider and model: searchable pickers fed by the main chat's provider and model lists.
+    const picker = typeof SubagentModelPicker !== 'undefined' ? SubagentModelPicker.create(r) : null;
     const rows = FIELDS.map(([key, label, kind, o]) => {
       const id = `sa-set-${key}`;
       const cur = r[key];
       let input;
+      if (kind === 'pick' && picker) {
+        const p = picker[key];
+        const err = h('p', { class: 'field-error', role: 'alert', 'data-error-for': key, hidden: true });
+        inputs.set(key, { input: p.input, err, kind, o });
+        return h('div', { class: 'field sa-vfield sa-vpick', 'data-field': key }, withInfo(h('label', { class: 'label', for: id }, label), o.hint, label), p.button, p.input, p.note || null, err);
+      }
+      if (kind === 'pick') kind = 'text';
       if (kind === 'select') {
         input = h('select', { id, class: 'select', 'data-key': key }, ...ctx.MEMORY_MODES.map(([v, l]) => h('option', { value: v, selected: v === (cur || 'private') }, l)));
       } else if (kind === 'textarea') {
@@ -23932,7 +23966,7 @@ const AgentTabs = (() => {
       for (const [key, { input, err, kind, o }] of inputs) {
         const res = validate(kind, input.value, o);
         if (!res.ok) { err.textContent = res.msg; err.hidden = false; input.setAttribute('aria-invalid', 'true'); if (!bad) input.focus(); bad = true; continue; }
-        const before = r[key] ?? (kind === 'text' || kind === 'textarea' ? '' : null);
+        const before = r[key] ?? (kind === 'text' || kind === 'textarea' || kind === 'pick' ? '' : null);
         if (JSON.stringify(res.value) !== JSON.stringify(before)) patch[key] = res.value;
       }
       if (mode.value === 'default') { if (own) patch.compaction = null; } else {
@@ -28323,6 +28357,11 @@ const ContextTree = (() => {
     const p = parseMaybeJSON(payload, null);
     if (!p) return;
     if (type === 'context.policy') { const cp = policyApi(); if (cp) { try { cp.onEvent(type, p); } catch (e) { console.warn('context policy event', e); } } }
+    // Every chat (the main one and each sub-agent) sends its own tree on the
+    // same event bus: only the open chat's may land here, or a sub-agent's
+    // checklist and memory would show another chat's rows.
+    if ((type === 'context.tree' || type === 'context.checklist' || type === 'context.tree_action' || type === 'context.tree_changed')
+      && p.sessionKey && activeKey() && p.sessionKey !== activeKey()) return;
     if (type === 'context.tree' || type === 'context.checklist') {
       state = {
         rev: p.rev ?? state.rev,
@@ -28333,7 +28372,8 @@ const ContextTree = (() => {
         stage: p.stage ?? state.stage,
         model: p.model || state.model,
         // The chat memory as checklist groups (memory_checklist.rs).
-        memory: p.memory && typeof p.memory === 'object' && Array.isArray(p.memory.groups) ? p.memory : state.memory,
+        memory: p.memory && typeof p.memory === 'object' && Array.isArray(p.memory.groups) ? p.memory : (p.sessionKey && p.sessionKey !== state.sessionKey ? null : state.memory),
+        sessionKey: p.sessionKey || state.sessionKey || null,
         // Every model request per turn (request_log.rs): one turn is many requests.
         requests: p.requests && typeof p.requests === 'object' && Array.isArray(p.requests.turns) ? p.requests : state.requests,
         // The person's checklists and the model's own (store.rs ucl/…, cat/…, task/pick).
@@ -29714,8 +29754,8 @@ const ContextTree = (() => {
     const left = items.filter((r) => r.colour === 'left_out').length;
     const sent = items.filter((r) => r.colour === 'sent' || r.colour === 'pinned').length;
     const body = open ? `<div class="cc-kids">${main.map(memRow).join('')}${shownMore.map(memRow).join('')}${hidden > 0 ? `<button class="cc-link cc-mem-more cc-mc-show_more" type="button" data-tw="${esc(id)}/more">Show ${hidden} more</button>` : ''}${kids.map((k) => memGroup(k, byParent)).join('')}</div>` : '';
-    return `<div class="cc-node cc-group cc-g-memory cc-mem-group" data-mem-group="${esc(g.id)}" role="treeitem">
-      <div class="cc-row cc-head">${twisty(id, g.title)}<span class="cc-dot"></span><span class="ct-title cc-group-name">${esc(g.title)}</span><span class="ct-cost">${sent}/${total}${left ? ` \u00b7 <span class="cc-mc-left_out cc-mem-count">${left} left out</span>` : ''}</span>${groupOps(g)}</div>${body}</div>`;
+    return `<div class="cc-node cc-group cc-g-memory cc-mem-group${g.readOnly ? ' cc-mem-ro' : ''}" data-mem-group="${esc(g.id)}" role="treeitem">
+      <div class="cc-row cc-head">${twisty(id, g.title)}<span class="cc-dot"></span><span class="ct-title cc-group-name">${esc(g.title)}</span>${g.readOnly ? '<span class="cc-badge cc-ro" title="Shared from the parent agent: it can be sent, not changed here">Read-only</span>' : ''}<span class="ct-cost">${sent}/${total}${left ? ` \u00b7 <span class="cc-mc-left_out cc-mem-count">${left} left out</span>` : ''}</span>${groupOps(g)}</div>${body}</div>`;
   }
 
   /** One tap for a whole group (and its child groups): send all, leave all
@@ -29747,7 +29787,7 @@ const ContextTree = (() => {
     const legend = `<div class="cc-mem-legend" aria-label="Colours">${Object.entries(MEM_COLOURS).map(([k, v]) => `<span class="cc-mc-${k}"><span class="cc-mem-dot"></span>${esc(v)}</span>`).join('')}</div>`;
     const tags = Array.isArray(m.tags) && m.tags.length ? `<div class="cc-mem-tags">${m.tags.slice(0, 30).map(tagChip).join('')}</div>` : '';
     return `<div class="cc-node cc-group cc-g-memory cc-mem-root" data-group="chat-memory" role="treeitem">
-      <div class="cc-row cc-head">${twisty(id, 'Chat memory')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Chat memory</span><span class="ct-cost">${esc(c.sent || 0)} sent \u00b7 <span class="cc-mc-left_out cc-mem-count">${esc(c.leftOut || 0)} left out</span> \u00b7 <span class="cc-mc-show_more cc-mem-count">${esc(c.showMore || 0)} more</span></span>${infoBtn('memory')}</div>${tip('memory')}
+      <div class="cc-row cc-head">${twisty(id, 'Chat memory')}<span class="cc-dot"></span><span class="ct-title cc-group-name">${scopeInfo().sub ? 'Sub-agent memory' : 'Chat memory'}</span><span class="ct-cost">${esc(c.sent || 0)} sent \u00b7 <span class="cc-mc-left_out cc-mem-count">${esc(c.leftOut || 0)} left out</span> \u00b7 <span class="cc-mc-show_more cc-mem-count">${esc(c.showMore || 0)} more</span></span>${infoBtn('memory')}</div>${tip('memory')}
       ${open ? `<div class="cc-kids">${legend}${tags}${inner}</div>` : ''}</div>`;
   }
 
@@ -30267,9 +30307,41 @@ const ContextTree = (() => {
   let marksQueued = false;
   const scheduleMarks = () => { if (marksQueued) return; marksQueued = true; (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : setTimeout)(() => { marksQueued = false; try { paintMainMarks(); } catch (e) { /* never break the chat */ } }); };
 
+  /** Whose brain the card shows: the main agent or one sub-agent (its own
+   * checklist, summary and long-term memory), from the engine's `scope`. */
+  function scopeInfo() {
+    const key = memKey() || '';
+    const sc = (state.memory && state.memory.scope && (!state.sessionKey || state.sessionKey === activeKey()) && key === activeKey()) ? state.memory.scope : null;
+    const sub = sc ? sc.kind === 'subagent' : /^subagent:/.test(key);
+    let name = sc && sc.name ? sc.name : '';
+    if (!name && sub) {
+      try {
+        const it = appRef && appRef.chat && appRef.chat.items && appRef.chat.items.get && appRef.chat.items.get(key);
+        name = (appRef && appRef.chat && appRef.chat.titles && appRef.chat.titles[key]) || (it && it.title) || '';
+      } catch (e) { /* no chat list */ }
+    }
+    return { sub, key, name: name || (sub ? key.replace(/^subagent:/, '') : 'Main agent'), mode: (sc && sc.mode) || (sub ? 'private' : ''), readsParent: !!(sc && sc.readsParent) };
+  }
+  const MODE_LABEL = { private: 'Own memory', read_parent: 'Own memory \u00b7 reads parent', shared: 'Shares parent memory' };
+  const MODE_HINT = {
+    private: 'Its checklist, summary and long-term memory are its own. Nothing from the main chat or other sub-agents is sent.',
+    read_parent: 'Its checklist, summary and long-term memory are its own. The parent\u2019s long-term memory is shown read-only, in its own group.',
+    shared: 'Its checklist and summary are its own; it reads and writes its parent\u2019s long-term memory.',
+  };
+  function scopeHead() {
+    const s = scopeInfo();
+    if (!s.sub) return '';
+    const short = s.key.replace(/^subagent:/, '').slice(0, 8);
+    return `<div class="cc-scope" role="status" data-slot="brain-scope" data-scope="subagent" data-mode="${esc(s.mode)}">
+      <span class="cc-scope-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 8V4H8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="4" y="8" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 13v2M15 13v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+      <span class="cc-scope-txt"><span class="cc-scope-name">${esc(clip(s.name, 40))}</span><span class="cc-scope-sub">Sub-agent session \u00b7 ${esc(short)}</span></span>
+      <span class="cc-badge cc-scope-mode" title="${esc(MODE_HINT[s.mode] || '')}">${esc(MODE_LABEL[s.mode] || 'Own memory')}</span>
+    </div>`;
+  }
+
   function tabItems() {
     // Always on: there is no "off" screen and no "Turn on" button.
-    return `${errorNote()}${stageNote()}${meter()}${actionsTop(countHidden())}<div class="cc-tree ct-list${act.select ? ' cc-selecting' : ''}" role="tree" aria-label="Checklist"${act.select ? ' aria-multiselectable="true"' : ''}>${tree()}</div>${resetNote()}${selectBar()}`;
+    return `${errorNote()}${scopeHead()}${stageNote()}${meter()}${actionsTop(countHidden())}<div class="cc-tree ct-list${act.select ? ' cc-selecting' : ''}" role="tree" aria-label="Checklist"${act.select ? ' aria-multiselectable="true"' : ''}>${tree()}</div>${resetNote()}${selectBar()}`;
   }
 
   /** Every range with its version and changes, and what the request sends
@@ -30322,7 +30394,7 @@ const ContextTree = (() => {
     const d = md && md.data;
     const m = d && d.memory;
     const at = m && (m.updatedAt || m.createdAt);
-    const sub = panel.memKey ? `<div class="cc-sub-note" role="status"><span class="cc-badge">Sub-agent</span><span class="ct-title">${esc(clip(String(panel.memKey).replace(/^subagent:/, ''), 40))}</span><button class="cc-link" type="button" data-mem-back="1">This chat</button></div>` : '';
+    const sub = panel.memKey ? `<div class="cc-sub-note" role="status"><span class="cc-badge">Sub-agent</span><span class="ct-title">${esc(clip(String(panel.memKey).replace(/^subagent:/, ''), 40))}</span><button class="cc-link" type="button" data-mem-back="1">This chat</button></div>` : scopeHead();
     const head = `${sub}<div class="cc-sumhead"><span class="cc-badge cc-always">Chosen per request</span>${m && m.throughTurn ? `<span class="cc-when">Turns 1\u2013${esc(num(m.throughTurn))}</span>` : ''}${m && m.version ? `<span class="cc-when">v${esc(num(m.version))}</span>` : ''}${at ? `<span class="cc-when" data-slot="summary-created">${esc(when(at))}</span>` : ''}${infoBtn('summary')}</div>${tip('summary')}`;
     if (!memApi()) return head + '<p class="ct-empty">No summary yet.</p>';
     return `${head}<div class="cc-mem" data-mem="summary"></div>${rangesBlock(key, m)}${d ? dataBlock(d, m) : ''}
@@ -30336,7 +30408,7 @@ const ContextTree = (() => {
 
   function tabSettings() {
     const unknown = settings == null;
-    return `${errorNote()}
+    return `${errorNote()}${scopeHead()}
       <div class="cc-set"><span class="cc-set-name">Context checklist</span>${infoBtn('tree')}
         <span class="cc-badge cc-always-on" role="status" aria-label="Always on"${unknown ? ' data-unknown="true"' : ''}>Always on</span></div>${tip('tree')}
       ${policyOn() ? '<div class="cc-set"><span class="cc-set-name">Context Policies</span><button class="cc-btn cc-btn-quiet" type="button" data-cp-open="1">Open</button></div>' : ''}
@@ -33430,6 +33502,190 @@ const ContextPolicy = (() => {
   return out;
 })();
 /* @@END js:59-context-policy */
+/* @@BEGIN js:14-model-picker */
+/* Model and provider pickers for a sub-agent's Settings tab.
+   They read the same provider list, key status and model lists as the main
+   chat's model picker (App.openModelPicker: settings.orderedProviders(),
+   settings.status(), settings.modelsFor() / loadModels()), in the same
+   searchable popover. Each picker writes a hidden input, so the Settings
+   form's validate-and-save flow sends `provider` / `model` unchanged:
+   '' means "use the main agent's", any other value is a provider id or a
+   model id for the chosen provider. */
+const SubagentModelPicker = (() => {
+  const appOf = () => (typeof window !== 'undefined' ? window.__app : null);
+  const settingsOf = () => appOf()?.settings || null;
+  const provOf = (id) => (typeof AGENT_PROVIDERS !== 'undefined' ? AGENT_PROVIDERS.find((p) => p.id === id) : null) || null;
+  const provLabel = (id) => provOf(id)?.label || id;
+  /** The main agent's provider and model (what "Default" means). */
+  function mainChoice() {
+    const s = settingsOf();
+    const provider = String(s?.get?.('provider') || 'auto');
+    const model = provider === 'auto' ? '' : String(s?.get?.('model') || '');
+    return { provider, model };
+  }
+  /** The provider a run really uses for a picked value. */
+  const effectiveProvider = (picked) => picked || mainChoice().provider;
+  const statusOf = (id) => { const s = settingsOf(); try { return s?.status ? s.status(id) : 'off'; } catch (e) { return 'off'; } };
+  const usable = (id) => id === 'auto' || statusOf(id) === 'connected';
+
+  function trigger(id, key, text, sub) {
+    const label = h('span', { class: 'sa-pick-text' }, h('span', { class: 'sa-pick-main truncate' }, text), sub ? h('span', { class: 'sa-pick-sub truncate' }, sub) : null);
+    return h('button', { type: 'button', id, class: 'input sa-pick', 'data-pick': key, 'aria-haspopup': 'listbox', 'aria-expanded': 'false' }, label, icon('chevron-down', 'sa-pick-chev'));
+  }
+  function setTrigger(btn, text, sub) {
+    btn.querySelector('.sa-pick-main').textContent = text;
+    let s = btn.querySelector('.sa-pick-sub');
+    if (sub) { if (!s) { s = h('span', { class: 'sa-pick-sub truncate' }); btn.querySelector('.sa-pick-text').append(s); } s.textContent = sub; } else if (s) s.remove();
+  }
+
+  /** A searchable list popover like the main chat's model picker. */
+  function listPopover(btn, label, build) {
+    if (typeof openPopover !== 'function') return;
+    openPopover(btn, (el, close) => {
+      const list = h('div', { class: 'model-popover-list scroll-thin', role: 'listbox', 'aria-label': label });
+      const status = h('div', { class: 'menu-label', role: 'status', hidden: true });
+      const search = h('input', { type: 'search', class: 'input', placeholder: `Search ${label.toLowerCase()}`, 'aria-label': `Search ${label.toLowerCase()}`, autocomplete: 'off', spellcheck: false });
+      const paint = () => {
+        const { children, note } = build(search.value.trim(), close, paint);
+        list.replaceChildren(...children);
+        status.textContent = note || (children.length ? '' : 'Nothing matches');
+        status.hidden = !status.textContent;
+      };
+      search.addEventListener('input', paint);
+      search.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); list.querySelector('.menu-item:not([aria-disabled="true"])')?.focus(); }
+        else if (e.key === 'Enter') { e.preventDefault(); list.querySelector('.menu-item:not([aria-disabled="true"])')?.click(); }
+      });
+      paint();
+      el.append(h('div', { class: 'model-popover-search' }, icon('search'), search), list, status);
+      el.addEventListener('keydown', (e) => { if (e.target !== search && typeof menuKeys === 'function') menuKeys(el, e); });
+      const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      requestAnimationFrame(() => ((coarse ? null : search) || list.querySelector('.menu-item[aria-selected="true"]') || list.querySelector('.menu-item'))?.focus({ preventScroll: true }));
+    }, { class: 'model-popover sa-pick-pop', side: 'bottom', align: 'start', label: `Choose ${label.toLowerCase()}` });
+  }
+  const group = (label, mark, statusId, ...items) => h('div', { role: 'group', 'aria-label': label },
+    h('div', { class: 'menu-label', 'aria-hidden': 'true' },
+      mark ? h('span', { class: 'provider-mark is-sm' }, mark) : null,
+      h('span', { class: 'truncate' }, label),
+      statusId ? h('span', { class: 'status-dot', 'data-status': statusOf(statusId) }, settingsOf()?.statusLabel?.(statusId) || '') : null),
+    ...items);
+  const opt = (o, close) => menuItem({ role: 'option', ...o }, close);
+  const hit = (q, ...xs) => !q || xs.some((x) => String(x || '').toLowerCase().includes(q.toLowerCase()));
+
+  /**
+   * Build the two pickers for record `r`. Returns { providerField, modelField,
+   * inputs: { provider, model } } where each input is the hidden value the form saves.
+   */
+  function create(r, opts = {}) {
+    const provIn = h('input', { type: 'hidden', 'data-key': 'provider', value: String(r.provider || '') });
+    const modelIn = h('input', { type: 'hidden', 'data-key': 'model', value: String(r.model || '') });
+    const provBtn = trigger('sa-set-provider', 'provider', '', '');
+    const modelBtn = trigger('sa-set-model', 'model', '', '');
+    const modelNote = h('p', { class: 'field-hint sa-pick-note', role: 'status', 'aria-live': 'polite' });
+    const fire = () => { provIn.dispatchEvent(new Event('input', { bubbles: true })); modelIn.dispatchEvent(new Event('input', { bubbles: true })); opts.onChange?.(); };
+
+    const paintProv = () => {
+      const v = provIn.value;
+      const main = mainChoice();
+      if (!v) setTrigger(provBtn, 'Default', `Main agent \u00b7 ${provLabel(main.provider)}`);
+      else setTrigger(provBtn, provLabel(v), v === 'auto' ? 'Free models only' : usable(v) ? 'Key connected' : provOf(v) ? 'No API key: runs will fail' : 'Custom provider id');
+      provBtn.dataset.warn = v && v !== 'auto' && !usable(v) ? 'true' : 'false';
+    };
+    const paintModel = () => {
+      const v = modelIn.value;
+      const pid = effectiveProvider(provIn.value);
+      const main = mainChoice();
+      const found = (settingsOf()?.modelsFor?.(pid) || []).find((m) => m.id === v);
+      if (!v) {
+        const sub = !provIn.value ? `Main agent \u00b7 ${main.model || (main.provider === 'auto' ? 'Free Router' : 'its default')}` : pid === 'auto' ? 'Free Router picks a free model' : `${provLabel(pid)}\u2019s default model`;
+        setTrigger(modelBtn, 'Default', sub);
+      } else setTrigger(modelBtn, v, [found?.name && found.name !== v ? found.name : '', provLabel(pid)].filter(Boolean).join(' \u00b7 '));
+    };
+    const paint = () => { paintProv(); paintModel(); };
+
+    provBtn.addEventListener('click', () => listPopover(provBtn, 'Providers', (q, close) => {
+      const s = settingsOf();
+      const all = s?.orderedProviders ? s.orderedProviders() : (typeof AGENT_PROVIDERS !== 'undefined' ? AGENT_PROVIDERS : []);
+      const cur = provIn.value;
+      const main = mainChoice();
+      const pick = (id) => {
+        if (id === provIn.value) return;
+        provIn.value = id;
+        // A model belongs to its provider: keep it only when the new provider lists it.
+        const keep = modelIn.value && (settingsOf()?.modelsFor?.(effectiveProvider(id)) || []).some((m) => m.id === modelIn.value);
+        if (modelIn.value && !keep) { modelNote.textContent = `Model reset to Default: \u201c${modelIn.value}\u201d is not a ${provLabel(effectiveProvider(id))} model.`; modelIn.value = ''; }
+        else modelNote.textContent = '';
+        paint(); fire();
+      };
+      const children = [];
+      if (hit(q, 'default', 'main agent', provLabel(main.provider))) children.push(group('Default', null, null, opt({ label: 'Default', sub: `Same as the main agent \u00b7 ${provLabel(main.provider)}`, checked: !cur, onSelect: () => pick('') }, close)));
+      const ready = all.filter((p) => !p.local && usable(p.id) && hit(q, p.id, p.label));
+      const keyless = all.filter((p) => !p.local && !usable(p.id) && hit(q, p.id, p.label));
+      if (ready.length) children.push(group('Ready to use', null, null, ...ready.map((p) => opt({ label: p.label, sub: p.id === 'auto' ? 'Free models only, no key' : `${p.id} \u00b7 key connected`, checked: cur === p.id, attrs: { 'data-provider': p.id }, onSelect: () => pick(p.id) }, close))));
+      if (cur && !provOf(cur) && hit(q, cur)) children.push(group('Saved value', null, null, opt({ label: cur, sub: 'Custom provider id', checked: true, onSelect: () => pick(cur) }, close)));
+      if (keyless.length) children.push(group('Needs an API key', null, null, ...keyless.map((p) => opt({ label: p.label, sub: 'Add its key in Settings \u203a Providers', checked: cur === p.id, disabled: true, attrs: { 'data-provider': p.id } }, () => {})),
+        menuItem({ label: 'Manage providers\u2026', icon: 'settings', role: null, onSelect: () => appOf()?.openSettings?.('providers') }, close)));
+      return { children };
+    }));
+
+    modelBtn.addEventListener('click', () => listPopover(modelBtn, 'Models', (q, close, again) => {
+      const s = settingsOf();
+      const pid = effectiveProvider(provIn.value);
+      const models = s?.modelsFor ? s.modelsFor(pid) : [];
+      const cur = modelIn.value;
+      const pick = (id) => { modelIn.value = id; modelNote.textContent = ''; paint(); fire(); };
+      const children = [];
+      const main = mainChoice();
+      const defSub = !provIn.value ? `Same as the main agent \u00b7 ${main.model || 'Free Router'}` : pid === 'auto' ? 'Free Router picks a free model' : `${provLabel(pid)}\u2019s default`;
+      if (hit(q, 'default')) children.push(group('Default', null, null, opt({ label: 'Default', sub: defSub, checked: !cur, onSelect: () => pick('') }, close)));
+      const prov = provOf(pid) || { label: pid, mark: '?' };
+      let shown = 0, more = 0, exact = false;
+      const rows = [];
+      for (const m of models) {
+        if (m.id.toLowerCase() === q.toLowerCase()) exact = true;
+        if (!hit(q, m.id, m.name)) continue;
+        if (shown >= 100) { more++; continue; }
+        shown++;
+        const sub = [m.name && m.name !== m.id ? m.name : '', m.isFree ? 'Free' : '', m.toolCalling === false ? 'No tools' : ''].filter(Boolean).join(' \u00b7 ');
+        rows.push(opt({ label: m.id, sub: sub || undefined, checked: cur === m.id, attrs: { 'data-model': m.id }, onSelect: () => pick(m.id) }, close));
+      }
+      if (cur && !models.some((m) => m.id === cur) && hit(q, cur)) rows.unshift(opt({ label: cur, sub: 'Saved model id', checked: true, onSelect: () => pick(cur) }, close));
+      if (rows.length) children.push(group(prov.label, prov.mark, pid, ...rows));
+      if (!models.length && pid !== 'auto' && s?.loadModels) {
+        const load = menuItem({ label: `Load ${prov.label} models`, icon: 'refresh-cw', role: 'option', onSelect: async () => {
+          try { await s.loadModels(pid); again(); } catch (e) { toast(e?.message || 'Could not load the model list.', { type: 'error' }); }
+        } }, () => {});
+        load.classList.add('is-action');
+        children.push(group(prov.label, prov.mark, pid, load));
+      }
+      if (q && !exact && pid !== 'auto') {
+        const typed = q;
+        const custom = menuItem({ label: `Use \u201c${typed}\u201d with ${prov.label}`, icon: 'plus', role: 'option', onSelect: () => pick(typed) }, close);
+        custom.classList.add('is-action');
+        children.push(h('div', { role: 'group', 'aria-label': 'Custom model' }, custom));
+      }
+      return { children, note: more ? `${more} more. Keep typing to narrow the list.` : '' };
+    }));
+
+    // Keep the trigger text current when the model lists or key status change.
+    const s = settingsOf();
+    let off = null;
+    if (s?.on) { const fn = () => { if (!provBtn.isConnected) { off?.(); return; } paint(); }; off = s.on('change', fn) || (() => s.off?.('change', fn)); }
+    paint();
+    // Load the list for the effective provider once, so the Model picker opens filled.
+    const pid = effectiveProvider(provIn.value);
+    if (s?.loadModels && pid !== 'auto' && usable(pid) && !(s.modelsFor?.(pid) || []).length) Promise.resolve(s.loadModels(pid)).then(paint).catch(() => {});
+
+    return {
+      inputs: { provider: provIn, model: modelIn },
+      provider: { button: provBtn, input: provIn },
+      model: { button: modelBtn, input: modelIn, note: modelNote },
+    };
+  }
+
+  return { create, mainChoice };
+})();
+/* @@END js:14-model-picker */
 const app = new App(doc.getElementById('app'));
 FilesManager.install(app);
 /* @@BEGIN js:installs */

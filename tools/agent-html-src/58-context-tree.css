@@ -437,6 +437,17 @@
 .cc-json { max-height: 260px; overflow: auto; font-size: 0.625rem; }
 .cc-sub-note { display: flex; align-items: center; gap: 6px; min-height: 26px; margin-bottom: 4px; }
 
+/* whose brain this is: a sub-agent's chat names the sub-agent, its session and its memory mode */
+.cc-scope { display: flex; align-items: center; gap: 8px; padding: 6px 8px; margin: 0 0 6px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in oklab, var(--primary) 6%, var(--background)); }
+.cc-scope-ico { display: inline-grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 7px; color: var(--primary); background: color-mix(in oklab, var(--primary) 14%, transparent); }
+.cc-scope-txt { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.2; }
+.cc-scope-name { font-size: 13px; font-weight: 600; color: var(--foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-scope-sub { font-size: 11px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-scope-mode { flex: none; white-space: nowrap; }
+.cc-scope[data-mode="shared"] .cc-scope-mode { color: var(--cc-st-always); border-color: currentColor; }
+.cc-ro { margin-left: 4px; font-size: 10px; color: var(--muted-foreground); }
+.cc-mem-ro > .cc-row .cc-group-name { font-style: italic; }
+
 /* the reused memory parts read as compact as the rest of the card: no intro
    or hint text (the (i) buttons hold it), labels beside their inputs */
 .cc-card .cc-mem p.field-hint:not([role="status"]):not(:has(svg)),

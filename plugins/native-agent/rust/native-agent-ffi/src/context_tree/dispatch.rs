@@ -184,7 +184,8 @@ pub fn handle(
         // Normally answered by the agent loop (with the platform's provider);
         // here the checklist's long-term group alone is written.
         "remember" | "forget" => {
-            let (text, is_error) = super::memory_checklist::long_term_apply(conn, None, action, args);
+            let own = super::memory_checklist::mem_scope(conn, env.session_key).own;
+            let (text, is_error) = super::memory_checklist::long_term_apply(conn, None, &own, action, args);
             Ok(if is_error { fail(action, text) } else { ok_text(action, text, json!({})) })
         }
         "" => Ok(fail("unknown", "action is required: view, set, category, summarize, recall, note, strategy, prompt, original, memory, remember, forget, task.")),

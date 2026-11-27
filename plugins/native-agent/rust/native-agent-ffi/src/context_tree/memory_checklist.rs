@@ -86,6 +86,7 @@ pub const GROUPS: &[(&str, &str, Option<&str>)] = &[
     ("mem.ranges.old", "Old ranges", Some("mem.ranges")),
     ("mem.versions", "Memory versions", Some("mem")),
     ("mem.longterm", "Long-term memory (every chat)", Some("mem")),
+    ("mem.shared", "Main agent memory (read-only)", Some("mem")),
 ];
 
 /// Ranges newer than this many stay in "Ranges"; the rest are "Old ranges".
@@ -511,6 +512,9 @@ pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS ctx_mem_longterm (
             key TEXT PRIMARY KEY, text TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0,
             removed INTEGER NOT NULL DEFAULT 0);
+         CREATE TABLE IF NOT EXISTS ctx_mem_scope (
+            session_key TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT 'private',
+            parent TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL DEFAULT 0);
          CREATE TABLE IF NOT EXISTS ctx_mem_file_store (
             path TEXT NOT NULL, hash TEXT NOT NULL, content TEXT,
             chars INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0,
@@ -563,6 +567,148 @@ pub fn reset_session(conn: &Connection, session_key: &str) -> rusqlite::Result<u
 pub const LONG_TERM_GROUP: &str = "mem.longterm";
 /// The record-ID prefix of a long-term entry.
 pub const LONG_TERM_PREFIX: &str = "lt:";
+
+// ── whose long-term memory a chat sees ──
+//
+// The main agent and every sub-agent have their own long-term memory (a
+// sub-agent's store is kept per name by the sub-agent manager). They share
+// one mirror table, so each entry's key there carries its owner: the main
+// agent's keys are stored as they are, a sub-agent's as
+// `<session_key>\u{1f}<key>`. A chat reads and writes only its own scope; a
+// `read_parent` sub-agent also sees its parent's entries, read-only, in
+// their own group (`mem.shared`, tags `#main:<key>`), and a `shared` one
+// reads and writes its parent's scope.
+
+/// The group of the parent's entries a `read_parent` sub-agent may read.
+pub const SHARED_GROUP: &str = "mem.shared";
+/// The tag prefix of those read-only entries.
+pub const SHARED_TAG_PREFIX: &str = "main:";
+/// Between a scope and a key in the mirror.
+const SCOPE_SEP: char = '\u{1f}';
+/// Session keys of sub-agent chats start with this.
+pub const SUBAGENT_KEY_PREFIX: &str = "subagent:";
+
+/// Whose memory one chat reads and writes.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MemScope {
+    /// `main` or `subagent`.
+    pub kind: &'static str,
+    /// The sub-agent's name (empty for the main agent).
+    pub name: String,
+    /// private | read_parent | shared (empty for the main agent).
+    pub mode: String,
+    /// The parent chat's session key (empty for the main agent).
+    pub parent_session: String,
+    /// The mirror scope of the entries this chat owns and may change.
+    pub own: String,
+    /// The mirror scope shown read-only (a `read_parent` sub-agent's parent).
+    pub read_only: Option<String>,
+}
+
+impl MemScope {
+    pub fn is_subagent(&self) -> bool {
+        self.kind == "subagent"
+    }
+    /// True when the read-only entries belong to the main agent itself.
+    pub fn read_only_is_main(&self) -> bool {
+        self.read_only.as_deref() == Some("")
+    }
+}
+
+/// The key of `key` in the mirror for `scope` (`""` is the main agent).
+pub fn scoped_key(scope: &str, key: &str) -> String {
+    if scope.is_empty() {
+        key.trim().to_string()
+    } else {
+        format!("{scope}{SCOPE_SEP}{}", key.trim())
+    }
+}
+
+/// The key of a mirror row as its owner knows it, when it belongs to `scope`.
+fn unscoped<'a>(scope: &str, stored: &'a str) -> Option<&'a str> {
+    if scope.is_empty() {
+        (!stored.contains(SCOPE_SEP)).then_some(stored)
+    } else {
+        stored.strip_prefix(scope).and_then(|r| r.strip_prefix(SCOPE_SEP))
+    }
+}
+
+/// Remember which sub-agent a chat belongs to and how it may use memory
+/// (written by the agent loop at the start of each sub-agent turn, read by
+/// the panel and the checklist).
+pub fn save_scope(
+    conn: &Connection,
+    session_key: &str,
+    name: &str,
+    mode: &str,
+    parent_session: &str,
+    now_ms: i64,
+) -> rusqlite::Result<()> {
+    ensure_tables(conn)?;
+    conn.execute(
+        "INSERT INTO ctx_mem_scope (session_key, name, mode, parent, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(session_key) DO UPDATE SET name = excluded.name, mode = excluded.mode, parent = excluded.parent, updated_at = excluded.updated_at",
+        params![session_key, name, mode, parent_session, now_ms],
+    )?;
+    Ok(())
+}
+
+/// The memory scope of one chat.
+pub fn mem_scope(conn: &Connection, session_key: &str) -> MemScope {
+    scope_at(conn, session_key, 0)
+}
+
+fn scope_at(conn: &Connection, session_key: &str, depth: u32) -> MemScope {
+    if !session_key.starts_with(SUBAGENT_KEY_PREFIX) || depth > 8 {
+        return MemScope {
+            kind: "main",
+            ..Default::default()
+        };
+    }
+    let _ = ensure_tables(conn);
+    let (name, mode, parent) = conn
+        .query_row(
+            "SELECT name, mode, parent FROM ctx_mem_scope WHERE session_key = ?1",
+            [session_key],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+        )
+        .unwrap_or_else(|_| (String::new(), "private".into(), String::new()));
+    let mode = crate::subagents::MemoryMode::parse(&mode)
+        .unwrap_or(crate::subagents::MemoryMode::Private)
+        .as_str()
+        .to_string();
+    let parent_own = || scope_at(conn, &parent, depth + 1).own;
+    let (own, read_only) = match mode.as_str() {
+        "shared" => (parent_own(), None),
+        "read_parent" => (session_key.to_string(), Some(parent_own())),
+        _ => (session_key.to_string(), None),
+    };
+    MemScope {
+        kind: "subagent",
+        name,
+        mode,
+        parent_session: parent,
+        own,
+        read_only,
+    }
+}
+
+/// The title of a group as one chat sees it (the long-term groups name whose
+/// memory they hold).
+pub fn group_title(gid: &str, default: &str, sc: &MemScope) -> String {
+    match gid {
+        LONG_TERM_GROUP if sc.is_subagent() && sc.mode == "shared" => {
+            if sc.own.is_empty() {
+                "Long-term memory (shared with the main agent)".into()
+            } else {
+                "Long-term memory (shared with its parent)".into()
+            }
+        }
+        LONG_TERM_GROUP if sc.is_subagent() => "Long-term memory (this sub-agent only)".into(),
+        SHARED_GROUP if !sc.read_only_is_main() => "Parent agent memory (read-only)".into(),
+        _ => default.to_string(),
+    }
+}
 /// The most entries the mirror shows (newest stay; the provider keeps more).
 const LONG_TERM_MAX: usize = 200;
 
@@ -621,22 +767,38 @@ pub fn long_term_remove(conn: &Connection, key: &str, now_ms: i64) -> rusqlite::
     )
 }
 
-/// The live long-term entries: (key, text, updated_at), newest first.
-pub fn long_term_entries(conn: &Connection) -> Vec<(String, String, i64)> {
+/// The live long-term entries of one scope (`""` is the main agent):
+/// (key as its owner knows it, text, updated_at), newest first.
+pub fn long_term_entries(conn: &Connection, scope: &str) -> Vec<(String, String, i64)> {
     if ensure_tables(conn).is_err() {
         return Vec::new();
     }
-    let Ok(mut st) = conn.prepare("SELECT key, text, updated_at FROM ctx_mem_longterm WHERE removed = 0 ORDER BY updated_at DESC, key LIMIT ?1") else {
+    let (sql, like) = if scope.is_empty() {
+        (
+            "SELECT key, text, updated_at FROM ctx_mem_longterm WHERE removed = 0 AND instr(key, ?2) = 0 ORDER BY updated_at DESC, key LIMIT ?1",
+            SCOPE_SEP.to_string(),
+        )
+    } else {
+        (
+            "SELECT key, text, updated_at FROM ctx_mem_longterm WHERE removed = 0 AND substr(key, 1, length(?2)) = ?2 ORDER BY updated_at DESC, key LIMIT ?1",
+            format!("{scope}{SCOPE_SEP}"),
+        )
+    };
+    let Ok(mut st) = conn.prepare(sql) else {
         return Vec::new();
     };
-    st.query_map([LONG_TERM_MAX as i64], |r| {
+    st.query_map(params![LONG_TERM_MAX as i64, like], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
             r.get::<_, i64>(2)?,
         ))
     })
-    .map(|rows| rows.flatten().collect())
+    .map(|rows| {
+        rows.flatten()
+            .filter_map(|(k, t, at)| unscoped(scope, &k).map(|k| (k.to_string(), t, at)))
+            .collect()
+    })
     .unwrap_or_default()
 }
 
@@ -694,6 +856,7 @@ pub fn parse_long_term_text(json_text: &str, key: &str) -> Option<String> {
 /// text (a provider `search` for that key). Returns how many rows changed.
 pub fn sync_long_term(
     conn: &Connection,
+    scope: &str,
     keys: Option<&[String]>,
     fetch: &dyn Fn(&str) -> Option<String>,
     now_ms: i64,
@@ -703,7 +866,7 @@ pub fn sync_long_term(
         return 0;
     }
     let live: BTreeSet<&str> = keys.iter().map(String::as_str).collect();
-    let known: Vec<String> = long_term_entries(conn).into_iter().map(|e| e.0).collect();
+    let known: Vec<String> = long_term_entries(conn, scope).into_iter().map(|e| e.0).collect();
     let mut changed = 0;
     // The providers cap `list` (the request asks for LONG_TERM_MAX keys while
     // they keep up to 2000 entries): a full answer may be cut short, so a key
@@ -712,7 +875,7 @@ pub fn sync_long_term(
     if keys.len() < LONG_TERM_MAX {
         for k in &known {
             if !live.contains(k.as_str()) {
-                changed += long_term_remove(conn, k, now_ms).unwrap_or(0);
+                changed += long_term_remove(conn, &scoped_key(scope, k), now_ms).unwrap_or(0);
             }
         }
     }
@@ -722,7 +885,7 @@ pub fn sync_long_term(
             continue;
         }
         if let Some(text) = fetch(k) {
-            if long_term_put(conn, k, &text, now_ms).is_ok() {
+            if long_term_put(conn, &scoped_key(scope, k), &text, now_ms).is_ok() {
                 changed += 1;
             }
         }
@@ -736,19 +899,25 @@ pub fn sync_long_term(
 pub fn long_term_action(
     db_path: &str,
     provider: Option<&std::sync::Arc<dyn crate::MemoryProvider>>,
+    session_key: &str,
     action: &str,
     input: &Value,
 ) -> (String, bool) {
     match crate::db::open_db(db_path) {
-        Ok(conn) => long_term_apply(&conn, provider, action, input),
+        Ok(conn) => {
+            let own = mem_scope(&conn, session_key).own;
+            long_term_apply(&conn, provider, &own, action, input)
+        }
         Err(e) => (format!("Could not open the checklist store: {e}"), true),
     }
 }
 
-/// [`long_term_action`] on an open connection.
+/// [`long_term_action`] on an open connection, in the mirror scope `scope`
+/// (the entries the chat owns; `""` is the main agent).
 pub fn long_term_apply(
     conn: &Connection,
     provider: Option<&std::sync::Arc<dyn crate::MemoryProvider>>,
+    scope: &str,
     action: &str,
     input: &Value,
 ) -> (String, bool) {
@@ -803,7 +972,8 @@ pub fn long_term_apply(
                     key = k;
                 }
             }
-            match long_term_put(conn, &key, &text, now) {
+            match long_term_put(conn, &scoped_key(scope, &key), &text, now) {
+                Ok(()) if scope.starts_with(SUBAGENT_KEY_PREFIX) => (format!("Saved in this sub-agent's long-term memory as #{} (only this sub-agent sees it).", long_term_tag(&key)), false),
                 Ok(()) => (format!("Saved in Long-term memory as #{} (every chat sees it in the checklist tree).", long_term_tag(&key)), false),
                 Err(e) => (format!("Could not save the long-term entry: {e}"), true),
             }
@@ -819,7 +989,13 @@ pub fn long_term_apply(
                 .trim_start_matches('#')
                 .trim_start_matches("mem/")
                 .to_string();
-            let entries = long_term_entries(conn);
+            if wanted.to_lowercase().starts_with(SHARED_TAG_PREFIX) {
+                return (
+                    format!("#{wanted} belongs to the parent agent's memory: it is read-only here."),
+                    true,
+                );
+            }
+            let entries = long_term_entries(conn, scope);
             let key = entries
                 .iter()
                 .find(|(k, _, _)| {
@@ -842,7 +1018,7 @@ pub fn long_term_apply(
                     }
                 }
             }
-            match long_term_remove(conn, &key, now) {
+            match long_term_remove(conn, &scoped_key(scope, &key), now) {
                 Ok(0) if provider.is_none() => (format!("No long-term entry {key}."), true),
                 Ok(_) => (format!("Forgot long-term entry {key}; its earlier versions stay readable in the tree."), false),
                 Err(e) => (format!("Could not forget {key}: {e}"), true),
@@ -852,11 +1028,28 @@ pub fn long_term_apply(
     }
 }
 
-/// The long-term entries as checklist records (not known to the selector:
-/// they are sent when checked in, or at their last #tag).
-pub fn long_term_records(conn: &Connection) -> Vec<Record> {
+/// The record ID of a long-term entry of `scope` (the main agent's keep
+/// their old `lt:<key>`; a sub-agent's name their owner, so two agents'
+/// entries with one key never share versions).
+fn long_term_rid(scope: &str, key: &str) -> String {
+    format!(
+        "{LONG_TERM_PREFIX}{}",
+        scoped_key(scope, key).replace(SCOPE_SEP, "/")
+    )
+}
+
+/// The long-term entries one chat sees, as checklist records (not known to
+/// the selector: they are sent when checked in, or at their last #tag): its
+/// own entries, then for a `read_parent` sub-agent its parent's, read-only.
+pub fn long_term_records(conn: &Connection, session_key: &str) -> Vec<Record> {
+    let sc = mem_scope(conn, session_key);
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    long_term_entries(conn)
+    let own_label = if sc.is_subagent() && sc.mode != "shared" {
+        "this sub-agent's long-term memory"
+    } else {
+        "long-term memory"
+    };
+    let mut out: Vec<Record> = long_term_entries(conn, &sc.own)
         .into_iter()
         .filter_map(|(key, text, _)| {
             let tag = long_term_tag(&key);
@@ -864,10 +1057,10 @@ pub fn long_term_records(conn: &Connection) -> Vec<Record> {
                 return None;
             }
             Some(Record {
-                rid: format!("{LONG_TERM_PREFIX}{key}"),
+                rid: long_term_rid(&sc.own, &key),
                 group: LONG_TERM_GROUP,
                 title: key.clone(),
-                line: format!("- long-term memory \"{}\": {}", key, clip(&text, 1200)),
+                line: format!("- {own_label} \"{}\": {}", key, clip(&text, 1200)),
                 tag,
                 aliases: vec![format!("{LONG_TERM_PREFIX}{}", key.to_lowercase())],
                 status: "stored".into(),
@@ -875,7 +1068,28 @@ pub fn long_term_records(conn: &Connection) -> Vec<Record> {
                 native: false,
             })
         })
-        .collect()
+        .collect();
+    if let Some(parent) = sc.read_only.as_deref() {
+        let who = if parent.is_empty() { "main agent" } else { "parent agent" };
+        out.extend(long_term_entries(conn, parent).into_iter().filter_map(|(key, text, _)| {
+            let tag = long_term_tag(&key).replacen(LONG_TERM_PREFIX, SHARED_TAG_PREFIX, 1);
+            if !seen.insert(tag.clone()) {
+                return None;
+            }
+            Some(Record {
+                rid: long_term_rid(parent, &key),
+                group: SHARED_GROUP,
+                title: key.clone(),
+                line: format!("- {who}'s memory (read-only) \"{}\": {}", key, clip(&text, 1200)),
+                aliases: vec![tag.clone()],
+                tag,
+                status: "read-only".into(),
+                turn: 0,
+                native: false,
+            })
+        }));
+    }
+    out
 }
 
 /// One stored version of a record.
@@ -1646,7 +1860,7 @@ pub fn prepare_anchored(
     let mut recs = records(mem, st, &versions, &files);
     let shared = shared_file_records(conn, &recs);
     recs.extend(shared);
-    recs.extend(long_term_records(conn));
+    recs.extend(long_term_records(conn, session_key));
     let _ = sync_versions(conn, session_key, &recs, mem.version, now_ms);
     let mentions = scan_mentions(messages, turn_of, &recs);
     let _ = record_mentions(conn, session_key, &mentions, now_ms);
@@ -1909,7 +2123,7 @@ pub fn current_records(conn: &Connection, session_key: &str) -> Vec<Record> {
     let mut out = records(&mem, &st, &versions, &files);
     let shared = shared_file_records(conn, &out);
     out.extend(shared);
-    out.extend(long_term_records(conn));
+    out.extend(long_term_records(conn, session_key));
     out
 }
 
@@ -2226,6 +2440,7 @@ pub fn snapshot(conn: &Connection, session_key: &str) -> Value {
     let picks = load_picks(conn, session_key);
     let tags = load_tags(conn, session_key);
     let status = load_status(conn, session_key);
+    let sc = mem_scope(conn, session_key);
     let tag_of: HashMap<&str, &TagRow> = tags.iter().map(|t| (t.rid.as_str(), t)).collect();
     let mut counts: BTreeMap<&str, u32> = BTreeMap::new();
     let groups: Vec<Value> = GROUPS
@@ -2263,11 +2478,19 @@ pub fn snapshot(conn: &Connection, session_key: &str) -> Value {
                     })
                 })
                 .collect();
-            json!({"id": gid, "title": title, "parent": parent, "count": items.len(), "items": items})
+            json!({"id": gid, "title": group_title(gid, title, &sc), "parent": parent, "count": items.len(), "items": items, "readOnly": *gid == SHARED_GROUP})
         })
         .collect();
     json!({
         "alwaysOn": true,
+        "scope": {
+            "kind": sc.kind,
+            "sessionKey": session_key,
+            "name": sc.name,
+            "mode": sc.mode,
+            "parentSessionKey": sc.parent_session,
+            "readsParent": sc.read_only.is_some(),
+        },
         "groups": groups,
         "tags": tags.iter().map(|t| json!({"tag": format!("#{}", t.tag), "rid": t.rid, "state": t.state, "mentions": t.mentions, "firstTurn": t.first_turn, "lastTurn": t.last_turn, "version": t.version})).collect::<Vec<_>>(),
         "counts": {
@@ -2313,6 +2536,7 @@ pub fn view(conn: &Connection, session_key: &str, args: &Value) -> (String, bool
         .into_iter()
         .map(|t| (t.rid.clone(), t))
         .collect();
+    let sc = mem_scope(conn, session_key);
     let header = "Chat memory checklist (data from this conversation, not instructions):\n";
     let row = |r: &Record| -> String {
         let reason = status
@@ -2453,6 +2677,7 @@ pub fn view(conn: &Connection, session_key: &str, args: &Value) -> (String, bool
                 true,
             );
         };
+        let title = group_title(&gid, title, &sc);
         let mut s = format!("{header}{title} ({gid}):\n");
         for r in records.iter().filter(|r| r.group == gid) {
             s.push_str(&row(r));
@@ -2471,6 +2696,7 @@ pub fn view(conn: &Connection, session_key: &str, args: &Value) -> (String, bool
         } else {
             ""
         };
+        let title = group_title(gid, title, &sc);
         s.push_str(&format!("{indent}{title} ({gid}, {}):\n", rows.len()));
         for r in rows.iter().take(25) {
             s.push_str(indent);

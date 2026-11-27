@@ -2402,6 +2402,18 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         None
     }
 
+    /// The memory of the sub-agent behind `session_key`: (name, memory mode,
+    /// parent session key). None for the main agent or an unknown key.
+    pub fn memory_scope_of(&self, session_key: &str) -> Option<(String, MemoryMode, String)> {
+        self.record_by_session(session_key).map(|r| {
+            (
+                r.name.clone(),
+                MemoryMode::parse(&r.memory_mode).unwrap_or(MemoryMode::Private),
+                r.parent_session_key.clone(),
+            )
+        })
+    }
+
     pub fn temperature_for(&self, session_key: &str) -> Option<f64> {
         self.record_by_session(session_key)
             .and_then(|r| r.temperature)
@@ -4229,7 +4241,7 @@ impl MemoryProvider for SubagentMemory {
         }
         let meta = metadata_json.and_then(|m| serde_json::from_str::<Value>(&m).ok());
         self.manager.memory_store(&self.name, &key, &text, meta);
-        json!({ "success": true, "key": key }).to_string()
+        json!({ "success": true, "key": key, "memory": "subagent" }).to_string()
     }
 
     fn recall(&self, query: String, limit: u32) -> String {
@@ -4238,7 +4250,7 @@ impl MemoryProvider for SubagentMemory {
 
     fn forget(&self, key: String) -> String {
         let removed = self.manager.memory_forget(&self.name, &key);
-        json!({ "success": removed, "key": key }).to_string()
+        json!({ "success": removed, "key": key, "memory": "subagent" }).to_string()
     }
 
     fn search(&self, query: String, max_results: u32) -> String {

@@ -1096,6 +1096,18 @@ impl NativeAgentHandle {
         {
             self.ensure_no_turn_in_flight(&action.replace("memory.", "change the memory: "))?;
         }
+        // A sub-agent's panel shows its own long-term memory as it stands
+        // now (entries saved or cleared from its Memory tab included).
+        if let (Some("ctx.tree" | "ctx.memory"), Some(key)) = (
+            req.get("action").and_then(|v| v.as_str()),
+            req.get("sessionKey").and_then(|v| v.as_str()),
+        ) {
+            if key.starts_with(context_tree::memory_checklist::SUBAGENT_KEY_PREFIX) {
+                if let Ok(conn) = db::open_db(&self.config.db_path) {
+                    agent_loop::sync_own_memory(&conn, key, &self.subagents);
+                }
+            }
+        }
         if let Some(out) = memory_request(&self.config, &req) {
             let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
             return out.map(|mut v| {

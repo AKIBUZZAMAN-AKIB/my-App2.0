@@ -764,8 +764,8 @@ fn the_long_term_memory_is_a_versioned_group_of_the_tree() {
             k,
         )
     };
-    assert_eq!(sync_long_term(&c, keys.as_deref(), &fetch, 1), 2);
-    let recs = long_term_records(&c);
+    assert_eq!(sync_long_term(&c, "", keys.as_deref(), &fetch, 1), 2);
+    let recs = long_term_records(&c, K);
     assert_eq!(recs.len(), 2);
     assert!(recs.iter().all(|r| r.group == LONG_TERM_GROUP && !r.native));
     let diet = recs.iter().find(|r| r.title == "Diet Pref").unwrap();
@@ -803,13 +803,13 @@ fn the_long_term_memory_is_a_versioned_group_of_the_tree() {
     // Its wording is versioned: a change keeps v1 readable.
     sync_versions(&c, K, &recs, 1, 3).unwrap();
     long_term_put(&c, "Diet Pref", "vegetarian now", 4).unwrap();
-    sync_versions(&c, K, &long_term_records(&c), 2, 5).unwrap();
+    sync_versions(&c, K, &long_term_records(&c, K), 2, 5).unwrap();
     let vs = load_versions(&c, K, "lt:Diet Pref");
     assert!(vs.len() >= 2, "{} versions", vs.len());
     // The provider no longer lists a key: it leaves the live group.
     let only = vec!["user_name".to_string()];
-    sync_long_term(&c, Some(&only), &fetch, 6);
-    assert_eq!(long_term_records(&c).len(), 1);
+    sync_long_term(&c, "", Some(&only), &fetch, 6);
+    assert_eq!(long_term_records(&c, K).len(), 1);
 }
 
 #[test]
@@ -818,30 +818,31 @@ fn ctx_remember_and_forget_write_the_long_term_group_without_a_memory_tool() {
     let (text, err) = long_term_apply(
         &c,
         None,
+        "",
         "remember",
         &json!({"key": "editor", "text": "uses VS Code"}),
     );
     assert!(!err, "{text}");
     assert!(text.contains("#lt:editor"), "{text}");
-    assert_eq!(long_term_entries(&c).len(), 1);
-    let (text, err) = long_term_apply(&c, None, "forget", &json!({"key": "#lt:editor"}));
+    assert_eq!(long_term_entries(&c, "").len(), 1);
+    let (text, err) = long_term_apply(&c, None, "", "forget", &json!({"key": "#lt:editor"}));
     assert!(!err, "{text}");
-    assert!(long_term_entries(&c).is_empty());
-    let (_, err) = long_term_apply(&c, None, "remember", &json!({"key": "x"}));
+    assert!(long_term_entries(&c, "").is_empty());
+    let (_, err) = long_term_apply(&c, None, "", "remember", &json!({"key": "x"}));
     assert!(err, "remember needs text");
     // A chat reset does not touch it: it belongs to every chat.
     long_term_put(&c, "city", "Rajshahi", 1).unwrap();
     reset_session(&c, K).unwrap();
-    assert_eq!(long_term_entries(&c).len(), 1);
+    assert_eq!(long_term_entries(&c, "").len(), 1);
 }
 
 #[test]
 fn a_long_term_entry_keeps_one_version_history_for_every_chat() {
     let c = conn();
     long_term_put(&c, "city", "Dhaka", 1).unwrap();
-    sync_versions(&c, "chat-a", &long_term_records(&c), 1, 2).unwrap();
+    sync_versions(&c, "chat-a", &long_term_records(&c, K), 1, 2).unwrap();
     long_term_put(&c, "city", "Rajshahi", 3).unwrap();
-    sync_versions(&c, "chat-b", &long_term_records(&c), 1, 4).unwrap();
+    sync_versions(&c, "chat-b", &long_term_records(&c, K), 1, 4).unwrap();
     // Both chats read the same two versions: v1 Dhaka, v2 Rajshahi.
     for chat in ["chat-a", "chat-b", "chat-c"] {
         let vs = load_versions(&c, chat, "lt:city");
@@ -853,7 +854,7 @@ fn a_long_term_entry_keeps_one_version_history_for_every_chat() {
     }
     // A second chat seeing the same wording writes no duplicate version.
     assert_eq!(
-        sync_versions(&c, "chat-a", &long_term_records(&c), 2, 5).unwrap(),
+        sync_versions(&c, "chat-a", &long_term_records(&c, K), 2, 5).unwrap(),
         0
     );
     // A chat reset keeps the shared history.
@@ -871,7 +872,7 @@ fn a_full_long_term_list_may_be_cut_short_so_it_forgets_nothing() {
     long_term_put(&c, "oldest", "kept by the provider past the list cap", 1).unwrap();
     // A list as long as the cap may be cut short: the missing key stays.
     let full: Vec<String> = (0..LONG_TERM_MAX).map(|n| format!("k{n}")).collect();
-    sync_long_term(&c, Some(&full), &fetch, 2);
+    sync_long_term(&c, "", Some(&full), &fetch, 2);
     let removed: i64 = c
         .query_row(
             "SELECT removed FROM ctx_mem_longterm WHERE key = 'oldest'",
@@ -884,7 +885,7 @@ fn a_full_long_term_list_may_be_cut_short_so_it_forgets_nothing() {
     let c = conn();
     long_term_put(&c, "oldest", "gone from the provider", 1).unwrap();
     let short = vec!["k1".to_string()];
-    sync_long_term(&c, Some(&short), &fetch, 3);
+    sync_long_term(&c, "", Some(&short), &fetch, 3);
     let removed: i64 = c
         .query_row(
             "SELECT removed FROM ctx_mem_longterm WHERE key = 'oldest'",
@@ -1104,4 +1105,31 @@ fn the_shared_file_store_keeps_its_limits() {
         shared_file_content(&c, "a.txt", &hash("alpha")).as_deref(),
         Some("alpha")
     );
+}
+
+#[test]
+fn every_sub_agent_sees_only_its_own_long_term_memory() {
+    let c = conn();
+    let (a, b) = ("subagent:a1", "subagent:b2");
+    long_term_put(&c, "city", "Rajshahi", 1).unwrap();
+    save_scope(&c, a, "researcher", "private", K, 1).unwrap();
+    save_scope(&c, b, "writer", "read_parent", K, 1).unwrap();
+    let own_a = mem_scope(&c, a).own;
+    sync_long_term(&c, &own_a, Some(&["topic".to_string()]), &|_| Some("rust".into()), 2);
+    // The sub-agent's sync never removes the main agent's entries.
+    assert_eq!(long_term_entries(&c, "").len(), 1);
+    let main: Vec<String> = long_term_records(&c, K).iter().map(|r| r.title.clone()).collect();
+    assert_eq!(main, vec!["city".to_string()]);
+    let recs_a = long_term_records(&c, a);
+    assert_eq!(recs_a.len(), 1);
+    assert_eq!(recs_a[0].title, "topic");
+    assert_eq!(recs_a[0].group, LONG_TERM_GROUP);
+    // read_parent: nothing of its own, the main agent's entry read-only.
+    let recs_b = long_term_records(&c, b);
+    assert_eq!(recs_b.len(), 1);
+    assert_eq!(recs_b[0].group, SHARED_GROUP);
+    assert_eq!(recs_b[0].tag, "main:city");
+    let (_, err) = long_term_apply(&c, None, &mem_scope(&c, b).own, "forget", &json!({"key": "#main:city"}));
+    assert!(err, "read-only");
+    assert_eq!(long_term_entries(&c, "").len(), 1);
 }
