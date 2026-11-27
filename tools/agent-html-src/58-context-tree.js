@@ -455,6 +455,16 @@ const ContextTree = (() => {
     return `<p class="cc-sel-line" data-slot="selection-line">${esc(num(sent))} of ${esc(num(items.length))} sent${left ? ` \u00b7 ${esc(short(left))} tokens left out` : ''}<button class="cc-link" type="button" data-tab-go="activity">Activity</button></p>`;
   }
 
+  /** The requests in the order they were sent, each with its number in that order:
+   * the engine's step number when it gives one, else its place (#1, #2, ...). The
+   * engine's events carry `seq`, not `step`, so reading `step` alone gave #0. */
+  function reqOrder(steps) {
+    const key = (e) => (typeof e.seq === 'number' ? e.seq : typeof e.at === 'number' ? e.at : null);
+    const list = steps.map((e, i) => ({ e, i }));
+    list.sort((a, b) => { const x = key(a.e); const y = key(b.e); return x != null && y != null && x !== y ? x - y : a.i - b.i; });
+    return list.map(({ e }, i) => ({ e, n: Number(e.step) > 0 ? Number(e.step) : i + 1 }));
+  }
+
   /** Requests, the policy used and what it saved, then the window changes: the Activity tab. */
   function activityBlock() {
     const ps = policySummary();
@@ -489,9 +499,9 @@ const ContextTree = (() => {
       if (steps.length) {
         const open = !!(panel.detailsOpen && panel.detailsOpen.requests);
         parts.push(`<details class="cc-act-more" data-key="requests"${open ? ' open' : ''}><summary>Requests of the last turn <span class="cc-act-count">${esc(num(steps.length))}</span></summary>
-          <ol class="cc-act-reqs">${steps.slice(-30).reverse().map((e) => {
+          <ol class="cc-act-reqs">${reqOrder(steps).slice(-30).reverse().map(({ e, n }) => {
             const pc = savedPct(e.inputTokens, e.t7Tokens);
-            return `<li class="cc-act-req"><span class="cc-act-req-step">#${esc(num(Number(e.step) || 0))}</span><span class="cc-act-req-pol">${esc(e.policy || 'T7')}</span><span class="cc-act-req-tok">${esc(short(e.inputTokens))} <small>of ${esc(short(e.t7Tokens))}</small></span><span class="cc-act-req-save${pc ? ' cc-act-pos' : ''}">${pc ? `\u2212${pc}%` : 'full'}</span><span class="cc-act-req-ms">${esc(msText(e.latencyMs))}</span></li>`;
+            return `<li class="cc-act-req"><span class="cc-act-req-step">#${esc(num(n))}</span><span class="cc-act-req-pol">${esc(e.policy || 'T7')}</span><span class="cc-act-req-tok">${esc(short(e.inputTokens))} <small>of ${esc(short(e.t7Tokens))}</small></span><span class="cc-act-req-save${pc ? ' cc-act-pos' : ''}">${pc ? `\u2212${pc}%` : 'full'}</span><span class="cc-act-req-ms">${esc(msText(e.latencyMs))}</span></li>`;
           }).join('')}</ol></details>`);
       }
     }
@@ -1378,7 +1388,16 @@ const ContextTree = (() => {
     const body = root.querySelector('.ct-body');
     const tabs = root.querySelector('.cc-tabs');
     root.querySelector('.ct-close').addEventListener('click', () => close(true));
-    tabs.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-tab]'); if (b) setTab(b.getAttribute('data-tab')); });
+    // A tap or click moves focus to the tapped tab (iOS and some webviews leave it on the
+    // old one), and without the ring: only the keyboard shows a focus ring.
+    tabs.addEventListener('click', (e) => {
+      const b = e.target.closest && e.target.closest('[data-tab]');
+      if (!b) return;
+      setTab(b.getAttribute('data-tab'));
+      const nb = tabs.querySelector(`[data-tab="${b.getAttribute('data-tab')}"]`) || b;
+      try { nb.focus({ preventScroll: true, focusVisible: false }); } catch (err) { /* old webview */ }
+    });
+    root.addEventListener('pointerdown', () => setKbd(false), true);
     tabs.addEventListener('keydown', (e) => {
       const i = tabList().findIndex(([k]) => k === panel.tab);
       const n = e.key === 'ArrowRight' ? (i + 1) % tabList().length : e.key === 'ArrowLeft' ? (i - 1 + tabList().length) % tabList().length : e.key === 'Home' ? 0 : e.key === 'End' ? tabList().length - 1 : -1;
@@ -1450,7 +1469,20 @@ const ContextTree = (() => {
   const replace = () => { if (panel.open) place(panel.anchor); };
 
   function onKey(e) {
+    if (/^(Tab|Arrow|Home$|End$|Enter$| $)/.test(e.key)) setKbd(true);
     if (e.key === 'Escape' && panel.open) { e.stopPropagation(); close(true); }
+  }
+  /** Whether the person is using the keyboard: only then the card shows focus rings. */
+  let usingKbd = false;
+  try {
+    if (typeof document !== 'undefined') {
+      document.addEventListener('keydown', (e) => { if (/^(Tab|Arrow|Home$|End$)/.test(e.key)) usingKbd = true; }, true);
+      document.addEventListener('pointerdown', () => { usingKbd = false; }, true);
+    }
+  } catch (e) { /* no document */ }
+  function setKbd(on) {
+    usingKbd = !!on;
+    if (panel.root) { if (usingKbd) panel.root.setAttribute('data-kbd', ''); else panel.root.removeAttribute('data-kbd'); }
   }
   function onOutside(e) {
     if (!panel.open || !panel.root) return;
@@ -1479,7 +1511,14 @@ const ContextTree = (() => {
     const cm = memApi(); const k = memKey();
     if (cm && k && cm.refresh) Promise.resolve(cm.refresh(k)).then(() => paint()).catch(() => {});
     if (panel.memKey && cm && cm.refresh && activeKey()) Promise.resolve(cm.refresh(activeKey())).catch(() => {});
-    try { const b = panel.tabs.querySelector('[aria-selected="true"]'); (b || panel.body).focus({ preventScroll: true }); } catch (e) { /* old webview */ }
+    // Opened with the keyboard: focus goes to the selected tab, with its ring. Opened by a
+    // tap: focus goes to the card's body, so no tab keeps a ring that looks like a second selection.
+    setKbd(usingKbd);
+    try {
+      const b = panel.tabs.querySelector('[aria-selected="true"]');
+      if (usingKbd && b) b.focus({ preventScroll: true });
+      else panel.body.focus({ preventScroll: true, focusVisible: false });
+    } catch (e) { /* old webview */ }
     document.addEventListener('keydown', onKey, true);
     window.addEventListener('resize', replace);
     if (window.visualViewport) { window.visualViewport.addEventListener('resize', replace); window.visualViewport.addEventListener('scroll', replace); }

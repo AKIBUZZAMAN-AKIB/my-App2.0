@@ -289,6 +289,10 @@
   .ct-panel.cc-card .cc-tab { flex: 1 1 auto; min-width: 0; padding-left: 4px; padding-right: 4px; font-size: 0.75rem; white-space: nowrap; }
 }
 .cc-card .cc-tab:focus-visible, .cc-card button:focus-visible, .cc-card input:focus-visible { outline: 2px solid var(--ring, var(--primary)); outline-offset: 1px; }
+/* Only the selected tab is marked. A tab focused by a tap or by opening the card gets no
+   ring (webviews can match :focus-visible there); the ring shows for keyboard use only. */
+.ct-panel.cc-card:not([data-kbd]) .cc-tab:focus, .ct-panel.cc-card:not([data-kbd]) .cc-tab:focus-visible { outline: none; }
+.ct-panel.cc-card .cc-body:focus, .ct-panel.cc-card .cc-body:focus-visible { outline: none; }
 .cc-card .ct-close { flex: none; width: 34px; height: 34px; min-height: 34px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
 .cc-card .cc-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px 10px 10px; }
 
