@@ -817,6 +817,9 @@ impl NativeAgentHandle {
         let messages = db::load_session_messages_raw(&conn, &session_key)?;
         let cut = Self::locate_cut(&messages, keep_user_turns, expected_prompt.as_deref())?;
         let removed = messages.len() - cut;
+        // Turns kept whole. A cut at a message that joined an open turn (a
+        // steer) goes through that turn: its memory goes with the rest.
+        let kept_turns = turn_memory::whole_turns_before(&messages, cut);
         let kept: Vec<types::Message> = messages.into_iter().take(cut).collect();
         if removed > 0 {
             let agent_id = db::load_session_agent_id(&conn, &session_key)?
@@ -836,14 +839,10 @@ impl NativeAgentHandle {
                     now,
                     None,
                 )?;
-                turn_memory::forget_after(
-                    tx,
-                    &session_key,
-                    turn_memory::split_turns(&kept).len() as u32,
-                    now,
-                )
-                .map_err(|e| NativeAgentError::Database {
-                    msg: format!("memory: {}", e),
+                turn_memory::forget_after(tx, &session_key, kept_turns, now).map_err(|e| {
+                    NativeAgentError::Database {
+                        msg: format!("memory: {}", e),
+                    }
                 })?;
                 Ok::<(), NativeAgentError>(())
             })?;

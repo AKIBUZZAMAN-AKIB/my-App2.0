@@ -121,6 +121,17 @@ impl SubagentManager {
         let chosen = list.remove(pos);
         let current = self.runner.load_messages(&rec.session_key);
         let turn = first_difference_turn(&current, &chosen.messages);
+        // Turns both versions share whole keep their memory; the rest is
+        // forgotten, as after a rewind of the main chat.
+        let same = current
+            .iter()
+            .zip(chosen.messages.iter())
+            .take_while(|(x, y)| same_message(x, y))
+            .count();
+        let keep_turns = crate::turn_memory::whole_turns_before(&current, same).min(
+            crate::turn_memory::whole_turns_before(&chosen.messages, same),
+        );
+        self.runner.forget_turns_after(&rec.session_key, keep_turns);
         self.write_branches(id, &list);
         if !current.is_empty() {
             self.archive_branch(id, turn, current, "restore");

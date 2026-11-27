@@ -158,8 +158,11 @@ mod tests {
 
     #[test]
     fn a_view_missing_the_prompt_a_step_or_a_pair_fails() {
+        // The newest turn opens at a prompt after a final answer: two prompts
+        // in a row are one turn (split_turns), so "old" is answered first.
         let full = vec![
             user("old"),
+            Message::assistant_text("old answer"),
             user("new"),
             call("a"),
             res("a"),
@@ -167,25 +170,36 @@ mod tests {
             res("b"),
         ];
         let none = HashSet::new();
-        assert!(check(&full, &full[1..], &none).is_ok());
-        assert!(check(&full, &full[2..], &none)
+        assert!(check(&full, &full[2..], &none).is_ok());
+        assert!(check(&full, &full[3..], &none)
             .unwrap_err()
             .contains("prompt"));
-        let missing_step = vec![full[1].clone(), full[2].clone(), full[3].clone()];
+        let missing_step = vec![full[2].clone(), full[3].clone(), full[4].clone()];
         assert!(check(&full, &missing_step, &none).is_err());
         let unpaired = vec![
-            full[1].clone(),
             full[2].clone(),
-            full[4].clone(),
+            full[3].clone(),
             full[5].clone(),
+            full[6].clone(),
         ];
         assert!(check(&full, &unpaired, &none).is_err());
         let dropped: HashSet<String> = ["a".to_string()].into();
-        let ok = vec![full[1].clone(), full[4].clone(), full[5].clone()];
+        let ok = vec![full[2].clone(), full[5].clone(), full[6].clone()];
         assert!(
             check(&full, &ok, &dropped).is_ok(),
             "a dropped duplicate pair is allowed"
         );
+        // A message that joined the running turn (a steer) is part of it: a
+        // view without it is refused.
+        let mut steered = full.clone();
+        steered.insert(5, user("steer"));
+        let no_steer: Vec<Message> = steered[2..]
+            .iter()
+            .filter(|m| m.text() != "steer")
+            .cloned()
+            .collect();
+        assert!(check(&steered, &steered[2..], &none).is_ok());
+        assert!(check(&steered, &no_steer, &none).is_err());
     }
 
     #[test]

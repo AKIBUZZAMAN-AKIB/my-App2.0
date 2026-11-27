@@ -238,6 +238,44 @@ pub fn split_turns(messages: &[Message]) -> Vec<Turn> {
     turns
 }
 
+/// The assistant line that closes a turn which stopped before its final
+/// answer (step or time limit, an error, a cancel), so the next prompt opens a
+/// turn of its own instead of joining the unfinished one (see [`opens_turn`]).
+pub const STOPPED_BEFORE_ANSWER: &str = "(Stopped before a final answer.)";
+
+/// Whether the last turn of `messages` is still open: its last chat message
+/// (user or assistant) is a user message, a prompt nobody answered or tool
+/// results the model never replied to. A prompt appended now would join it.
+pub fn ends_unfinished(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .rev()
+        .find(|m| matches!(m.role, Role::User | Role::Assistant))
+        .is_some_and(|m| m.role == Role::User)
+}
+
+/// Close an unfinished last turn with [`STOPPED_BEFORE_ANSWER`]. Call it right
+/// before a new prompt is appended, on a transcript whose tool calls all have
+/// results. Returns whether a note was added.
+pub fn close_unfinished_turn(messages: &mut Vec<Message>) -> bool {
+    if !ends_unfinished(messages) {
+        return false;
+    }
+    messages.push(Message::assistant_text(STOPPED_BEFORE_ANSWER));
+    true
+}
+
+/// How many of the leading turns of `messages` lie wholly inside its first
+/// `cut` messages. A turn that the cut goes through (a rewind or an edit at a
+/// message that joined an open turn) is not counted: what is kept of it is no
+/// longer the turn that was summarized, archived or put in the context tree.
+pub fn whole_turns_before(messages: &[Message], cut: usize) -> u32 {
+    split_turns(messages)
+        .iter()
+        .take_while(|t| t.end <= cut)
+        .count() as u32
+}
+
 /// Turns that may be summarized now, by the window policy: `(from, to)`
 /// inclusive, in batches of `batch`. `complete` is the number of finished
 /// turns (the turn being answered is never summarized).

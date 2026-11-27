@@ -134,9 +134,24 @@ pub struct AgentLoopContext<'a> {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-struct TranscriptRepair {
+pub(crate) struct TranscriptRepair {
     closed_tool_uses: usize,
     dropped_orphan_tool_results: usize,
+}
+
+/// Settle the end of the stored history right before a new prompt is
+/// appended, so that prompt opens a turn of its own (`turn_memory::split_turns`),
+/// the same for the main agent and every sub-agent.
+///
+/// The history is repaired first: a run that ended on tool calls without
+/// results (an old build, a provider that stopped with calls pending) would
+/// otherwise get its synthetic results merged into the new prompt's message,
+/// which then is no prompt at all and opens no turn. Then a run that stopped
+/// before its final answer is closed with a short note.
+pub(crate) fn prepare_for_prompt(messages: &mut Vec<Message>) -> TranscriptRepair {
+    let repair = repair_transcript(messages);
+    crate::turn_memory::close_unfinished_turn(messages);
+    repair
 }
 
 /// Repair legacy/injected transcripts before sending them to a provider.
@@ -458,18 +473,12 @@ async fn run_agent_turn_inner(
     // Attachments were validated before the turn was spawned; a parse error
     // here would only mean a caller bypassed that, so fail the turn loudly.
     let attachments = crate::types::parse_attachments(ctx.params.attachments_json.as_deref())?;
+    let mut pre_repair = TranscriptRepair::default();
     if !ctx.params.prompt.trim().is_empty() || !attachments.is_empty() {
         // The last run stopped before a final answer (step or time limit, an
-        // error): close its turn so this message opens a turn of its own
-        // instead of joining the unfinished one.
-        if messages
-            .iter()
-            .rev()
-            .find(|m| matches!(m.role, Role::User | Role::Assistant))
-            .is_some_and(|m| m.role == Role::User)
-        {
-            messages.push(Message::assistant_text("(Stopped before a final answer.)"));
-        }
+        // error, calls left without results): close its turn so this message
+        // opens a turn of its own instead of joining the unfinished one.
+        pre_repair = prepare_for_prompt(&mut messages);
         let attachment_count = attachments.len();
         let image_count = attachments
             .iter()
@@ -493,10 +502,12 @@ async fn run_agent_turn_inner(
         }
     }
 
-    // Repair the stored history before it is offered to a provider. Running
-    // after prompt insertion lets a synthetic tool result share the resumed
-    // user turn rather than creating adjacent user-role messages.
-    let repair = repair_transcript(&mut messages);
+    // Repair the stored history before it is offered to a provider. With a
+    // new prompt it was already repaired before the prompt went in (above);
+    // this pass covers a run without one and is a no-op otherwise.
+    let mut repair = repair_transcript(&mut messages);
+    repair.closed_tool_uses += pre_repair.closed_tool_uses;
+    repair.dropped_orphan_tool_results += pre_repair.dropped_orphan_tool_results;
     if repair.closed_tool_uses > 0 || repair.dropped_orphan_tool_results > 0 {
         event_bus::emit(
             callback,
@@ -625,8 +636,8 @@ async fn run_agent_turn_inner(
     // The turn being answered (1-based over the stored transcript), for
     // stored tool results.
     let current_turn = crate::turn_memory::split_turns(&messages).len().max(1) as u32;
-    // Every prompt of the chat so far, steering messages included: the context
-    // tree numbers turns over the whole chat, not over the (folded) view.
+    // Every turn of the chat so far (one per incoming message and the work for
+    // it; a steer joins the open turn): the context tree numbers turns over the whole chat, not over the (folded) view.
     // The stored transcript is kept summarized, so its prompts restart at 1 after
     // a summary: the tree adds the turns the summaries replaced (0 with it off).
     let tree_turn_base =
@@ -898,7 +909,7 @@ async fn run_agent_turn_inner(
             }
         }
         // ── Context tree: decide on the folded view, then append the checklist.
-        // Turn numbers are absolute: `tree_turns_total` counts every prompt of the
+        // Turn numbers are absolute: `tree_turns_total` counts every turn of the
         // chat, the view shows the newest of them.
         let (context_budget, full_context_budget, system_prompt_tokens, reserved_input_tokens) =
             if tree_enabled {
@@ -5197,6 +5208,60 @@ mod transcript_invariant_tests {
                     && matches!(&blocks[1], ContentBlock::ToolResult { .. })
                     && matches!(&blocks[2], ContentBlock::Text { text } if text == "new prompt")
         ));
+    }
+
+    /// A new prompt after a run that stopped with calls left open gets a turn
+    /// of its own, for the main agent and sub-agents alike: the calls are
+    /// closed and the unfinished turn gets the stop note before the prompt goes
+    /// in, so the prompt stays a prompt instead of carrying synthetic results.
+    #[test]
+    fn a_prompt_after_a_run_stopped_on_open_calls_opens_its_own_turn() {
+        let mut messages = vec![
+            Message::user("old prompt"),
+            assistant_with_tool_calls(&["t1", "t2"]),
+        ];
+        let report = prepare_for_prompt(&mut messages);
+        assert_eq!(report.closed_tool_uses, 2);
+        messages.push(Message::user("new prompt"));
+        assert_eq!(
+            repair_transcript(&mut messages),
+            TranscriptRepair::default()
+        );
+        assert!(unanswered_tool_uses(&messages).is_empty());
+        assert!(messages.last().unwrap().is_user_prompt());
+        assert_eq!(
+            messages[messages.len() - 2].text(),
+            crate::turn_memory::STOPPED_BEFORE_ANSWER
+        );
+        let turns = crate::turn_memory::split_turns(&messages);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[1].start, messages.len() - 1);
+    }
+
+    /// Stopped after tool results (step or time limit): closed with the note.
+    /// Finished with an answer: nothing is added.
+    #[test]
+    fn prepare_for_prompt_closes_only_an_unfinished_turn() {
+        let mut stopped = vec![
+            Message::user("task"),
+            assistant_with_tool_calls(&["t1"]),
+            Message::tool_result("t1", "result", false),
+        ];
+        assert_eq!(
+            prepare_for_prompt(&mut stopped),
+            TranscriptRepair::default()
+        );
+        assert_eq!(stopped.len(), 4);
+        assert_eq!(stopped[3].text(), crate::turn_memory::STOPPED_BEFORE_ANSWER);
+
+        let mut answered = vec![Message::user("task"), Message::assistant_text("done")];
+        let before = serde_json::to_value(&answered).unwrap();
+        prepare_for_prompt(&mut answered);
+        assert_eq!(serde_json::to_value(&answered).unwrap(), before);
+
+        let mut empty: Vec<Message> = Vec::new();
+        prepare_for_prompt(&mut empty);
+        assert!(empty.is_empty());
     }
 
     #[test]

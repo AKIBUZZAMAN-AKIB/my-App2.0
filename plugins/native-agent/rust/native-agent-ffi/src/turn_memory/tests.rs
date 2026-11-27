@@ -2012,3 +2012,64 @@ fn a_turn_is_one_message_until_its_final_answer_not_one_per_request() {
     assert_eq!((turns[0].start, turns[0].end), (0, 8));
     assert_eq!((turns[1].no, turns[1].start, turns[1].end), (2, 8, 12));
 }
+
+/// Where a rewind or an edit cuts a chat, only turns kept whole count: a cut
+/// at a message that joined an open turn goes through that turn.
+#[test]
+fn whole_turns_before_counts_only_turns_the_cut_keeps_whole() {
+    let call = Message::assistant_blocks(vec![ContentBlock::ToolUse {
+        id: "a".into(),
+        name: "read".into(),
+        input: json!({}),
+        provider_metadata: None,
+    }]);
+    let msgs = vec![
+        Message::user("task"),                     // 0: turn 1
+        Message::assistant_text("done"),           // 1
+        Message::user("next"),                     // 2: turn 2
+        call,                                      // 3
+        Message::tool_result("a", "ok", false),    // 4
+        Message::user("follow-up while it works"), // 5: joins turn 2
+        Message::assistant_text("done again"),     // 6
+    ];
+    assert_eq!(split_turns(&msgs).len(), 2);
+    assert_eq!(whole_turns_before(&msgs, 0), 0);
+    assert_eq!(whole_turns_before(&msgs, 2), 1);
+    assert_eq!(
+        whole_turns_before(&msgs, 5),
+        1,
+        "the cut goes through turn 2"
+    );
+    assert_eq!(whole_turns_before(&msgs, msgs.len()), 2);
+}
+
+/// A run that stopped before its answer is closed with the note, so the next
+/// message opens its own turn; a finished one is left as it is.
+#[test]
+fn close_unfinished_turn_only_closes_an_open_turn() {
+    let mut open = vec![
+        Message::user("task"),
+        Message::assistant_blocks(vec![ContentBlock::ToolUse {
+            id: "a".into(),
+            name: "read".into(),
+            input: json!({}),
+            provider_metadata: None,
+        }]),
+        Message::tool_result("a", "ok", false),
+    ];
+    assert!(ends_unfinished(&open));
+    assert!(close_unfinished_turn(&mut open));
+    assert!(!ends_unfinished(&open));
+    open.push(Message::user("next task"));
+    assert_eq!(split_turns(&open).len(), 2);
+
+    let mut unanswered = vec![Message::user("task")];
+    assert!(close_unfinished_turn(&mut unanswered));
+    unanswered.push(Message::user("again"));
+    assert_eq!(split_turns(&unanswered).len(), 2);
+
+    let mut finished = vec![Message::user("task"), Message::assistant_text("done")];
+    assert!(!close_unfinished_turn(&mut finished));
+    assert_eq!(finished.len(), 2);
+    assert!(!ends_unfinished(&[]));
+}
