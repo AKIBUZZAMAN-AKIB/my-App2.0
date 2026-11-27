@@ -86,7 +86,7 @@ pub const GROUPS: &[(&str, &str, Option<&str>)] = &[
     ("mem.ranges.old", "Old ranges", Some("mem.ranges")),
     ("mem.versions", "Memory versions", Some("mem")),
     ("mem.longterm", "Long-term memory (every chat)", Some("mem")),
-    ("mem.shared", "Main agent memory (read-only)", Some("mem")),
+    ("mem.shared", "Main agent memory", Some("mem")),
 ];
 
 /// Ranges newer than this many stay in "Ranges"; the rest are "Old ranges".
@@ -699,13 +699,13 @@ pub fn group_title(gid: &str, default: &str, sc: &MemScope) -> String {
     match gid {
         LONG_TERM_GROUP if sc.is_subagent() && sc.mode == "shared" => {
             if sc.own.is_empty() {
-                "Long-term memory (shared with the main agent)".into()
+                "Long-term memory (main agent's)".into()
             } else {
-                "Long-term memory (shared with its parent)".into()
+                "Long-term memory (parent's)".into()
             }
         }
-        LONG_TERM_GROUP if sc.is_subagent() => "Long-term memory (this sub-agent only)".into(),
-        SHARED_GROUP if !sc.read_only_is_main() => "Parent agent memory (read-only)".into(),
+        LONG_TERM_GROUP if sc.is_subagent() => "Own long-term memory".into(),
+        SHARED_GROUP if !sc.read_only_is_main() => "Parent agent memory".into(),
         _ => default.to_string(),
     }
 }

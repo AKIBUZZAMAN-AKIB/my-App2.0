@@ -29675,7 +29675,9 @@ const ContextTree = (() => {
     const items = state.items || [];
     const cur = activeKey();
     const segs = segsOf(cur);
-    const list = conversationList();
+    // A sub-agent's brain is its own session: other chats are not its conversations.
+    const sub = scopeInfo().sub;
+    const list = conversationList().filter((t) => !sub || t.id === cur);
     const others = list.filter((t) => t.id !== cur);
     if (!items.length && !segs.length && !others.length) return '<p class="ct-empty">Empty until the first message.</p>';
     NS = ''; RK = '';
