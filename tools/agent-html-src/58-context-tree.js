@@ -341,23 +341,159 @@ const ContextTree = (() => {
       .finally(() => { pendingSet.delete(pkey); paint(); if (other) loadConv(key, true); else refresh(); });
   }
 
-  function logRows() {
-    if (!state.log.length) return '<p class="ct-empty">Nothing has been taken out of the window yet.</p>';
-    return state.log.slice(0, 20).map((e) => {
-      const ops = parseMaybeJSON(e.ops, []);
-      const what = Array.isArray(ops)
-        ? ops.map((o) => `${esc(o.id || '?')} ${esc(o.action || '')}${o.ok === false ? ' (refused)' : ''}`).join(', ')
-        : esc(String(e.ops || ''));
-      const why = e.reason ? (REASON_LABEL[e.reason] || e.reason) : '';
-      const before = e.tokensBefore != null ? short(e.tokensBefore) : null;
-      const after = e.tokensAfter != null ? short(e.tokensAfter) : null;
-      return `<div class="ct-log-row">
-          <div class="ct-log-what">${what || '—'}</div>
-          <div class="ct-log-why">${esc(ACTOR_LABEL[e.actor] || e.actor || '')}${why ? ' — ' + esc(why) : ''}${before && after ? ` · ${esc(before)} → ${esc(after)} tokens` : ''}</div>
-        </div>`;
-    }).join('');
+  /* ---------- Activity: requests, policy, savings and window changes ----------
+     What used to be the Log tab, read for people: no raw ids or JSON. */
+  const ACTION_VERB = { include: 'Brought back', exclude: 'Left out', note_only: 'Kept as a note', pin: 'Pinned', unpin: 'Unpinned', move: 'Moved', tag: 'Tagged', evict: 'Left out' };
+  const STAGE_REASON = { compact: 'the window was getting full', force: 'the window overflowed', warn_soft: 'the window was getting full', starved: 'the window was too small', quotas: 'routine clean-up of old storage' };
+  /** A readable name for an item id, from the checklist when it is there. */
+  function itemName(id) {
+    const s = String(id || '');
+    const it = state.items.find((x) => x && x.id === s);
+    if (it && it.title && it.title !== s) return clip(it.title, 48);
+    let m;
+    if ((m = /^turn\/t?(\d+)\/call\/(\d+)/.exec(s))) return `Turn ${m[1]}, tool call ${m[2]}`;
+    if ((m = /^turn\/t?(\d+)/.exec(s))) return `Turn ${m[1]}`;
+    if ((m = /^sum\/(\d+)-(\d+)/.exec(s))) return `Summary of turns ${m[1]}\u2013${m[2]}`;
+    const k = KIND_OF_PREFIX[s.split('/')[0]];
+    const label = { sysPart: 'Rule', result: 'Tool result', summary: 'Summary', tempSummary: 'Temporary summary', note: 'Note', file: 'File', strategy: 'Strategy', subagent: 'Sub-agent', essential: 'Essential', category: 'Category' }[k];
+    return label || 'Item';
+  }
+  /** What kind of thing an id is, for counts ("3 tool calls"). */
+  function idKind(id) {
+    const s = String(id || '');
+    if (/^turn\/t?\d+\/call\//.test(s)) return 'tool call';
+    if (/^turn\//.test(s)) return 'turn';
+    const k = KIND_OF_PREFIX[s.split('/')[0]];
+    return { result: 'result', summary: 'summary', tempSummary: 'summary', sysPart: 'rule', note: 'note', file: 'file' }[k] || 'item';
+  }
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  /** One log row in plain words: { who, what, why, before, after, at, n, names }. */
+  function readLog(e) {
+    const ops = parseMaybeJSON(e.ops, e.ops);
+    let action = '', ids = [], extra = '';
+    if (Array.isArray(ops)) {
+      for (const o of ops) {
+        if (typeof o === 'string') { ids.push(o); action = action || (e.actor === 'policy' ? 'evict' : ''); }
+        else if (o && typeof o === 'object') { ids.push(o.id); action = action || o.action || ''; if (o.ok === false) extra = 'some were refused'; }
+      }
+    } else if (ops && typeof ops === 'object') {
+      if (Array.isArray(ops.ids)) ids = ops.ids;
+      if (ops.op === 'forget_turns') { action = 'forget'; extra = typeof ops.keptTurns === 'number' ? `kept the first ${plural(ops.keptTurns, 'turn')}` : ''; }
+      else if (ops.op === 'gc') { action = 'gc'; const n = (ops.nodesTrimmed || 0) + (ops.notesTrimmed || 0) + (ops.tempTrimmed || 0); extra = n ? `${plural(n, 'old entry')} removed`.replace('entrys', 'entries') : 'nothing to remove'; }
+    }
+    ids = ids.filter((x) => x != null).map(String);
+    const counts = {};
+    for (const id of ids) { const k = idKind(id); counts[k] = (counts[k] || 0) + 1; }
+    const countText = Object.entries(counts).map(([k, n]) => plural(n, k)).join(', ');
+    const verb = action === 'forget' ? 'Rewound the chat' : action === 'gc' ? 'Cleaned up storage' : ACTION_VERB[action] || (ids.length ? 'Changed' : 'Updated the window');
+    const what = action === 'forget' ? (ids.length ? `${verb}: ${countText} removed` : verb) : action === 'gc' ? verb : `${verb}${countText ? ' ' + countText : ''}`;
+    const reasonRaw = e.reason ? String(e.reason) : '';
+    const why = REASON_LABEL[reasonRaw] || STAGE_REASON[reasonRaw] || reasonRaw.replace(/_/g, ' ');
+    const before = typeof e.tokensBefore === 'number' ? e.tokensBefore : null;
+    const after = typeof e.tokensAfter === 'number' ? e.tokensAfter : null;
+    return { who: ACTOR_LABEL[e.actor] || (e.actor ? String(e.actor) : 'Engine'), actor: e.actor || 'engine', what, why, extra, before, after, at: Number(e.at) || 0, names: ids.slice(0, 3).map(itemName), more: Math.max(0, ids.length - 3), key: `${e.actor}|${verb}|${reasonRaw}` };
+  }
+  /** Window changes, newest first, with repeats of the same change folded into one row. */
+  function windowChanges() {
+    const rows = [];
+    for (const e of state.log.slice(0, 40)) {
+      const r = readLog(e);
+      const last = rows[rows.length - 1];
+      if (last && last.key === r.key && !r.names.length && !last.names.length) { last.n += 1; last.after = last.after ?? r.after; last.before = r.before ?? last.before; continue; }
+      rows.push({ ...r, n: 1 });
+    }
+    return rows;
+  }
+  const agoText = (ms) => {
+    if (!ms) return '';
+    const t = ms < 1e12 ? ms * 1000 : ms;
+    const d = Math.max(0, Date.now() - t);
+    if (d < 45000) return 'just now';
+    if (d < 3600000) return `${Math.round(d / 60000)} min ago`;
+    if (d < 86400000) return `${Math.round(d / 3600000)} h ago`;
+    return new Date(t).toLocaleDateString();
+  };
+  const savedPct = (sent, full) => (typeof sent === 'number' && typeof full === 'number' && full > 0 ? Math.max(0, Math.round((1 - sent / full) * 100)) : null);
+  const msText = (n) => (typeof n !== 'number' ? '' : n >= 10000 ? `${(n / 1000).toFixed(1)} s` : `${Math.round(n)} ms`);
+  const policySummary = () => { const cp = policyApi(); try { return cp && cp.available() && cp.summary ? cp.summary() : null; } catch (e) { return null; } };
+
+  /** The selection summary beside the checklist: what is ticked in, out, kept as a note or summarised. */
+  function selectionSummary() {
+    const items = state.items.filter((it) => it && groupOf(it));
+    if (!items.length) return '';
+    const n = { in: 0, out: 0, note: 0, temp: 0 };
+    let leftTokens = 0, locked = 0;
+    for (const it of items) {
+      const st = stateOf(it);
+      n[st in n ? st : 'out'] += 1;
+      if (st === 'out' || st === 'temp') leftTokens += Number(it.tokens) || 0;
+      if (it.pin === 'locked' || it.pin === 'policy') locked += 1;
+    }
+    const chipH = (cls, glyph, count, label) => (count ? `<li class="cc-sel-chip cc-sel-${cls}"><span class="cc-sel-glyph" aria-hidden="true">${glyph}</span><b>${esc(num(count))}</b> ${esc(label)}</li>` : '');
+    const total = items.length;
+    const pctIn = Math.round(((n.in + n.note) / total) * 100);
+    return `<section class="cc-sel" data-slot="selection-summary" aria-label="Selection summary">
+      <div class="cc-sel-ring" style="--p:${pctIn}" role="img" aria-label="${pctIn}% of items sent"><span>${pctIn}%</span></div>
+      <div class="cc-sel-body">
+        <p class="cc-sel-title">${esc(num(n.in + n.note))} of ${esc(num(total))} items go with the next request</p>
+        <ul class="cc-sel-chips">${chipH('in', '\u25cf', n.in, 'in')}${chipH('note', '\u25d0', n.note, 'as notes')}${chipH('temp', '\u2726', n.temp, 'summarised')}${chipH('out', '\u25cb', n.out, 'left out')}${chipH('lock', '\u26bf', locked, 'locked')}</ul>
+        ${leftTokens ? `<p class="cc-sel-note">Leaving out about <b>${esc(short(leftTokens))}</b> tokens of this chat.</p>` : ''}
+      </div>
+    </section>`;
   }
 
+  /** Requests, the policy used and what it saved, then the window changes: all in the Checklist. */
+  function activityBlock() {
+    const ps = policySummary();
+    const mt = ps && ps.metrics && ps.metrics.total;
+    const steps = (ps && ps.steps) || [];
+    const parts = [];
+    // 1. The totals of this chat, from the engine's own measurements.
+    if (ps) {
+      const reqs = mt && typeof mt.requests === 'number' ? mt.requests : steps.length;
+      const sent = mt ? mt.inputTokens : steps.reduce((a, e) => a + (e.inputTokens || 0), 0);
+      const full = mt ? mt.t7Tokens : steps.reduce((a, e) => a + (e.t7Tokens || 0), 0);
+      const pct = savedPct(sent, full);
+      const live = ps.live;
+      const current = (live && live.policy) || (ps.pin) || (ps.task && ps.task.policy) || (ps.mode === 'off' ? 'T7' : null);
+      const name = current ? ((ps.registry || []).find((r) => r.id === current) || {}).name : '';
+      const tile = (k, v, sub, cls = '') => `<div class="cc-act-tile ${cls}"><dt>${esc(k)}</dt><dd>${esc(v)}</dd>${sub ? `<span>${esc(sub)}</span>` : ''}</div>`;
+      parts.push(`<dl class="cc-act-tiles">
+        ${tile('Requests sent', num(reqs), mt && mt.tasks ? plural(mt.tasks, 'turn') : 'in this chat')}
+        ${tile('Policy', current || '\u2014', name ? String(name).replace(/_/g, ' ') : ps.mode === 'off' ? 'policies off' : ps.mode ? `${ps.mode} mode` : '')}
+        ${tile('Saved', pct == null ? '\u2014' : `${pct}%`, full ? `${short(Math.max(0, full - sent))} of ${short(full)} tokens` : 'nothing measured yet', 'cc-act-hero')}
+        ${tile('Avg latency', mt && typeof mt.avgLatencyMs === 'number' ? msText(mt.avgLatencyMs) : '\u2014', mt && mt.fallbacks ? plural(mt.fallbacks, 'fallback') : 'no fallbacks')}
+      </dl>`);
+      if (ps.check) parts.push(`<p class="cc-act-check cc-act-check-${esc(ps.check.kind)}" role="status">${esc(ps.check.text)}</p>`);
+      const byP = Object.entries((ps.metrics && ps.metrics.byPolicy) || {}).filter(([, v]) => v && v.requests).sort((x, y) => y[1].requests - x[1].requests);
+      if (byP.length) {
+        parts.push(`<ul class="cc-act-bars" aria-label="Requests by policy">${byP.map(([id, v]) => {
+          const pc = savedPct(v.inputTokens, v.t7Tokens) || 0;
+          return `<li><span class="cc-act-bar-id">${esc(id)}</span><span class="cc-act-track"><span style="width:${Math.max(2, pc)}%"></span></span><span class="cc-act-bar-num">${esc(plural(v.requests, 'req'))} \u00b7 ${pc}% saved</span></li>`;
+        }).join('')}</ul>`);
+      }
+      // 2. Each request of the current or last turn.
+      if (steps.length) {
+        const open = !!(panel.detailsOpen && panel.detailsOpen.requests);
+        parts.push(`<details class="cc-act-more" data-key="requests"${open ? ' open' : ''}><summary>Requests of the last turn <span class="cc-act-count">${esc(num(steps.length))}</span></summary>
+          <ol class="cc-act-reqs">${steps.slice(-30).reverse().map((e) => {
+            const pc = savedPct(e.inputTokens, e.t7Tokens);
+            return `<li class="cc-act-req"><span class="cc-act-req-step">#${esc(num(Number(e.step) || 0))}</span><span class="cc-act-req-pol">${esc(e.policy || 'T7')}</span><span class="cc-act-req-tok">${esc(short(e.inputTokens))} <small>of ${esc(short(e.t7Tokens))}</small></span><span class="cc-act-req-save${pc ? ' cc-act-pos' : ''}">${pc ? `\u2212${pc}%` : 'full'}</span><span class="cc-act-req-ms">${esc(msText(e.latencyMs))}</span></li>`;
+          }).join('')}</ol></details>`);
+      }
+    }
+    // 3. What changed in the window (the old Log), in words.
+    const changes = windowChanges();
+    const openC = !!(panel.detailsOpen && panel.detailsOpen.changes);
+    const changeRows = changes.slice(0, 15).map((r) => {
+      const delta = r.before != null && r.after != null && r.before !== r.after ? r.after - r.before : null;
+      const names = r.names.length ? `<span class="cc-chg-names">${r.names.map((x) => `<span>${esc(x)}</span>`).join('')}${r.more ? `<span>+${esc(num(r.more))} more</span>` : ''}</span>` : '';
+      return `<li class="cc-chg cc-chg-${esc(r.actor)}"><span class="cc-chg-who">${esc(r.who)}</span><div class="cc-chg-main"><p class="cc-chg-what">${esc(r.what)}${r.n > 1 ? ` <span class="cc-chg-times">\u00d7${r.n}</span>` : ''}</p>${names}<p class="cc-chg-why">${[r.why ? `Because ${r.why}` : "", r.extra, delta != null ? `${short(r.before)} \u2192 ${short(r.after)} tokens` : "", agoText(r.at)].filter(Boolean).map(esc).join(' \u00b7 ')}</p></div>${delta != null ? `<span class="cc-chg-delta${delta < 0 ? ' cc-act-pos' : ''}">${delta < 0 ? '\u2212' : '+'}${esc(short(Math.abs(delta)))}</span>` : ''}</li>`;
+    }).join('');
+    parts.push(`<details class="cc-act-more" data-key="changes"${openC ? ' open' : ''}><summary>Window changes <span class="cc-act-count">${esc(num(state.log.length))}</span></summary><p class="cc-act-cap">${esc(INFO.log)}</p>
+      ${changeRows ? `<ul class="cc-chg-list">${changeRows}</ul>` : '<p class="ct-empty">Nothing has been taken out of the window yet.</p>'}</details>`);
+    return `<section class="cc-act" data-slot="activity" aria-label="Requests and savings"><h4 class="cc-act-h">Requests &amp; savings</h4>${parts.join('')}</section>`;
+  }
 
   const ERROR_LEAD = {
     read: 'Could not read the context window settings from the engine.',
@@ -383,10 +519,12 @@ const ContextTree = (() => {
 
   /* ---------- the context card ----------
      One small card above the composer, with tabs: Checklist (the tree, with
-     the token use by kind on top), Summary (always sent), Log and Settings.
+     the token use by kind and the selection summary on top, and the requests,
+     policy and savings below), Summary (always sent), Settings and Policy.
      It replaces the old context sheet, the Chat memory screen and the
      Sections sheet, which showed the same things in three places. */
-  const BASE_TABS = [['items', 'Checklist'], ['summary', 'Summary'], ['log', 'Log'], ['settings', 'Settings'], ['policy', 'Policy']];
+  // The old Log tab now lives in the Checklist, as Requests & savings.
+  const BASE_TABS = [['items', 'Checklist'], ['summary', 'Summary'], ['settings', 'Settings'], ['policy', 'Policy']];
   // The Policy tab only with the engine's `contextPolicy` feature.
   const policyApi = () => (typeof window !== 'undefined' && window.__contextPolicies) || null;
   const policyOn = () => { try { const p = policyApi(); return !!(p && p.available()); } catch (e) { return false; } };
@@ -401,7 +539,7 @@ const ContextTree = (() => {
     data: 'Everything this chat\u2019s memory stores, as saved.',
     rolling: 'The summary that stands in for the turns before it when the window had to be compacted.',
     summary: 'The chat\u2019s running summary: goals, decisions, facts, files, tasks and ranges. Only the parts that fit the request are sent; each part is a row under Chat memory in the Checklist, coloured by whether it was sent, left out or is waiting behind \u201cshow more\u201d.',
-    log: 'Why items left the window, who asked, and what it saved.',
+    log: 'Every change to what the requests carry: who made it (you, the model or the engine), why, and how many tokens it saved.',
     tree: 'Always on. Lists everything the model can be given, by group, and lets you and the model put items in or take them out. The chat memory is part of it, so there is no separate memory tool.',
     memory: 'The chat memory as groups: goals, goal history, topics & titles, decisions, replaced decisions, facts, preferences, files, tasks, ranges, old ranges and versions. Every row keeps all its versions. Colours: sent \u00b7 left out (matched but cut, or taken out) \u00b7 show more (stored, not needed now) \u00b7 tag inactive \u00b7 earlier version sent. Tick to always send, untick to never send, \u21ba to give it back to relevance. Name a row in the chat as #ID (#D12, #plan.md, #D12@v1): only the last mention of a tag counts.',
     reset: 'Deletes this chat\u2019s tree, notes and strategy. The chat itself stays.',
@@ -1011,7 +1149,7 @@ const ContextTree = (() => {
 
   function tabItems() {
     // Always on: there is no "off" screen and no "Turn on" button.
-    return `${errorNote()}${stageNote()}${meter()}<div class="cc-tree ct-list" role="tree" aria-label="Checklist">${tree()}</div>${resetNote()}`;
+    return `${errorNote()}${stageNote()}${selectionSummary()}${meter()}${activityBlock()}<div class="cc-tree ct-list" role="tree" aria-label="Checklist">${tree()}</div>${resetNote()}`;
   }
 
   /** Every range with its version and changes, and what the request sends
@@ -1071,10 +1209,6 @@ const ContextTree = (() => {
       <details class="cc-more" data-key="versions"${panel.detailsOpen && panel.detailsOpen.versions ? ' open' : ''}><summary>Versions</summary><div class="cc-mem" data-mem="history"></div></details>`;
   }
 
-  function tabLog() {
-    return `<div class="cc-sumhead"><span class="cc-when">${num(state.log.length)} entries</span>${infoBtn('log')}</div>${tip('log')}<div class="cc-log">${logRows()}</div>`;
-  }
-
   function tabSettings() {
     const unknown = settings == null;
     return `${errorNote()}
@@ -1090,7 +1224,7 @@ const ContextTree = (() => {
   function render() {
     const t = panel.tab;
     if (t === 'policy' && policyOn()) return '<div class="cc-policy" data-cp-host></div>';
-    return t === 'summary' ? tabSummary() : t === 'log' ? tabLog() : t === 'settings' ? tabSettings() : tabItems();
+    return t === 'summary' ? tabSummary() : t === 'settings' ? tabSettings() : tabItems();
   }
 
   /** Fill the Chat memory parts (summary, versions, settings) the card reuses. */
@@ -1321,6 +1455,7 @@ const ContextTree = (() => {
     syncExpanded();
     setTab(panel.tab);
     refresh();
+    { const cp = policyApi(); if (cp && cp.refresh && policyOn() && panel.tab !== 'policy') Promise.resolve(cp.refresh()).catch(() => {}); }
     const cm = memApi(); const k = memKey();
     if (cm && k && cm.refresh) Promise.resolve(cm.refresh(k)).then(() => paint()).catch(() => {});
     if (panel.memKey && cm && cm.refresh && activeKey()) Promise.resolve(cm.refresh(activeKey())).catch(() => {});
@@ -1370,6 +1505,9 @@ const ContextTree = (() => {
     attachToggles();
     const cm = memApi();
     if (cm && cm.subscribe && !panel.memSub) panel.memSub = cm.subscribe((k) => { if (panel.open && (k === activeKey() || k === panel.memKey || convs.has(k))) paint(); });
+    // The Checklist shows the policy's requests and savings: repaint when they change.
+    const cp = policyApi();
+    if (cp && cp.subscribe && !panel.cpSub) panel.cpSub = cp.subscribe(() => { if (panel.open && panel.tab === 'items') paint(); });
     paint();
   }
 

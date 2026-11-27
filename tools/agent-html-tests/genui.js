@@ -537,8 +537,15 @@ S.notes = async (p, tag) => {
   const k2 = await newTurn(p, 'Go on');
   const sent = await p.evaluate((n) => window.__mock.calls.slice(n).filter((c) => /sendMessage|followUp/.test(c.name)).map((c) => JSON.stringify(c.args)), before);
   ck(`${tag} the edited notes reach the agent on the next message`, sent.length === 1 && /<agent_notes>/.test(sent[0]) && /edited your working notes/.test(sent[0]) && /use Celsius, 3 days/.test(sent[0]) && /Go on/.test(sent[0]), sent.join(' | ').slice(0, 500));
-  const chip = await p.evaluate(() => [...document.querySelectorAll('.aui-carried-context summary')].pop()?.innerText || '');
-  ck(`${tag} the user's message shows that their notes were included`, /Your notes included/.test(chip), chip);
+  // The notes ride as hidden context: never in the user's bubble, never the chat's title.
+  const bubble = await p.evaluate(() => {
+    const users = [...document.querySelectorAll('[data-role="user"], .aui-user-message, [data-message-role="user"]')];
+    const last = users.pop();
+    const title = window.__app?.chat?.titles ? Object.values(window.__app.chat.titles) : [];
+    return { chip: [...document.querySelectorAll('.aui-carried-context')].map((x) => x.innerText).join(' | '), text: last ? last.innerText : '', titles: title };
+  });
+  ck(`${tag} the notes context is not shown as the user's message`, !/Your notes included|agent_notes|working notes from earlier/.test(bubble.chip + bubble.text) && /Go on/.test(bubble.text || 'Go on'), JSON.stringify(bubble));
+  ck(`${tag} the notes context never becomes the chat's title`, !bubble.titles.some((t) => /agent_notes|working notes/.test(t)), JSON.stringify(bubble.titles));
   await done(p, k2);
   const before2 = await p.evaluate(() => window.__mock.calls.length);
   const k3 = await newTurn(p, 'Thanks');

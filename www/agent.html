@@ -2624,7 +2624,14 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .wt-check[data-state="running"] svg { animation: aui-spin 1s linear infinite; }
 .wt-check[data-state="ok"] svg { color: var(--success); }
 .wt-check[data-state="issues"] svg, .wt-check[data-state="failed"] svg { color: var(--warning); }
-.wt-edit-failed { color: var(--muted-foreground); }
+.wt-edit-failed { color: var(--muted-foreground); font-size: 0.8125rem; margin: 0.25rem 0; }
+.wt-edit-failed > summary { display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; list-style: none; padding: 0.25rem 0.625rem; border: 1px solid var(--border); border-radius: 999px; }
+.wt-edit-failed > summary::-webkit-details-marker { display: none; }
+.wt-edit-failed-dot { width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--muted-foreground); opacity: 0.7; flex: none; }
+.wt-edit-failed-more { opacity: 0.7; text-decoration: underline; text-underline-offset: 2px; }
+.wt-edit-failed[open] .wt-edit-failed-more { display: none; }
+.wt-edit-failed-reason { margin: 0.375rem 0 0; padding: 0.5rem 0.75rem; border-radius: 0.5rem; background: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.wt-edit-retried { display: none; }
 @media (prefers-reduced-motion: reduce) { .wt-check[data-state="running"] svg { animation: none; } }
 /* @@END css:52-widget-tools */
 /* @@BEGIN css:53-ask */
@@ -4387,6 +4394,70 @@ ol.sw-group-order li::before { counter-increment: sw-ord; content: counter(sw-or
 .cc-mem-group-op { font-size: 11px; }
 /* The long-term memory (every chat) has its own accent. */
 .cc-mem-group[data-mem-group="mem.longterm"] > .cc-head .cc-group-name { font-style: italic; }
+
+/* Selection summary: beside the checklist, what goes with the next request. */
+.cc-sel { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(135deg, color-mix(in srgb, var(--cc-turns) 9%, transparent), color-mix(in srgb, var(--cc-memory) 7%, transparent)); }
+.cc-sel-ring { --p: 0; flex: none; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: conic-gradient(var(--cc-turns) calc(var(--p) * 1%), color-mix(in srgb, var(--muted-foreground) 18%, transparent) 0); }
+.cc-sel-ring span { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--background); font-size: 0.6875rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cc-sel-body { min-width: 0; flex: 1; }
+.cc-sel-title { margin: 0; font-size: 0.8125rem; font-weight: 600; }
+.cc-sel-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+.cc-sel-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--muted-foreground) 10%, transparent); color: var(--muted-foreground); font-size: 0.6875rem; }
+.cc-sel-chip b { color: var(--foreground); font-variant-numeric: tabular-nums; }
+.cc-sel-in .cc-sel-glyph { color: var(--cc-turns); } .cc-sel-note .cc-sel-glyph { color: var(--cc-memory); }
+.cc-sel-temp .cc-sel-glyph { color: var(--cc-summary); } .cc-sel-lock .cc-sel-glyph { color: var(--cc-rules); }
+.cc-sel-note { margin: 6px 0 0; color: var(--muted-foreground); font-size: 0.6875rem; }
+p.cc-sel-note b { color: var(--foreground); }
+
+/* Requests & savings (was the Log tab). */
+.cc-act { margin: 4px 0 12px; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--muted-foreground) 4%, transparent); }
+.cc-act-h { margin: 0 0 8px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-foreground); }
+.cc-act-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 0; }
+.cc-act-tile { min-width: 0; padding: 8px 10px; border-radius: 10px; background: var(--background); border: 1px solid var(--border); }
+.cc-act-tile dt { color: var(--muted-foreground); font-size: 0.6875rem; }
+.cc-act-tile dd { margin: 2px 0 0; font-size: 1.0625rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-act-tile > span { display: block; color: var(--muted-foreground); font-size: 0.6875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-act-hero { border-color: color-mix(in srgb, #2fa86a 45%, var(--border)); background: color-mix(in srgb, #2fa86a 8%, var(--background)); }
+.cc-act-hero dd { color: #23935b; }
+.cc-act-check { margin: 8px 0 0; padding: 6px 10px; border-radius: 10px; font-size: 0.75rem; line-height: 1.4; background: var(--background); border-left: 3px solid var(--muted-foreground); color: var(--muted-foreground); }
+.cc-act-check-ok { border-left-color: #2fa86a; color: var(--foreground); }
+.cc-act-check-full { border-left-color: #c08a2e; color: var(--foreground); }
+.cc-act-bars { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.cc-act-bars li { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 8px; font-size: 0.6875rem; }
+.cc-act-bar-id { font-weight: 700; }
+.cc-act-track { height: 6px; border-radius: 3px; overflow: hidden; background: color-mix(in srgb, var(--muted-foreground) 15%, transparent); }
+.cc-act-track > span { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #2fa86a, #5b8def); }
+.cc-act-bar-num { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.cc-act-more { margin: 8px 0 0; border-top: 1px solid var(--border); padding-top: 6px; }
+.cc-act-more > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.8125rem; font-weight: 600; list-style: none; min-height: 30px; }
+.cc-act-more > summary::-webkit-details-marker { display: none; }
+.cc-act-more > summary::after { content: '\203A'; margin-left: auto; color: var(--muted-foreground); transition: transform .15s; }
+.cc-act-more[open] > summary::after { transform: rotate(90deg); }
+.cc-act-count { padding: 0 7px; border-radius: 999px; background: color-mix(in srgb, var(--muted-foreground) 14%, transparent); color: var(--muted-foreground); font-size: 0.6875rem; font-weight: 600; }
+.cc-act-cap { margin: 2px 0 6px; color: var(--muted-foreground); font-size: 0.6875rem; }
+.cc-act-reqs { margin: 4px 0 0; padding: 0; list-style: none; }
+.cc-act-req { display: grid; grid-template-columns: 34px 30px 1fr auto 52px; align-items: baseline; gap: 6px; padding: 5px 0; border-bottom: 1px dashed var(--border); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.cc-act-req:last-child { border-bottom: 0; }
+.cc-act-req-step { color: var(--muted-foreground); }
+.cc-act-req-pol { font-weight: 700; }
+.cc-act-req-tok small { color: var(--muted-foreground); }
+.cc-act-req-save { color: var(--muted-foreground); }
+.cc-act-req-ms { color: var(--muted-foreground); text-align: right; }
+.cc-act-pos { color: #23935b !important; font-weight: 600; }
+.cc-chg-list { margin: 0; padding: 0; list-style: none; }
+.cc-chg { display: flex; align-items: flex-start; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.cc-chg:last-child { border-bottom: 0; }
+.cc-chg-who { flex: none; min-width: 52px; padding: 1px 6px; border-radius: 6px; text-align: center; font-size: 0.625rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; background: color-mix(in srgb, var(--cc-rules) 18%, transparent); }
+.cc-chg-model .cc-chg-who { background: color-mix(in srgb, var(--cc-calls) 18%, transparent); }
+.cc-chg-policy .cc-chg-who { background: color-mix(in srgb, var(--cc-summary) 20%, transparent); }
+.cc-chg-user .cc-chg-who { background: color-mix(in srgb, var(--cc-turns) 18%, transparent); }
+.cc-chg-main { min-width: 0; flex: 1; }
+.cc-chg-what { margin: 0; font-size: 0.8125rem; font-weight: 600; }
+.cc-chg-times { color: var(--muted-foreground); font-weight: 500; }
+.cc-chg-names { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+.cc-chg-names > span { padding: 0 6px; border-radius: 5px; background: color-mix(in srgb, var(--muted-foreground) 10%, transparent); font-size: 0.6875rem; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-chg-why { margin: 3px 0 0; color: var(--muted-foreground); font-size: 0.6875rem; }
+.cc-chg-delta { flex: none; font-size: 0.75rem; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
 /* @@END css:58-context-tree */
 /* @@BEGIN css:61-settings-shell */
 /* Appearance: the four choices, applied by attribute so nothing re-renders. */
@@ -5123,6 +5194,31 @@ html:has(.mn-nav) .sa-group[data-fullscreen="true"] { padding-bottom: calc(var(-
   .cp-sec { padding: 0.625rem; }
   .cp-seg-btn { padding: 0 0.625rem; }
 }
+
+/* Overall: totals over this chat's tasks, and whether the policy really shortens requests. */
+.cp-ov { display: flex; flex-direction: column; gap: 8px; }
+.cp-ov-check { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 8px 10px; border-radius: 10px; font-size: 0.75rem; line-height: 1.45; background: var(--muted); border-left: 3px solid var(--muted-foreground); color: var(--muted-foreground); }
+.cp-ov-check-ok { border-left-color: #2fa86a; color: var(--foreground); }
+.cp-ov-check-full { border-left-color: #c08a2e; color: var(--foreground); }
+.cp-ov-badge { flex: none; padding: 0 7px; border-radius: 999px; font-size: 0.625rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.cp-ov-ok { background: color-mix(in srgb, #2fa86a 20%, transparent); color: #23935b; }
+.cp-ov-full { background: color-mix(in srgb, #c08a2e 22%, transparent); color: #a2731f; }
+.cp-ov-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; margin: 0; }
+.cp-ov-tile { min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
+.cp-ov-tile dt { color: var(--muted-foreground); font-size: 0.6875rem; }
+.cp-ov-tile dd { margin: 2px 0 0; font-size: 1.0625rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cp-ov-sub { display: block; color: var(--muted-foreground); font-size: 0.6875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cp-ov-tile-hero { border-color: color-mix(in srgb, #2fa86a 45%, var(--border)); background: color-mix(in srgb, #2fa86a 8%, var(--background)); }
+.cp-ov-tile-hero dd { color: #23935b; }
+.cp-ov-bars { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.cp-ov-bar-head { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; }
+.cp-ov-bar-name { color: var(--muted-foreground); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-ov-bar-num { margin-left: auto; color: var(--muted-foreground); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cp-ov-track { display: block; height: 6px; margin-top: 3px; border-radius: 3px; overflow: hidden; background: var(--muted); }
+.cp-ov-fill { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #2fa86a, var(--primary)); }
+.cp-ov-src { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 0.75rem; }
+.cp-tab-block { margin: 10px 0; }
+.cp-tab-block > .cp-h { margin: 0 0 6px; }
 /* @@END css:59-context-policy */
 </style>
 </head>
@@ -7455,6 +7551,26 @@ function toolResultValue(output) {
   const parsed = parseMaybeJSON(output, undefined);
   return parsed === undefined ? output : parsed;
 }
+/** Hidden context the app sends ahead of the user's own words (working notes, what the
+ *  user did in UIs, a fork's earlier messages). Returns [context, the user's words]. It is
+ *  never the user's message: not its bubble text and not the chat's title. */
+const CARRIED_TAG = /^\s*(<(agent_notes|ui_context)>[\s\S]*?<\/\2>)[ \t]*(?:\n+|$)/;
+const CARRIED_FORK = /^\s*(Context: this chat continues an earlier conversation[\s\S]*?\n---)[ \t]*(?:\n\n|\n?$)/;
+function splitCarriedContext(text) {
+  let rest = String(text || '');
+  const parts = [];
+  for (let m; (m = CARRIED_TAG.exec(rest) || CARRIED_FORK.exec(rest));) { parts.push(m[1]); rest = rest.slice(m[0].length); }
+  return [parts.join('\n\n'), rest];
+}
+/** A chat title from a prompt: the first line of the user's words, never the hidden context. */
+function titleFromPrompt(prompt) {
+  const words = splitCarriedContext(prompt)[1];
+  const first = words.split('\n').find((l) => l.trim() && !/^<\/?(agent_notes|ui_context)>$/.test(l.trim()));
+  return truncate((first || 'New Chat').trim(), 60);
+}
+/** A saved title that is really hidden context (an older build titled chats "<agent_notes>"). */
+const isCarriedTitle = (t) => typeof t === 'string' && /^\s*(<\/?(agent_notes|ui_context)>|Your working notes from earlier|Context: this chat continues)/.test(t);
+
 /** Same idea as agent.html's converter: text, thinking, tool calls with their results. */
 function convertEngineMessages(list) {
   const out = [];
@@ -7467,7 +7583,11 @@ function convertEngineMessages(list) {
   for (const m of list) {
     if (!m || (m.role !== 'user' && m.role !== 'assistant')) continue;
     const { text: contentText, thinking: contentThinking } = textOfContent(m.content);
-    const text = contentText || (typeof m.text === 'string' ? m.text : '');
+    let text = contentText || (typeof m.text === 'string' ? m.text : '');
+    // A stored user prompt starts with the hidden context it was sent with: keep it
+    // out of the bubble (it goes to metadata, like a live message's).
+    let carried = '';
+    if (m.role === 'user') [carried, text] = splitCarriedContext(text);
     const thinking = contentThinking || (typeof m.thinking === 'string' ? m.thinking : '');
     const createdAt = Number(m.createdAt ?? m.timestamp) || Date.now();
     const content = [];
@@ -7505,7 +7625,7 @@ function convertEngineMessages(list) {
     const message = {
       id: uid(), role: m.role, createdAt, content,
       ...(m.role === 'user' ? { attachments: [] } : { status: { type: 'complete' } }),
-      metadata: { custom: m.model ? { model: m.model } : {}, ...(m.usage ? { usage: m.usage } : {}) },
+      metadata: { custom: { ...(m.model ? { model: m.model } : {}), ...(carried ? { context: carried } : {}) }, ...(m.usage ? { usage: m.usage } : {}) },
     };
     out.push([parent, message]);
     parent = message.id;
@@ -7939,7 +8059,14 @@ class ChatRuntime extends Emitter {
     this.runtimes = new Map();
     this._autoRetried = new Set(); // user-message ids that already got the one automatic retry
     this.mainId = null;
-    this.titles = (() => { const t = storage.get('sessionTitles'); return t && typeof t === 'object' ? t : {}; })();
+    this.titles = (() => {
+      const t = storage.get('sessionTitles');
+      if (!t || typeof t !== 'object') return {};
+      // Titles an older build took from the hidden notes context are dropped; the
+      // chat gets its title again from its first message when it is opened.
+      for (const k of Object.keys(t)) if (isCarriedTitle(t[k])) delete t[k];
+      return t;
+    })();
     this.native = { phase: 'starting', message: 'Starting the agent…', abi: null, mcp: { configs: [], toolCount: 0, failures: [] } };
     this.switchToNewThread();
     queueMicrotask(() => this.boot());
@@ -8030,6 +8157,12 @@ class ChatRuntime extends Emitter {
       await bridge.resumeSession(id);
       runtime.load(messages);
       runtime.sessionReady = true;
+      // No saved title (or one dropped as hidden context): the first thing the user wrote.
+      const opened = this.items.get(id);
+      if (opened && !this.titles[id]) {
+        const firstUser = runtime.messages.find((m) => m.role === 'user' && replyText(m).trim());
+        if (firstUser) { this.titles[id] = opened.title = titleFromPrompt(replyText(firstUser)); storage.set('sessionTitles', this.titles); }
+      }
       this._dropEmptyNew(id);
       this.mainId = id;
       try { localStorage.setItem(ACTIVE_SESSION_KEY, id); } catch { /* storage blocked */ }
@@ -8105,7 +8238,12 @@ class ChatRuntime extends Emitter {
         main.onToolUse({ toolCallId: n.toolCallId ?? n.tool_call_id, toolName: n.toolName ?? n.tool_name, args: n.args ?? n.input }); break;
       case 'tool_result': {
         const raw = n.result ?? n.output;
-        const value = raw && typeof raw === 'object' && 'output' in raw ? raw.output : raw;
+        // The engine sends { content: "<result text>", isError }; an older bridge sent
+        // { output }. The part keeps the result itself (as a loaded chat does), so the
+        // cards that read it (weather, routes, notes) find their data by id.
+        const bareContent = raw && typeof raw === 'object' && !Array.isArray(raw) && typeof raw.content === 'string'
+          && Object.keys(raw).every((k) => k === 'content' || k === 'isError' || k === 'is_error');
+        const value = raw && typeof raw === 'object' && 'output' in raw ? raw.output : bareContent ? raw.content : raw;
         const isError = (raw && typeof raw === 'object' && (raw.isError === true || raw.is_error === true))
           || (value && typeof value === 'object' && (value.error || value.isError === true));
         main.onToolResult({ toolCallId: n.toolCallId ?? n.tool_call_id, result: value, isError });
@@ -8187,8 +8325,7 @@ class ChatRuntime extends Emitter {
   async submit(runtime, prompt) {
     const item = this.items.get(runtime.id);
     if (item && !this.titles[runtime.id]) {
-      const first = prompt.split('\n').find((l) => l.trim()) || 'New Chat';
-      this.titles[runtime.id] = truncate(first.trim(), 60);
+      this.titles[runtime.id] = titleFromPrompt(prompt);
       item.title = this.titles[runtime.id];
       storage.set('sessionTitles', this.titles);
     }
@@ -10157,7 +10294,10 @@ class UserMessageView {
     const ctxText = message.metadata?.custom?.context || '';
     let text = replyText(message);
     let carried = ctxText;
-    if (!carried) { const m = /^Context: this chat continues an earlier conversation[\s\S]*?\n---\n\n/.exec(text); if (m) { carried = m[0]; text = text.slice(m[0].length); } }
+    if (!carried) { const [c, rest] = splitCarriedContext(text); if (c) { carried = c; text = rest; } }
+    // Working notes and UI context are hidden context for the agent, never part of the
+    // user's message; only a fork's earlier messages are shown (collapsed).
+    carried = carried.replace(/<(agent_notes|ui_context)>[\s\S]*?<\/\1>\s*/g, '').trim();
     const running = !!this.ctx?.running;
     const copyIcon = swapIcon('copy', 'check');
     if (this.copied) copyIcon.swap(true);
@@ -10177,7 +10317,7 @@ class UserMessageView {
       h('div', { class: 'aui-user-message-attachments' }, attachments),
       h('div', { class: 'aui-user-message-content-wrapper' },
         h('div', { class: 'aui-user-message-content', dir: 'auto' },
-          carried && h('details', { class: 'aui-carried-context' }, h('summary', null, ...(/^<agent_notes>/.test(carried) && !/this chat continues an earlier conversation/.test(carried) ? [icon('notebook-pen'), 'Your notes included'] : [icon('git-fork'), 'Earlier messages included'])), h('div', { class: 'aui-carried-context-body' }, carried.replace(/<\/?agent_notes>\n?/g, '').replace(/\n---\s*$/, ''))),
+          carried && h('details', { class: 'aui-carried-context' }, h('summary', null, icon('git-fork'), 'Earlier messages included'), h('div', { class: 'aui-carried-context-body' }, carried.replace(/\n---\s*$/, ''))),
           text)),
       h('div', { class: 'aui-user-message-bar-row' }, picker, bar),
     );
@@ -13125,8 +13265,7 @@ ChatRuntime.prototype.submit = async function submitV2(runtime, prompt) {
   if (!images?.length) return legacySubmit.call(this, runtime, prompt);
   const item = this.items.get(runtime.id);
   if (item && !this.titles[runtime.id]) {
-    const first = prompt.split('\n').find((l) => l.trim()) || 'New Chat';
-    this.titles[runtime.id] = truncate(first.trim(), 60);
+    this.titles[runtime.id] = titleFromPrompt(prompt);
     item.title = this.titles[runtime.id];
     storage.set('sessionTitles', this.titles);
   }
@@ -18698,7 +18837,7 @@ The app has light, dark and system (follow the phone) themes. set_theme asks the
     LIMITS, CATALOG, ACTIONS, COMPONENT_NAMES, MODULE_NAMES, FUNCS,
     parsePointer, toPointer, readPointer, getAt, setAt, removeAt, applyOperation, applyPatches, emptySpec, clone,
     parseFormula, evalFormula, resolve, bindingPath, checkCondition, fillTemplate, isExpr, truthy,
-    validateSpec, formatIssues, treeToSpec, applyEdits, readMe, catalogGuide, weatherCode,
+    validateSpec, formatIssues, treeToSpec, applyEdits, readMe, catalogGuide, weatherCode, ALIASES,
   };
 })();
 /* @@END js:50-genui-core */
@@ -19307,15 +19446,48 @@ const GenUI = (() => {
 
   /* ---------- forecasts from get_weather results in this chat ---------- */
   const weatherCache = new Map();
+  /** End (exclusive) of the balanced JSON object that starts at `from`, or -1. */
+  function jsonEnd(t, from) {
+    let depth = 0; let q = false;
+    for (let i = from; i < t.length; i++) {
+      const c = t[i];
+      if (q) { if (c === '\\') i++; else if (c === '"') q = false; continue; }
+      if (c === '"') q = true;
+      else if (c === '{' || c === '[') depth++;
+      else if ((c === '}' || c === ']') && --depth === 0) return i + 1;
+    }
+    return -1;
+  }
+  /** The JSON a device tool returned, from any shape the result arrives in: the engine's live
+   * event ({ content: "text", isError }), the bridge's MCP form ({ content: [{ text }],
+   * structuredContent }), an { output } string, or the bare text "Summary line\n{…json…}"
+   * (maybe inside an <untrusted_tool_output> tag). */
   function parseData(result) {
     let value = result;
-    if (isObj(value) && Array.isArray(value.content)) value = value.content.map((c) => c?.text || '').join('\n');
+    if (isObj(value) && isObj(value.structuredContent)) return value.structuredContent;
+    if (isObj(value) && typeof value.output === 'string') value = value.output;
+    else if (isObj(value) && typeof value.content === 'string') value = value.content;
+    else if (isObj(value) && Array.isArray(value.content)) value = value.content.map((c) => (typeof c === 'string' ? c : c?.text || '')).join('\n');
     if (typeof value === 'string') {
-      // Text first, then the JSON (a long result is wrapped in an untrusted tag).
-      const i = value.indexOf('\n{') >= 0 ? value.indexOf('\n{') + 1 : value.indexOf('{');
-      const j = value.lastIndexOf('}');
-      if (i < 0 || j < i) return null;
-      try { value = JSON.parse(value.slice(i, j + 1)); } catch { return null; }
+      const t = value;
+      let first = null;
+      // Each object that starts a line (or the text) is tried; the one with an id wins.
+      for (let i = t.indexOf('{'); i >= 0; i = t.indexOf('{', i + 1)) {
+        if (i > 0 && !/[\n>]\s*$/.test(t.slice(Math.max(0, i - 4), i))) continue;
+        const e = jsonEnd(t, i);
+        if (e < 0) continue;
+        let v;
+        try { v = JSON.parse(t.slice(i, e)); } catch { continue; }
+        if (!isObj(v)) continue;
+        if (v.id != null) return v;
+        first = first || v;
+        i = e - 1;
+      }
+      if (!first) {
+        const i = t.indexOf('{'); const e = i >= 0 ? jsonEnd(t, i) : -1;
+        if (e > 0) try { const v = JSON.parse(t.slice(i, e)); if (isObj(v)) first = v; } catch { /* not JSON */ }
+      }
+      return first;
     }
     return isObj(value) ? value : null;
   }
@@ -19324,12 +19496,18 @@ const GenUI = (() => {
     if (data?.id && (data.current || data.daily)) weatherCache.set(String(data.id), data);
     return data;
   }
+  /** Every chat thread the app has open (the main chat is listed even before it is in the map). */
+  function chatThreads() {
+    const list = app?.chat?.runtimes ? [...app.chat.runtimes.values()] : [];
+    if (app?.chat?.main && !list.includes(app.chat.main)) list.push(app.chat.main);
+    return list;
+  }
   const routeCache = new Map();
   /** A get_route result by id, from this app's chats. */
   function findRoute(id) {
     if (!id) return null;
     if (routeCache.has(id)) return routeCache.get(id);
-    const threads = app?.chat?.runtimes ? [...app.chat.runtimes.values()] : [app?.chat?.main];
+    const threads = chatThreads();
     for (const m of threads.flatMap((rt) => rt?.messages || [])) {
       for (const part of Array.isArray(m?.content) ? m.content : []) {
         if (part?.type !== 'tool-call' || !/get_route$/.test(part.toolName || '') || part.result == null) continue;
@@ -19343,7 +19521,7 @@ const GenUI = (() => {
   function findWeather(id) {
     if (!id) return null;
     if (weatherCache.has(id)) return weatherCache.get(id);
-    const threads = app?.chat?.runtimes ? [...app.chat.runtimes.values()] : [app?.chat?.main];
+    const threads = chatThreads();
     for (const m of threads.flatMap((rt) => rt?.messages || [])) {
       for (const part of Array.isArray(m?.content) ? m.content : []) {
         if (part?.type !== 'tool-call' || !/get_weather$/.test(part.toolName || '') || part.result == null) continue;
@@ -19992,20 +20170,62 @@ const GenUI = (() => {
   /** A JSON value that is a GenUI spec: { root, elements } (also inside { spec }), or a tree (or list) of catalog nodes.
    * Other casings of a name count only with a node shape (props / children / _type), so the lowercase
    * fence widgets ("table", "chart", "image") stay with Widgets. */
+  const lowerAliases = new Map(Object.entries(C.ALIASES || {}).map(([k, v]) => [k.toLowerCase(), v]));
+  lowerAliases.set('imagegallery', 'Carousel'); lowerAliases.set('images', 'Carousel'); lowerAliases.set('photos', 'Carousel');
+  /** The catalog name a common other name stands for ("Column" -> "Stack", "Gallery" -> "Carousel"), or null. */
+  const aliasName = (t) => (typeof t === 'string' && t ? lowerAliases.get(t.toLowerCase()) || null : null);
+  const nodeShaped = (x) => isObj(x.props) || Array.isArray(x.children) || x._type != null;
+  /** A group with no type: { children: [nodes] } (sometimes with props), a model's habit for "a column of cards". */
+  const typelessGroup = (x) => (x._type ?? x.type) == null && Array.isArray(x.children) && x.children.length > 0
+    && Object.keys(x).every((k) => k === 'children' || k === 'props') && x.children.every((c) => isObj(c) && isTextSpec(c));
+  /** A JSON value that is a GenUI spec: { root, elements } (also inside { spec }), or a tree (or list) of catalog nodes.
+   * Other casings of a name count only with a node shape (props / children / _type), so the lowercase
+   * fence widgets ("table", "chart", "image") stay with Widgets. A known other name ("Column", "Gallery")
+   * also counts with a node shape, and so does a typeless { children: [...] } group. */
   function isTextSpec(x) {
     if (Array.isArray(x)) return x.length > 0 && x.length <= 40 && x.every((n) => isObj(n) && isTextSpec(n));
     if (!isObj(x)) return false;
     if (isObj(x.spec) && !x.type) return isTextSpec(x.spec);
     if (typeof x.root === 'string' && isObj(x.elements)) return true;
     const t = x._type ?? x.type;
-    return !!catalogName(t, !(isObj(x.props) || Array.isArray(x.children) || x._type != null));
+    const shaped = nodeShaped(x);
+    if (catalogName(t, !shaped)) return true;
+    if (shaped && aliasName(t)) return true;
+    return typelessGroup(x);
+  }
+  /** A node whose type the catalog does not know, read by what it holds. */
+  function guessName(node) {
+    const p = { ...(isObj(node.props) ? node.props : {}), ...node };
+    if (Array.isArray(p.images) || Array.isArray(p.photos)) return 'Carousel';
+    if (Array.isArray(node.children)) return 'Stack';
+    if (typeof p.src === 'string' && /^https?:/.test(p.src)) return 'Image';
+    if (Array.isArray(p.items) && p.items.length && p.items.every((i) => isObj(i) && 'label' in i && 'value' in i)) return 'Facts';
+    if (Array.isArray(p.items)) return 'List';
+    if (typeof p.text === 'string') return 'Text';
+    return null;
+  }
+  /** Image lists written as images / photos ([{src, alt, caption}]) become the Carousel's items. */
+  function carouselItems(node) {
+    const props = isObj(node.props) ? { ...node.props } : null;
+    const bag = props || node;
+    if (Array.isArray(bag.items)) return node;
+    const list = Array.isArray(bag.images) ? bag.images : Array.isArray(bag.photos) ? bag.photos : null;
+    if (!list) return node;
+    const items = list.map((im) => (typeof im === 'string' ? { image: im } : isObj(im) ? {
+      image: im.image ?? im.src ?? im.url, title: im.title, caption: im.caption ?? im.alt, alt: im.alt, href: im.href ?? im.link,
+    } : null)).filter((i) => i && typeof i.image === 'string');
+    const out = { ...node };
+    if (props) { delete props.images; delete props.photos; out.props = { ...props, items }; } else { delete out.images; delete out.photos; out.items = items; }
+    return out;
   }
   function fixTree(node, depth = 0) {
     if (Array.isArray(node)) return node.map((n) => fixTree(n, depth));
     if (!isObj(node) || depth > C.LIMITS.depth) return node;
-    const name = catalogName(node._type ?? node.type);
-    const out = { ...node };
+    const t = node._type ?? node.type;
+    const name = catalogName(t) || aliasName(t) || (t == null || nodeShaped(node) ? guessName(node) : null);
+    let out = { ...node };
     if (name) { delete out._type; out.type = name; }
+    if (name === 'Carousel') out = carouselItems(out);
     if (Array.isArray(node.children)) out.children = node.children.map((c) => fixTree(c, depth + 1));
     return out;
   }
@@ -20018,7 +20238,7 @@ const GenUI = (() => {
       const spec = clone(x);
       for (const [id, el] of Object.entries(spec.elements)) {
         if (!isObj(el)) continue;
-        const name = catalogName(el.type ?? el._type);
+        const name = catalogName(el.type ?? el._type) || aliasName(el.type ?? el._type);
         if (name) { el.type = name; delete el._type; }
         if (!isObj(el.props)) {
           // Props written beside type (the tree habit) instead of inside props.
@@ -20277,6 +20497,8 @@ const WidgetTools = (() => {
     return cur;
   }
 
+  /** The current code, for an edit that did not match, so the next try copies it exactly. */
+  const codeHint = (code) => (typeof code === 'string' && code.length <= 6000 ? `\nCurrent code:\n${code}` : '');
   const specCode = (spec) => JSON.stringify({ root: spec.root, elements: spec.elements, state: spec.state }, null, 2);
 
   /** Applies one edit_widget call to the current code of its title; cached per call. */
@@ -20294,7 +20516,7 @@ const WidgetTools = (() => {
     const list = Array.isArray(a.edits) ? a.edits : isObj(a.edits) ? [a.edits] : (a.old_string != null ? [{ old_string: a.old_string, new_string: a.new_string }] : null);
     if (target.kind === 'html') {
       const r = C.applyEdits(target.html, list);
-      if (!r.ok) return fail(`${r.error} Nothing was changed.`);
+      if (!r.ok) return fail(`${r.error} Nothing was changed.${codeHint(target.html)}`);
       if (!r.source.trim()) return fail('The edits would leave the widget empty. Nothing was changed.');
       if (r.source.length > MAX_CODE) return fail(`The edited code is ${r.source.length} characters; the limit is ${MAX_CODE}. Nothing was changed.`);
       const done = { kind: 'html', title: target.title, html: r.source, number: target.number + 1, count: list.length, prevId: target.id };
@@ -20304,8 +20526,9 @@ const WidgetTools = (() => {
     }
     let spec = editStore.get(id);
     if (!spec) {
-      const r = C.applyEdits(specCode(target.version.spec), list);
-      if (!r.ok) return fail(`${r.error} Nothing was changed. The code of a render_spec/present widget is its spec as JSON with 2-space indent: {"root", "elements", "state"}.`);
+      const code = specCode(target.version.spec);
+      const r = C.applyEdits(code, list);
+      if (!r.ok) return fail(`${r.error} Nothing was changed. The code of a render_spec/present widget is its spec as JSON with 2-space indent: {"root", "elements", "state"}.${codeHint(code)}`);
       try { spec = JSON.parse(r.source); } catch (e) { return fail(`After the edits the spec is not valid JSON (${e.message}). Nothing was changed.`); }
       if (!isObj(spec)) return fail('After the edits the spec is not a JSON object. Nothing was changed.');
       editStore.put(id, spec);
@@ -20377,16 +20600,42 @@ const WidgetTools = (() => {
     return lines.join('\n');
   }
 
+  /** A later edit_widget call in the same thread that changed the same widget. */
+  function retriedLater(part) {
+    const rt = runtimeFor(null, part.toolCallId);
+    const key = tkey(part.args?.title);
+    let after = false;
+    for (const p of toolParts(messagesOf(rt))) {
+      if (p.toolCallId === part.toolCallId) { after = true; continue; }
+      if (!after || bare(p.toolName) !== 'edit_widget' || p.isError || p.result === undefined) continue;
+      if (tkey(p.args?.title) !== key) continue;
+      const d = edits.get(p.toolCallId);
+      if (!d || !d.error) return true;
+    }
+    return false;
+  }
+  /** A failed edit: nothing when a later edit of the same widget went through (the agent
+   * fixed it itself), else one quiet line that opens to the reason. */
+  function editFailed(part, error) {
+    if (retriedLater(part)) return h('span', { class: 'wt-edit-retried', hidden: true });
+    const title = String(part.args?.title || '').trim();
+    const raw = String(error || (typeof part.result === 'string' ? part.result : part.result?.content ?? part.result?.output ?? '') || '');
+    const reason = raw.replace(/^(Error:\s*)+/i, '').split(/\n(?:Current code|The current code)/)[0].trim();
+    return h('details', { class: 'wt-edit-failed' },
+      h('summary', {}, h('span', { class: 'wt-edit-failed-dot', 'aria-hidden': 'true' }), title ? `Couldn't update “${title}”` : "Couldn't update the widget", h('span', { class: 'wt-edit-failed-more' }, 'Why')),
+      reason ? h('p', { class: 'wt-edit-failed-reason' }, reason.length > 400 ? `${reason.slice(0, 400)}…` : reason) : null);
+  }
+
   function editCard(part, status) {
     const id = part.toolCallId;
-    if (part.isError) return h('p', { class: 'field-hint wt-edit-failed' }, 'The widget edit did not apply.');
+    if (part.isError) return editFailed(part, edits.get(id)?.error);
     let done = edits.get(id);
     if (!done && part.result !== undefined) {
       const rt = runtimeFor(null, id);
       if (rt) { const cur = replay(messagesOf(rt), id, { sessionKey: rt.id }); done = computeEdit(part, cur, { sessionKey: rt.id }); }
     }
     if (!done) return h('p', { class: 'field-hint' }, status?.type === 'running' ? `Editing ${String(part.args?.title || 'the widget')}…` : 'The widget edit did not finish.');
-    if (done.error) return h('p', { class: 'field-hint wt-edit-failed' }, 'The widget edit did not apply.');
+    if (done.error) return editFailed(part, done.error);
     if (done.kind === 'spec') {
       const v = GenUI.calls.get(done.versionId);
       return v ? v.card() : h('p', { class: 'field-hint' }, 'This version is no longer available.');
@@ -28052,23 +28301,159 @@ const ContextTree = (() => {
       .finally(() => { pendingSet.delete(pkey); paint(); if (other) loadConv(key, true); else refresh(); });
   }
 
-  function logRows() {
-    if (!state.log.length) return '<p class="ct-empty">Nothing has been taken out of the window yet.</p>';
-    return state.log.slice(0, 20).map((e) => {
-      const ops = parseMaybeJSON(e.ops, []);
-      const what = Array.isArray(ops)
-        ? ops.map((o) => `${esc(o.id || '?')} ${esc(o.action || '')}${o.ok === false ? ' (refused)' : ''}`).join(', ')
-        : esc(String(e.ops || ''));
-      const why = e.reason ? (REASON_LABEL[e.reason] || e.reason) : '';
-      const before = e.tokensBefore != null ? short(e.tokensBefore) : null;
-      const after = e.tokensAfter != null ? short(e.tokensAfter) : null;
-      return `<div class="ct-log-row">
-          <div class="ct-log-what">${what || '—'}</div>
-          <div class="ct-log-why">${esc(ACTOR_LABEL[e.actor] || e.actor || '')}${why ? ' — ' + esc(why) : ''}${before && after ? ` · ${esc(before)} → ${esc(after)} tokens` : ''}</div>
-        </div>`;
-    }).join('');
+  /* ---------- Activity: requests, policy, savings and window changes ----------
+     What used to be the Log tab, read for people: no raw ids or JSON. */
+  const ACTION_VERB = { include: 'Brought back', exclude: 'Left out', note_only: 'Kept as a note', pin: 'Pinned', unpin: 'Unpinned', move: 'Moved', tag: 'Tagged', evict: 'Left out' };
+  const STAGE_REASON = { compact: 'the window was getting full', force: 'the window overflowed', warn_soft: 'the window was getting full', starved: 'the window was too small', quotas: 'routine clean-up of old storage' };
+  /** A readable name for an item id, from the checklist when it is there. */
+  function itemName(id) {
+    const s = String(id || '');
+    const it = state.items.find((x) => x && x.id === s);
+    if (it && it.title && it.title !== s) return clip(it.title, 48);
+    let m;
+    if ((m = /^turn\/t?(\d+)\/call\/(\d+)/.exec(s))) return `Turn ${m[1]}, tool call ${m[2]}`;
+    if ((m = /^turn\/t?(\d+)/.exec(s))) return `Turn ${m[1]}`;
+    if ((m = /^sum\/(\d+)-(\d+)/.exec(s))) return `Summary of turns ${m[1]}\u2013${m[2]}`;
+    const k = KIND_OF_PREFIX[s.split('/')[0]];
+    const label = { sysPart: 'Rule', result: 'Tool result', summary: 'Summary', tempSummary: 'Temporary summary', note: 'Note', file: 'File', strategy: 'Strategy', subagent: 'Sub-agent', essential: 'Essential', category: 'Category' }[k];
+    return label || 'Item';
+  }
+  /** What kind of thing an id is, for counts ("3 tool calls"). */
+  function idKind(id) {
+    const s = String(id || '');
+    if (/^turn\/t?\d+\/call\//.test(s)) return 'tool call';
+    if (/^turn\//.test(s)) return 'turn';
+    const k = KIND_OF_PREFIX[s.split('/')[0]];
+    return { result: 'result', summary: 'summary', tempSummary: 'summary', sysPart: 'rule', note: 'note', file: 'file' }[k] || 'item';
+  }
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  /** One log row in plain words: { who, what, why, before, after, at, n, names }. */
+  function readLog(e) {
+    const ops = parseMaybeJSON(e.ops, e.ops);
+    let action = '', ids = [], extra = '';
+    if (Array.isArray(ops)) {
+      for (const o of ops) {
+        if (typeof o === 'string') { ids.push(o); action = action || (e.actor === 'policy' ? 'evict' : ''); }
+        else if (o && typeof o === 'object') { ids.push(o.id); action = action || o.action || ''; if (o.ok === false) extra = 'some were refused'; }
+      }
+    } else if (ops && typeof ops === 'object') {
+      if (Array.isArray(ops.ids)) ids = ops.ids;
+      if (ops.op === 'forget_turns') { action = 'forget'; extra = typeof ops.keptTurns === 'number' ? `kept the first ${plural(ops.keptTurns, 'turn')}` : ''; }
+      else if (ops.op === 'gc') { action = 'gc'; const n = (ops.nodesTrimmed || 0) + (ops.notesTrimmed || 0) + (ops.tempTrimmed || 0); extra = n ? `${plural(n, 'old entry')} removed`.replace('entrys', 'entries') : 'nothing to remove'; }
+    }
+    ids = ids.filter((x) => x != null).map(String);
+    const counts = {};
+    for (const id of ids) { const k = idKind(id); counts[k] = (counts[k] || 0) + 1; }
+    const countText = Object.entries(counts).map(([k, n]) => plural(n, k)).join(', ');
+    const verb = action === 'forget' ? 'Rewound the chat' : action === 'gc' ? 'Cleaned up storage' : ACTION_VERB[action] || (ids.length ? 'Changed' : 'Updated the window');
+    const what = action === 'forget' ? (ids.length ? `${verb}: ${countText} removed` : verb) : action === 'gc' ? verb : `${verb}${countText ? ' ' + countText : ''}`;
+    const reasonRaw = e.reason ? String(e.reason) : '';
+    const why = REASON_LABEL[reasonRaw] || STAGE_REASON[reasonRaw] || reasonRaw.replace(/_/g, ' ');
+    const before = typeof e.tokensBefore === 'number' ? e.tokensBefore : null;
+    const after = typeof e.tokensAfter === 'number' ? e.tokensAfter : null;
+    return { who: ACTOR_LABEL[e.actor] || (e.actor ? String(e.actor) : 'Engine'), actor: e.actor || 'engine', what, why, extra, before, after, at: Number(e.at) || 0, names: ids.slice(0, 3).map(itemName), more: Math.max(0, ids.length - 3), key: `${e.actor}|${verb}|${reasonRaw}` };
+  }
+  /** Window changes, newest first, with repeats of the same change folded into one row. */
+  function windowChanges() {
+    const rows = [];
+    for (const e of state.log.slice(0, 40)) {
+      const r = readLog(e);
+      const last = rows[rows.length - 1];
+      if (last && last.key === r.key && !r.names.length && !last.names.length) { last.n += 1; last.after = last.after ?? r.after; last.before = r.before ?? last.before; continue; }
+      rows.push({ ...r, n: 1 });
+    }
+    return rows;
+  }
+  const agoText = (ms) => {
+    if (!ms) return '';
+    const t = ms < 1e12 ? ms * 1000 : ms;
+    const d = Math.max(0, Date.now() - t);
+    if (d < 45000) return 'just now';
+    if (d < 3600000) return `${Math.round(d / 60000)} min ago`;
+    if (d < 86400000) return `${Math.round(d / 3600000)} h ago`;
+    return new Date(t).toLocaleDateString();
+  };
+  const savedPct = (sent, full) => (typeof sent === 'number' && typeof full === 'number' && full > 0 ? Math.max(0, Math.round((1 - sent / full) * 100)) : null);
+  const msText = (n) => (typeof n !== 'number' ? '' : n >= 10000 ? `${(n / 1000).toFixed(1)} s` : `${Math.round(n)} ms`);
+  const policySummary = () => { const cp = policyApi(); try { return cp && cp.available() && cp.summary ? cp.summary() : null; } catch (e) { return null; } };
+
+  /** The selection summary beside the checklist: what is ticked in, out, kept as a note or summarised. */
+  function selectionSummary() {
+    const items = state.items.filter((it) => it && groupOf(it));
+    if (!items.length) return '';
+    const n = { in: 0, out: 0, note: 0, temp: 0 };
+    let leftTokens = 0, locked = 0;
+    for (const it of items) {
+      const st = stateOf(it);
+      n[st in n ? st : 'out'] += 1;
+      if (st === 'out' || st === 'temp') leftTokens += Number(it.tokens) || 0;
+      if (it.pin === 'locked' || it.pin === 'policy') locked += 1;
+    }
+    const chipH = (cls, glyph, count, label) => (count ? `<li class="cc-sel-chip cc-sel-${cls}"><span class="cc-sel-glyph" aria-hidden="true">${glyph}</span><b>${esc(num(count))}</b> ${esc(label)}</li>` : '');
+    const total = items.length;
+    const pctIn = Math.round(((n.in + n.note) / total) * 100);
+    return `<section class="cc-sel" data-slot="selection-summary" aria-label="Selection summary">
+      <div class="cc-sel-ring" style="--p:${pctIn}" role="img" aria-label="${pctIn}% of items sent"><span>${pctIn}%</span></div>
+      <div class="cc-sel-body">
+        <p class="cc-sel-title">${esc(num(n.in + n.note))} of ${esc(num(total))} items go with the next request</p>
+        <ul class="cc-sel-chips">${chipH('in', '\u25cf', n.in, 'in')}${chipH('note', '\u25d0', n.note, 'as notes')}${chipH('temp', '\u2726', n.temp, 'summarised')}${chipH('out', '\u25cb', n.out, 'left out')}${chipH('lock', '\u26bf', locked, 'locked')}</ul>
+        ${leftTokens ? `<p class="cc-sel-note">Leaving out about <b>${esc(short(leftTokens))}</b> tokens of this chat.</p>` : ''}
+      </div>
+    </section>`;
   }
 
+  /** Requests, the policy used and what it saved, then the window changes: all in the Checklist. */
+  function activityBlock() {
+    const ps = policySummary();
+    const mt = ps && ps.metrics && ps.metrics.total;
+    const steps = (ps && ps.steps) || [];
+    const parts = [];
+    // 1. The totals of this chat, from the engine's own measurements.
+    if (ps) {
+      const reqs = mt && typeof mt.requests === 'number' ? mt.requests : steps.length;
+      const sent = mt ? mt.inputTokens : steps.reduce((a, e) => a + (e.inputTokens || 0), 0);
+      const full = mt ? mt.t7Tokens : steps.reduce((a, e) => a + (e.t7Tokens || 0), 0);
+      const pct = savedPct(sent, full);
+      const live = ps.live;
+      const current = (live && live.policy) || (ps.pin) || (ps.task && ps.task.policy) || (ps.mode === 'off' ? 'T7' : null);
+      const name = current ? ((ps.registry || []).find((r) => r.id === current) || {}).name : '';
+      const tile = (k, v, sub, cls = '') => `<div class="cc-act-tile ${cls}"><dt>${esc(k)}</dt><dd>${esc(v)}</dd>${sub ? `<span>${esc(sub)}</span>` : ''}</div>`;
+      parts.push(`<dl class="cc-act-tiles">
+        ${tile('Requests sent', num(reqs), mt && mt.tasks ? plural(mt.tasks, 'turn') : 'in this chat')}
+        ${tile('Policy', current || '\u2014', name ? String(name).replace(/_/g, ' ') : ps.mode === 'off' ? 'policies off' : ps.mode ? `${ps.mode} mode` : '')}
+        ${tile('Saved', pct == null ? '\u2014' : `${pct}%`, full ? `${short(Math.max(0, full - sent))} of ${short(full)} tokens` : 'nothing measured yet', 'cc-act-hero')}
+        ${tile('Avg latency', mt && typeof mt.avgLatencyMs === 'number' ? msText(mt.avgLatencyMs) : '\u2014', mt && mt.fallbacks ? plural(mt.fallbacks, 'fallback') : 'no fallbacks')}
+      </dl>`);
+      if (ps.check) parts.push(`<p class="cc-act-check cc-act-check-${esc(ps.check.kind)}" role="status">${esc(ps.check.text)}</p>`);
+      const byP = Object.entries((ps.metrics && ps.metrics.byPolicy) || {}).filter(([, v]) => v && v.requests).sort((x, y) => y[1].requests - x[1].requests);
+      if (byP.length) {
+        parts.push(`<ul class="cc-act-bars" aria-label="Requests by policy">${byP.map(([id, v]) => {
+          const pc = savedPct(v.inputTokens, v.t7Tokens) || 0;
+          return `<li><span class="cc-act-bar-id">${esc(id)}</span><span class="cc-act-track"><span style="width:${Math.max(2, pc)}%"></span></span><span class="cc-act-bar-num">${esc(plural(v.requests, 'req'))} \u00b7 ${pc}% saved</span></li>`;
+        }).join('')}</ul>`);
+      }
+      // 2. Each request of the current or last turn.
+      if (steps.length) {
+        const open = !!(panel.detailsOpen && panel.detailsOpen.requests);
+        parts.push(`<details class="cc-act-more" data-key="requests"${open ? ' open' : ''}><summary>Requests of the last turn <span class="cc-act-count">${esc(num(steps.length))}</span></summary>
+          <ol class="cc-act-reqs">${steps.slice(-30).reverse().map((e) => {
+            const pc = savedPct(e.inputTokens, e.t7Tokens);
+            return `<li class="cc-act-req"><span class="cc-act-req-step">#${esc(num(Number(e.step) || 0))}</span><span class="cc-act-req-pol">${esc(e.policy || 'T7')}</span><span class="cc-act-req-tok">${esc(short(e.inputTokens))} <small>of ${esc(short(e.t7Tokens))}</small></span><span class="cc-act-req-save${pc ? ' cc-act-pos' : ''}">${pc ? `\u2212${pc}%` : 'full'}</span><span class="cc-act-req-ms">${esc(msText(e.latencyMs))}</span></li>`;
+          }).join('')}</ol></details>`);
+      }
+    }
+    // 3. What changed in the window (the old Log), in words.
+    const changes = windowChanges();
+    const openC = !!(panel.detailsOpen && panel.detailsOpen.changes);
+    const changeRows = changes.slice(0, 15).map((r) => {
+      const delta = r.before != null && r.after != null && r.before !== r.after ? r.after - r.before : null;
+      const names = r.names.length ? `<span class="cc-chg-names">${r.names.map((x) => `<span>${esc(x)}</span>`).join('')}${r.more ? `<span>+${esc(num(r.more))} more</span>` : ''}</span>` : '';
+      return `<li class="cc-chg cc-chg-${esc(r.actor)}"><span class="cc-chg-who">${esc(r.who)}</span><div class="cc-chg-main"><p class="cc-chg-what">${esc(r.what)}${r.n > 1 ? ` <span class="cc-chg-times">\u00d7${r.n}</span>` : ''}</p>${names}<p class="cc-chg-why">${[r.why ? `Because ${r.why}` : "", r.extra, delta != null ? `${short(r.before)} \u2192 ${short(r.after)} tokens` : "", agoText(r.at)].filter(Boolean).map(esc).join(' \u00b7 ')}</p></div>${delta != null ? `<span class="cc-chg-delta${delta < 0 ? ' cc-act-pos' : ''}">${delta < 0 ? '\u2212' : '+'}${esc(short(Math.abs(delta)))}</span>` : ''}</li>`;
+    }).join('');
+    parts.push(`<details class="cc-act-more" data-key="changes"${openC ? ' open' : ''}><summary>Window changes <span class="cc-act-count">${esc(num(state.log.length))}</span></summary><p class="cc-act-cap">${esc(INFO.log)}</p>
+      ${changeRows ? `<ul class="cc-chg-list">${changeRows}</ul>` : '<p class="ct-empty">Nothing has been taken out of the window yet.</p>'}</details>`);
+    return `<section class="cc-act" data-slot="activity" aria-label="Requests and savings"><h4 class="cc-act-h">Requests &amp; savings</h4>${parts.join('')}</section>`;
+  }
 
   const ERROR_LEAD = {
     read: 'Could not read the context window settings from the engine.',
@@ -28094,10 +28479,12 @@ const ContextTree = (() => {
 
   /* ---------- the context card ----------
      One small card above the composer, with tabs: Checklist (the tree, with
-     the token use by kind on top), Summary (always sent), Log and Settings.
+     the token use by kind and the selection summary on top, and the requests,
+     policy and savings below), Summary (always sent), Settings and Policy.
      It replaces the old context sheet, the Chat memory screen and the
      Sections sheet, which showed the same things in three places. */
-  const BASE_TABS = [['items', 'Checklist'], ['summary', 'Summary'], ['log', 'Log'], ['settings', 'Settings'], ['policy', 'Policy']];
+  // The old Log tab now lives in the Checklist, as Requests & savings.
+  const BASE_TABS = [['items', 'Checklist'], ['summary', 'Summary'], ['settings', 'Settings'], ['policy', 'Policy']];
   // The Policy tab only with the engine's `contextPolicy` feature.
   const policyApi = () => (typeof window !== 'undefined' && window.__contextPolicies) || null;
   const policyOn = () => { try { const p = policyApi(); return !!(p && p.available()); } catch (e) { return false; } };
@@ -28112,7 +28499,7 @@ const ContextTree = (() => {
     data: 'Everything this chat\u2019s memory stores, as saved.',
     rolling: 'The summary that stands in for the turns before it when the window had to be compacted.',
     summary: 'The chat\u2019s running summary: goals, decisions, facts, files, tasks and ranges. Only the parts that fit the request are sent; each part is a row under Chat memory in the Checklist, coloured by whether it was sent, left out or is waiting behind \u201cshow more\u201d.',
-    log: 'Why items left the window, who asked, and what it saved.',
+    log: 'Every change to what the requests carry: who made it (you, the model or the engine), why, and how many tokens it saved.',
     tree: 'Always on. Lists everything the model can be given, by group, and lets you and the model put items in or take them out. The chat memory is part of it, so there is no separate memory tool.',
     memory: 'The chat memory as groups: goals, goal history, topics & titles, decisions, replaced decisions, facts, preferences, files, tasks, ranges, old ranges and versions. Every row keeps all its versions. Colours: sent \u00b7 left out (matched but cut, or taken out) \u00b7 show more (stored, not needed now) \u00b7 tag inactive \u00b7 earlier version sent. Tick to always send, untick to never send, \u21ba to give it back to relevance. Name a row in the chat as #ID (#D12, #plan.md, #D12@v1): only the last mention of a tag counts.',
     reset: 'Deletes this chat\u2019s tree, notes and strategy. The chat itself stays.',
@@ -28722,7 +29109,7 @@ const ContextTree = (() => {
 
   function tabItems() {
     // Always on: there is no "off" screen and no "Turn on" button.
-    return `${errorNote()}${stageNote()}${meter()}<div class="cc-tree ct-list" role="tree" aria-label="Checklist">${tree()}</div>${resetNote()}`;
+    return `${errorNote()}${stageNote()}${selectionSummary()}${meter()}${activityBlock()}<div class="cc-tree ct-list" role="tree" aria-label="Checklist">${tree()}</div>${resetNote()}`;
   }
 
   /** Every range with its version and changes, and what the request sends
@@ -28782,10 +29169,6 @@ const ContextTree = (() => {
       <details class="cc-more" data-key="versions"${panel.detailsOpen && panel.detailsOpen.versions ? ' open' : ''}><summary>Versions</summary><div class="cc-mem" data-mem="history"></div></details>`;
   }
 
-  function tabLog() {
-    return `<div class="cc-sumhead"><span class="cc-when">${num(state.log.length)} entries</span>${infoBtn('log')}</div>${tip('log')}<div class="cc-log">${logRows()}</div>`;
-  }
-
   function tabSettings() {
     const unknown = settings == null;
     return `${errorNote()}
@@ -28801,7 +29184,7 @@ const ContextTree = (() => {
   function render() {
     const t = panel.tab;
     if (t === 'policy' && policyOn()) return '<div class="cc-policy" data-cp-host></div>';
-    return t === 'summary' ? tabSummary() : t === 'log' ? tabLog() : t === 'settings' ? tabSettings() : tabItems();
+    return t === 'summary' ? tabSummary() : t === 'settings' ? tabSettings() : tabItems();
   }
 
   /** Fill the Chat memory parts (summary, versions, settings) the card reuses. */
@@ -29032,6 +29415,7 @@ const ContextTree = (() => {
     syncExpanded();
     setTab(panel.tab);
     refresh();
+    { const cp = policyApi(); if (cp && cp.refresh && policyOn() && panel.tab !== 'policy') Promise.resolve(cp.refresh()).catch(() => {}); }
     const cm = memApi(); const k = memKey();
     if (cm && k && cm.refresh) Promise.resolve(cm.refresh(k)).then(() => paint()).catch(() => {});
     if (panel.memKey && cm && cm.refresh && activeKey()) Promise.resolve(cm.refresh(activeKey())).catch(() => {});
@@ -29081,6 +29465,9 @@ const ContextTree = (() => {
     attachToggles();
     const cm = memApi();
     if (cm && cm.subscribe && !panel.memSub) panel.memSub = cm.subscribe((k) => { if (panel.open && (k === activeKey() || k === panel.memKey || convs.has(k))) paint(); });
+    // The Checklist shows the policy's requests and savings: repaint when they change.
+    const cp = policyApi();
+    if (cp && cp.subscribe && !panel.cpSub) panel.cpSub = cp.subscribe(() => { if (panel.open && panel.tab === 'items') paint(); });
     paint();
   }
 
@@ -30987,7 +31374,11 @@ const ContextPolicy = (() => {
       advanced: 'Advanced editor (JSON)', valid: 'Valid', invalid: 'Not valid', save: 'Save',
       exclusions: 'Exclusions', categories: 'Categories', groups: 'Memory groups', items: 'Items', protectedNote: 'Protected items (system, essentials, tools, task block) are always sent.',
       task: 'Active task', noTask: 'No task is running. A task starts with the first tool call of a turn.', request: 'Request', checklist: 'Temp checklist', source: 'Picked by', step: 'Steps', retries: 'Retries', escalations: 'Escalations',
-      timeline: 'Timeline', tokens: 'Tokens', sent: 'Sent', ifT7: 'With T7', saved: 'Saved', fallbacks: 'Fallbacks', recent: 'Recent tasks', events: 'Why', retry: 'Retry', loading: 'Loading…', unsupported: 'This app\u2019s engine does not answer Context Policies (policy.*) yet. Update the app to a build whose native engine includes them; the rest of the context card works as before.', unsupportedTitle: 'Needs an app update', confirmDel: 'Delete rule', confirmSave: 'Replace the whole rule set with this one?', unsaved: 'Unsaved changes',
+      timeline: 'Timeline', tokens: 'Tokens', sent: 'Sent', ifT7: 'With T7', saved: 'Saved', fallbacks: 'Fallbacks', recent: 'Recent tasks',
+      overall: 'Overall', requests: 'Requests', tokensSent: 'Tokens sent', tokensSaved: 'Tokens saved', avgLatency: 'Avg latency', tasksDone: 'Tasks done', retriesShort: 'Retries', byPolicy: 'By policy', pickedBy: 'Picked by', lastTask: 'Last task',
+      chkOff: 'Policies are off: every request sends the full context (T7). Nothing is shortened or measured.', chkNone: 'No request has gone out under a policy in this chat yet. Numbers appear after the first tool call of a turn.',
+      chkWorking: '{n} of the last {m} requests went out smaller than the full context (T7), saving {t} tokens.', chkFull: 'The last {m} requests all went out at full size (T7): the picked policy kept everything, or a safeguard sent T7.', chkFallback: '{f} fell back to T7 for safety.', verified: 'Working', notSaving: 'Full size',
+      perRequest: '{n} req', noMetrics: 'No totals from the engine yet.', events: 'Why', retry: 'Retry', loading: 'Loading…', unsupported: 'This app\u2019s engine does not answer Context Policies (policy.*) yet. Update the app to a build whose native engine includes them; the rest of the context card works as before.', unsupportedTitle: 'Needs an app update', confirmDel: 'Delete rule', confirmSave: 'Replace the whole rule set with this one?', unsaved: 'Unsaved changes',
     },
     bn: {
       title: 'Context Policies', open: 'Context Policies খুলুন', close: 'বন্ধ', note: 'Tool ও rules সবসময় পুরো যায়; শুধু chat-এর পুরনো অংশ ছোট হয়।',
@@ -30998,7 +31389,11 @@ const ContextPolicy = (() => {
       advanced: 'Advanced editor (JSON)', valid: 'বৈধ', invalid: 'বৈধ নয়', save: 'সংরক্ষণ',
       exclusions: 'Exclusions', categories: 'Category', groups: 'Memory group', items: 'Item', protectedNote: 'Protected item (system, essentials, tool, task block) সবসময় যায়।',
       task: 'চলমান task', noTask: 'কোনো task চলছে না। Turn-এর প্রথম tool call-এ task শুরু হয়।', request: 'Request', checklist: 'Temp checklist', source: 'কে বাছাই করেছে', step: 'ধাপ', retries: 'Retry', escalations: 'Escalation',
-      timeline: 'Timeline', tokens: 'Token', sent: 'পাঠানো', ifT7: 'T7 হলে', saved: 'বাঁচল', fallbacks: 'Fallback', recent: 'সাম্প্রতিক task', events: 'কেন', retry: 'আবার', loading: 'লোড হচ্ছে…', unsupported: 'এই app এর engine এখনো Context Policies (policy.*) চেনে না। যে build এর native engine এ এগুলো আছে, সেই app update করুন; context card এর বাকি সব আগের মতো কাজ করবে।', unsupportedTitle: 'App update লাগবে', confirmDel: 'Rule মুছবেন', confirmSave: 'পুরো rule set এটা দিয়ে বদলাবেন?', unsaved: 'সংরক্ষণ হয়নি',
+      timeline: 'Timeline', tokens: 'Token', sent: 'পাঠানো', ifT7: 'T7 হলে', saved: 'বাঁচল', fallbacks: 'Fallback', recent: 'সাম্প্রতিক task',
+      overall: 'সার্বিক', requests: 'Request', tokensSent: 'পাঠানো token', tokensSaved: 'বাঁচানো token', avgLatency: 'গড় latency', tasksDone: 'শেষ হওয়া task', retriesShort: 'Retry', byPolicy: 'Policy অনুযায়ী', pickedBy: 'কে বাছাই করেছে', lastTask: 'শেষ task',
+      chkOff: 'Policy বন্ধ: প্রতিটি request পুরো context (T7) পাঠায়। কিছু ছোট হয় না, মাপাও হয় না।', chkNone: 'এই chat-এ এখনো কোনো request policy দিয়ে যায়নি। Turn-এর প্রথম tool call-এর পর সংখ্যা দেখা যাবে।',
+      chkWorking: 'শেষ {m}টি request-এর {n}টি পুরো context (T7)-এর চেয়ে ছোট গেছে, {t} token বেঁচেছে।', chkFull: 'শেষ {m}টি request সবই পুরো আকারে (T7) গেছে: বাছাই করা policy সব রেখেছে, অথবা safeguard T7 পাঠিয়েছে।', chkFallback: '{f}টি নিরাপত্তার জন্য T7-এ ফিরে গেছে।', verified: 'কাজ করছে', notSaving: 'পুরো আকার',
+      perRequest: '{n} req', noMetrics: 'Engine থেকে এখনো মোট হিসাব আসেনি।', events: 'কেন', retry: 'আবার', loading: 'লোড হচ্ছে…', unsupported: 'এই app এর engine এখনো Context Policies (policy.*) চেনে না। যে build এর native engine এ এগুলো আছে, সেই app update করুন; context card এর বাকি সব আগের মতো কাজ করবে।', unsupportedTitle: 'App update লাগবে', confirmDel: 'Rule মুছবেন', confirmSave: 'পুরো rule set এটা দিয়ে বদলাবেন?', unsaved: 'সংরক্ষণ হয়নি',
     },
   };
   const lang = () => {
@@ -31019,6 +31414,10 @@ const ContextPolicy = (() => {
   let builder = null;
   let previewOut = null;
   let live = null; // the newest context.policy event
+  let metrics = null; // the last policy.metrics answer: totals over this chat's tasks
+  let metricsKey = ''; // the chat those totals are for
+  let metricsTimer = null;
+  const listeners = new Set(); // other views (the Checklist's Activity) that show these numbers
   const hosts = new Set(); // { el, kind: 'workspace' | 'tab' }
   let dialog = null;
 
@@ -31078,7 +31477,28 @@ const ContextPolicy = (() => {
     const r = await call('policy.get', {}, 'load');
     if (busy === 'load') busy = '';
     if (r && typeof r === 'object') { data = r; unsupported = false; if (draft == null) jsonText = null; }
+    if (r) await loadMetrics();
     paint();
+  }
+
+  /** policy.metrics: the totals over this chat's tasks (requests, tokens sent next to T7,
+   * latency, fallbacks, by policy and by who picked it). Read straight from the engine's
+   * own event log, so the Overall numbers are the ones the engine measured. A failure
+   * keeps the last totals and shows no error: the rest of the view still works. */
+  async function loadMetrics() {
+    const send = sender();
+    if (!send || unsupported) return null;
+    const key = sessionKey();
+    try {
+      const m = await send('policy.metrics', { limit: 500 });
+      if (m && typeof m === 'object' && !m.error && m.total && typeof m.total === 'object') { metrics = m; metricsKey = key; }
+    } catch (e) { /* an older engine without policy.metrics */ }
+    return metrics;
+  }
+  const curMetrics = () => (metrics && metricsKey === sessionKey() ? metrics : null);
+  function queueMetrics() {
+    if (metricsTimer) return;
+    metricsTimer = setTimeout(() => { metricsTimer = null; loadMetrics().then(() => paint()).catch(() => {}); }, 900);
   }
 
   // ------------------------------------------------------------ data access
@@ -31103,6 +31523,59 @@ const ContextPolicy = (() => {
   const section = (id, title, body, extra = '') => `<section class="cp-sec" aria-labelledby="cp-h-${id}"><div class="cp-sec-head"><h3 class="cp-h" id="cp-h-${id}">${esc(title)}</h3>${extra}</div>${body}</section>`;
   const btn = (label, attrs, cls = '') => `<button type="button" class="cp-btn ${cls}" ${attrs}>${esc(label)}</button>`;
   const fmtN = (n) => (typeof n === 'number' && isFinite(n) ? n.toLocaleString('en-US') : '—');
+  const fmtK = (n) => (typeof n !== 'number' || !isFinite(n) ? '—' : Math.abs(n) >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : Math.abs(n) >= 1e4 ? `${(n / 1e3).toFixed(1)}k` : n.toLocaleString('en-US'));
+  const fmtMs = (n) => (typeof n !== 'number' || !isFinite(n) ? '—' : n >= 10000 ? `${(n / 1000).toFixed(1)} s` : `${Math.round(n).toLocaleString('en-US')} ms`);
+  const pct = (sent, t7) => (typeof sent === 'number' && typeof t7 === 'number' && t7 > 0 ? Math.max(0, Math.round((1 - sent / t7) * 100)) : null);
+  const fill = (t, vars) => String(t).replace(/\{(\w+)\}/g, (_, k) => (vars[k] == null ? '' : vars[k]));
+
+  /** The newest request steps of this chat (the engine's `tokens` events): what each sent next to T7. */
+  function recentSteps() {
+    return arr(data && data.events).filter((e) => e && typeof e.inputTokens === 'number' && typeof e.t7Tokens === 'number');
+  }
+
+  /** Whether the policy really shortens what is sent, from the engine's own numbers. */
+  function checkLine() {
+    const m = mode();
+    if (m === 'off') return { kind: 'off', text: L('chkOff') };
+    const steps = recentSteps();
+    if (!steps.length) return { kind: 'none', text: L('chkNone') };
+    const smaller = steps.filter((e) => e.inputTokens < e.t7Tokens);
+    const saved = steps.reduce((a, e) => a + Math.max(0, e.t7Tokens - e.inputTokens), 0);
+    const fb = arr(data && data.events).filter((e) => e && e.kind === 'fallback').length;
+    const head = smaller.length ? fill(L('chkWorking'), { n: smaller.length, m: steps.length, t: fmtK(saved) }) : fill(L('chkFull'), { m: steps.length });
+    return { kind: smaller.length ? 'ok' : 'full', text: head + (fb ? ' ' + fill(L('chkFallback'), { f: fb }) : '') };
+  }
+
+  /** The Overall view: totals over every task of this chat, from policy.metrics, and a
+   * check that the policy is really applied. */
+  function overallView(compact) {
+    const chk = checkLine();
+    const badge = chk.kind === 'ok' ? `<span class="cp-ov-badge cp-ov-ok">${esc(L('verified'))}</span>` : chk.kind === 'full' ? `<span class="cp-ov-badge cp-ov-full">${esc(L('notSaving'))}</span>` : '';
+    const check = `<p class="cp-ov-check cp-ov-check-${chk.kind}" role="status">${badge}<span>${esc(chk.text)}</span></p>`;
+    const mt = curMetrics();
+    const t = mt ? obj(mt.total) : null;
+    if (!t || !t.tasks) return `<div class="cp-ov" data-cp-overall>${check}${mt ? '' : ''}</div>`;
+    const saved = typeof t.t7Tokens === 'number' && typeof t.inputTokens === 'number' ? Math.max(0, t.t7Tokens - t.inputTokens) : null;
+    const sp = typeof t.savedPct === 'number' ? Math.round(t.savedPct) : pct(t.inputTokens, t.t7Tokens);
+    const tile = (k, v, sub, cls = '') => `<div class="cp-ov-tile ${cls}"><dt>${esc(k)}</dt><dd>${esc(v)}</dd>${sub ? `<span class="cp-ov-sub">${esc(sub)}</span>` : ''}</div>`;
+    const tiles = `<dl class="cp-ov-tiles">
+      ${tile(L('requests'), fmtN(t.requests), `${fmtN(t.tasks)} task${t.tasks === 1 ? '' : 's'}`)}
+      ${tile(L('saved'), sp == null ? '—' : `${sp}%`, saved == null ? '' : `${fmtK(saved)} tokens`, 'cp-ov-tile-hero')}
+      ${tile(L('tokensSent'), fmtK(t.inputTokens), `${L('ifT7')} ${fmtK(t.t7Tokens)}`)}
+      ${tile(L('avgLatency'), fmtMs(t.avgLatencyMs), typeof t.avgFirstTokenMs === 'number' ? `1st token ${fmtMs(t.avgFirstTokenMs)}` : '')}
+      ${compact ? '' : tile(L('tasksDone'), `${fmtN(t.completed)} / ${fmtN(t.tasks)}`, typeof t.successRate === 'number' ? `${Math.round(t.successRate * 100)}%` : '')}
+      ${tile(L('fallbacks'), fmtN(t.fallbacks), compact ? '' : `${L('retriesShort')} ${fmtN(t.retries)}`)}
+    </dl>`;
+    const byP = Object.entries(obj(mt.byPolicy)).filter(([, v]) => v && v.requests).sort((a, b) => (b[1].requests || 0) - (a[1].requests || 0));
+    const name = (id) => (registry().find((r) => r.id === id) || {}).name || '';
+    const bars = byP.length ? `<ul class="cp-ov-bars" aria-label="${esc(L('byPolicy'))}">${byP.map(([id, v]) => {
+      const s = typeof v.savedPct === 'number' ? Math.round(v.savedPct) : pct(v.inputTokens, v.t7Tokens) || 0;
+      return `<li class="cp-ov-bar"><span class="cp-ov-bar-head">${chip(id, 'cp-chip-id')}<span class="cp-ov-bar-name">${esc(name(id))}</span><span class="cp-ov-bar-num">${esc(fill(L('perRequest'), { n: fmtN(v.requests) }))} · ${s}%</span></span><span class="cp-ov-track"><span class="cp-ov-fill" style="width:${Math.max(2, Math.min(100, s))}%"></span></span></li>`;
+    }).join('')}</ul>` : '';
+    const src = Object.entries(obj(mt.bySource)).filter(([, n]) => n);
+    const srcLine = src.length ? `<p class="cp-ov-src"><span class="cp-label">${esc(L('pickedBy'))}</span> ${src.map(([k, n]) => `${chip(`${SOURCES[k] || k} ${n}`, 'cp-chip-src')}`).join(' ')}</p>` : '';
+    return `<div class="cp-ov" data-cp-overall>${check}${tiles}${bars}${compact ? '' : srcLine}</div>`;
+  }
 
   function errorPanel() {
     if (!lastError) return '';
@@ -31301,6 +31774,7 @@ const ContextPolicy = (() => {
     return `<div class="cp-root">${errorPanel()}
       <p class="cp-lead">${esc(L('note'))}</p>
       ${data.rulesWarning ? `<p class="cp-warn" role="status">${esc(data.rulesWarning)}</p>` : ''}
+      ${section('overall', L('overall'), overallView(false))}
       ${section('mode', L('mode'), modeControl() + pinControl())}
       ${section('task', L('task'), taskView(false))}
       ${section('rules', L('rules'), rulesList())}
@@ -31314,11 +31788,12 @@ const ContextPolicy = (() => {
   function renderTab() {
     if (!available()) return '';
     if (!data) return `<div class="cp-root cp-tab">${placeholder()}</div>`;
-    return `<div class="cp-root cp-tab">${errorPanel()}${modeControl()}${taskView(true)}<div class="cp-row">${btn(L('open'), 'data-cp="open"', 'cp-btn-primary')}</div></div>`;
+    return `<div class="cp-root cp-tab">${errorPanel()}${modeControl()}<div class="cp-tab-block"><h4 class="cp-h">${esc(L('overall'))}</h4>${overallView(true)}</div><div class="cp-tab-block"><h4 class="cp-h">${esc(L('task'))}</h4>${taskView(true)}</div><div class="cp-row">${btn(L('open'), 'data-cp="open"', 'cp-btn-primary')}</div></div>`;
   }
 
   // ------------------------------------------------------------- painting
   function paint() {
+    for (const fn of [...listeners]) { try { fn(); } catch (e) { /* a listener is not our problem */ } }
     for (const h of [...hosts]) {
       if (!h.el || !h.el.isConnected) { hosts.delete(h); continue; }
       const a = document.activeElement;
@@ -31535,6 +32010,10 @@ const ContextPolicy = (() => {
   /** A `context.policy` event from the engine: the step's policy and sizes. */
   function onEvent(type, payload) {
     if (type !== 'context.policy' || !payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+    // A step of another chat (a sub-agent, a background chat) is not this chat's number.
+    const k = sessionKey();
+    if (typeof payload.sessionKey === 'string' && payload.sessionKey && k && payload.sessionKey !== k) return;
+    queueMetrics();
     live = {
       policy: typeof payload.policy === 'string' ? payload.policy : null,
       source: typeof payload.source === 'string' ? payload.source : null,
@@ -31556,7 +32035,14 @@ const ContextPolicy = (() => {
     } catch (e) { console.warn('context policy install', e); }
   }
 
-  const out = { install, mount, render, renderTab, paintTab, open, close, isOpen, onEvent, refresh, available, data: () => data, error: () => lastError, unsupported: () => unsupported, labels: LABEL };
+  /** Totals and the policy check for other views (the Checklist's Activity). */
+  function summary() {
+    if (!available()) return null;
+    const mt = curMetrics();
+    return { mode: data ? mode() : null, pin: (data && data.pin && data.pin.policy) || null, live, task: (data && data.activeTask) || null, metrics: mt, steps: recentSteps(), check: data ? checkLine() : null, registry: registry() };
+  }
+  const subscribe = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
+  const out = { install, mount, render, renderTab, paintTab, open, close, isOpen, onEvent, refresh, available, data: () => data, metrics: curMetrics, summary, subscribe, error: () => lastError, unsupported: () => unsupported, labels: LABEL };
   if (typeof window !== 'undefined') window.__contextPolicies = out;
   return out;
 })();

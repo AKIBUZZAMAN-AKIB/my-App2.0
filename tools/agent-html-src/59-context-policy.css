@@ -127,3 +127,29 @@
   .cp-sec { padding: 0.625rem; }
   .cp-seg-btn { padding: 0 0.625rem; }
 }
+
+/* Overall: totals over this chat's tasks, and whether the policy really shortens requests. */
+.cp-ov { display: flex; flex-direction: column; gap: 8px; }
+.cp-ov-check { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 8px 10px; border-radius: 10px; font-size: 0.75rem; line-height: 1.45; background: var(--muted); border-left: 3px solid var(--muted-foreground); color: var(--muted-foreground); }
+.cp-ov-check-ok { border-left-color: #2fa86a; color: var(--foreground); }
+.cp-ov-check-full { border-left-color: #c08a2e; color: var(--foreground); }
+.cp-ov-badge { flex: none; padding: 0 7px; border-radius: 999px; font-size: 0.625rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.cp-ov-ok { background: color-mix(in srgb, #2fa86a 20%, transparent); color: #23935b; }
+.cp-ov-full { background: color-mix(in srgb, #c08a2e 22%, transparent); color: #a2731f; }
+.cp-ov-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; margin: 0; }
+.cp-ov-tile { min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
+.cp-ov-tile dt { color: var(--muted-foreground); font-size: 0.6875rem; }
+.cp-ov-tile dd { margin: 2px 0 0; font-size: 1.0625rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cp-ov-sub { display: block; color: var(--muted-foreground); font-size: 0.6875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cp-ov-tile-hero { border-color: color-mix(in srgb, #2fa86a 45%, var(--border)); background: color-mix(in srgb, #2fa86a 8%, var(--background)); }
+.cp-ov-tile-hero dd { color: #23935b; }
+.cp-ov-bars { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.cp-ov-bar-head { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; }
+.cp-ov-bar-name { color: var(--muted-foreground); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-ov-bar-num { margin-left: auto; color: var(--muted-foreground); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cp-ov-track { display: block; height: 6px; margin-top: 3px; border-radius: 3px; overflow: hidden; background: var(--muted); }
+.cp-ov-fill { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #2fa86a, var(--primary)); }
+.cp-ov-src { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 0.75rem; }
+.cp-tab-block { margin: 10px 0; }
+.cp-tab-block > .cp-h { margin: 0 0 6px; }
+

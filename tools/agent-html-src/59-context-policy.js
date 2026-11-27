@@ -24,7 +24,11 @@ const ContextPolicy = (() => {
       advanced: 'Advanced editor (JSON)', valid: 'Valid', invalid: 'Not valid', save: 'Save',
       exclusions: 'Exclusions', categories: 'Categories', groups: 'Memory groups', items: 'Items', protectedNote: 'Protected items (system, essentials, tools, task block) are always sent.',
       task: 'Active task', noTask: 'No task is running. A task starts with the first tool call of a turn.', request: 'Request', checklist: 'Temp checklist', source: 'Picked by', step: 'Steps', retries: 'Retries', escalations: 'Escalations',
-      timeline: 'Timeline', tokens: 'Tokens', sent: 'Sent', ifT7: 'With T7', saved: 'Saved', fallbacks: 'Fallbacks', recent: 'Recent tasks', events: 'Why', retry: 'Retry', loading: 'Loading…', unsupported: 'This app\u2019s engine does not answer Context Policies (policy.*) yet. Update the app to a build whose native engine includes them; the rest of the context card works as before.', unsupportedTitle: 'Needs an app update', confirmDel: 'Delete rule', confirmSave: 'Replace the whole rule set with this one?', unsaved: 'Unsaved changes',
+      timeline: 'Timeline', tokens: 'Tokens', sent: 'Sent', ifT7: 'With T7', saved: 'Saved', fallbacks: 'Fallbacks', recent: 'Recent tasks',
+      overall: 'Overall', requests: 'Requests', tokensSent: 'Tokens sent', tokensSaved: 'Tokens saved', avgLatency: 'Avg latency', tasksDone: 'Tasks done', retriesShort: 'Retries', byPolicy: 'By policy', pickedBy: 'Picked by', lastTask: 'Last task',
+      chkOff: 'Policies are off: every request sends the full context (T7). Nothing is shortened or measured.', chkNone: 'No request has gone out under a policy in this chat yet. Numbers appear after the first tool call of a turn.',
+      chkWorking: '{n} of the last {m} requests went out smaller than the full context (T7), saving {t} tokens.', chkFull: 'The last {m} requests all went out at full size (T7): the picked policy kept everything, or a safeguard sent T7.', chkFallback: '{f} fell back to T7 for safety.', verified: 'Working', notSaving: 'Full size',
+      perRequest: '{n} req', noMetrics: 'No totals from the engine yet.', events: 'Why', retry: 'Retry', loading: 'Loading…', unsupported: 'This app\u2019s engine does not answer Context Policies (policy.*) yet. Update the app to a build whose native engine includes them; the rest of the context card works as before.', unsupportedTitle: 'Needs an app update', confirmDel: 'Delete rule', confirmSave: 'Replace the whole rule set with this one?', unsaved: 'Unsaved changes',
     },
     bn: {
       title: 'Context Policies', open: 'Context Policies খুলুন', close: 'বন্ধ', note: 'Tool ও rules সবসময় পুরো যায়; শুধু chat-এর পুরনো অংশ ছোট হয়।',
@@ -35,7 +39,11 @@ const ContextPolicy = (() => {
       advanced: 'Advanced editor (JSON)', valid: 'বৈধ', invalid: 'বৈধ নয়', save: 'সংরক্ষণ',
       exclusions: 'Exclusions', categories: 'Category', groups: 'Memory group', items: 'Item', protectedNote: 'Protected item (system, essentials, tool, task block) সবসময় যায়।',
       task: 'চলমান task', noTask: 'কোনো task চলছে না। Turn-এর প্রথম tool call-এ task শুরু হয়।', request: 'Request', checklist: 'Temp checklist', source: 'কে বাছাই করেছে', step: 'ধাপ', retries: 'Retry', escalations: 'Escalation',
-      timeline: 'Timeline', tokens: 'Token', sent: 'পাঠানো', ifT7: 'T7 হলে', saved: 'বাঁচল', fallbacks: 'Fallback', recent: 'সাম্প্রতিক task', events: 'কেন', retry: 'আবার', loading: 'লোড হচ্ছে…', unsupported: 'এই app এর engine এখনো Context Policies (policy.*) চেনে না। যে build এর native engine এ এগুলো আছে, সেই app update করুন; context card এর বাকি সব আগের মতো কাজ করবে।', unsupportedTitle: 'App update লাগবে', confirmDel: 'Rule মুছবেন', confirmSave: 'পুরো rule set এটা দিয়ে বদলাবেন?', unsaved: 'সংরক্ষণ হয়নি',
+      timeline: 'Timeline', tokens: 'Token', sent: 'পাঠানো', ifT7: 'T7 হলে', saved: 'বাঁচল', fallbacks: 'Fallback', recent: 'সাম্প্রতিক task',
+      overall: 'সার্বিক', requests: 'Request', tokensSent: 'পাঠানো token', tokensSaved: 'বাঁচানো token', avgLatency: 'গড় latency', tasksDone: 'শেষ হওয়া task', retriesShort: 'Retry', byPolicy: 'Policy অনুযায়ী', pickedBy: 'কে বাছাই করেছে', lastTask: 'শেষ task',
+      chkOff: 'Policy বন্ধ: প্রতিটি request পুরো context (T7) পাঠায়। কিছু ছোট হয় না, মাপাও হয় না।', chkNone: 'এই chat-এ এখনো কোনো request policy দিয়ে যায়নি। Turn-এর প্রথম tool call-এর পর সংখ্যা দেখা যাবে।',
+      chkWorking: 'শেষ {m}টি request-এর {n}টি পুরো context (T7)-এর চেয়ে ছোট গেছে, {t} token বেঁচেছে।', chkFull: 'শেষ {m}টি request সবই পুরো আকারে (T7) গেছে: বাছাই করা policy সব রেখেছে, অথবা safeguard T7 পাঠিয়েছে।', chkFallback: '{f}টি নিরাপত্তার জন্য T7-এ ফিরে গেছে।', verified: 'কাজ করছে', notSaving: 'পুরো আকার',
+      perRequest: '{n} req', noMetrics: 'Engine থেকে এখনো মোট হিসাব আসেনি।', events: 'কেন', retry: 'আবার', loading: 'লোড হচ্ছে…', unsupported: 'এই app এর engine এখনো Context Policies (policy.*) চেনে না। যে build এর native engine এ এগুলো আছে, সেই app update করুন; context card এর বাকি সব আগের মতো কাজ করবে।', unsupportedTitle: 'App update লাগবে', confirmDel: 'Rule মুছবেন', confirmSave: 'পুরো rule set এটা দিয়ে বদলাবেন?', unsaved: 'সংরক্ষণ হয়নি',
     },
   };
   const lang = () => {
@@ -56,6 +64,10 @@ const ContextPolicy = (() => {
   let builder = null;
   let previewOut = null;
   let live = null; // the newest context.policy event
+  let metrics = null; // the last policy.metrics answer: totals over this chat's tasks
+  let metricsKey = ''; // the chat those totals are for
+  let metricsTimer = null;
+  const listeners = new Set(); // other views (the Checklist's Activity) that show these numbers
   const hosts = new Set(); // { el, kind: 'workspace' | 'tab' }
   let dialog = null;
 
@@ -115,7 +127,28 @@ const ContextPolicy = (() => {
     const r = await call('policy.get', {}, 'load');
     if (busy === 'load') busy = '';
     if (r && typeof r === 'object') { data = r; unsupported = false; if (draft == null) jsonText = null; }
+    if (r) await loadMetrics();
     paint();
+  }
+
+  /** policy.metrics: the totals over this chat's tasks (requests, tokens sent next to T7,
+   * latency, fallbacks, by policy and by who picked it). Read straight from the engine's
+   * own event log, so the Overall numbers are the ones the engine measured. A failure
+   * keeps the last totals and shows no error: the rest of the view still works. */
+  async function loadMetrics() {
+    const send = sender();
+    if (!send || unsupported) return null;
+    const key = sessionKey();
+    try {
+      const m = await send('policy.metrics', { limit: 500 });
+      if (m && typeof m === 'object' && !m.error && m.total && typeof m.total === 'object') { metrics = m; metricsKey = key; }
+    } catch (e) { /* an older engine without policy.metrics */ }
+    return metrics;
+  }
+  const curMetrics = () => (metrics && metricsKey === sessionKey() ? metrics : null);
+  function queueMetrics() {
+    if (metricsTimer) return;
+    metricsTimer = setTimeout(() => { metricsTimer = null; loadMetrics().then(() => paint()).catch(() => {}); }, 900);
   }
 
   // ------------------------------------------------------------ data access
@@ -140,6 +173,59 @@ const ContextPolicy = (() => {
   const section = (id, title, body, extra = '') => `<section class="cp-sec" aria-labelledby="cp-h-${id}"><div class="cp-sec-head"><h3 class="cp-h" id="cp-h-${id}">${esc(title)}</h3>${extra}</div>${body}</section>`;
   const btn = (label, attrs, cls = '') => `<button type="button" class="cp-btn ${cls}" ${attrs}>${esc(label)}</button>`;
   const fmtN = (n) => (typeof n === 'number' && isFinite(n) ? n.toLocaleString('en-US') : '—');
+  const fmtK = (n) => (typeof n !== 'number' || !isFinite(n) ? '—' : Math.abs(n) >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : Math.abs(n) >= 1e4 ? `${(n / 1e3).toFixed(1)}k` : n.toLocaleString('en-US'));
+  const fmtMs = (n) => (typeof n !== 'number' || !isFinite(n) ? '—' : n >= 10000 ? `${(n / 1000).toFixed(1)} s` : `${Math.round(n).toLocaleString('en-US')} ms`);
+  const pct = (sent, t7) => (typeof sent === 'number' && typeof t7 === 'number' && t7 > 0 ? Math.max(0, Math.round((1 - sent / t7) * 100)) : null);
+  const fill = (t, vars) => String(t).replace(/\{(\w+)\}/g, (_, k) => (vars[k] == null ? '' : vars[k]));
+
+  /** The newest request steps of this chat (the engine's `tokens` events): what each sent next to T7. */
+  function recentSteps() {
+    return arr(data && data.events).filter((e) => e && typeof e.inputTokens === 'number' && typeof e.t7Tokens === 'number');
+  }
+
+  /** Whether the policy really shortens what is sent, from the engine's own numbers. */
+  function checkLine() {
+    const m = mode();
+    if (m === 'off') return { kind: 'off', text: L('chkOff') };
+    const steps = recentSteps();
+    if (!steps.length) return { kind: 'none', text: L('chkNone') };
+    const smaller = steps.filter((e) => e.inputTokens < e.t7Tokens);
+    const saved = steps.reduce((a, e) => a + Math.max(0, e.t7Tokens - e.inputTokens), 0);
+    const fb = arr(data && data.events).filter((e) => e && e.kind === 'fallback').length;
+    const head = smaller.length ? fill(L('chkWorking'), { n: smaller.length, m: steps.length, t: fmtK(saved) }) : fill(L('chkFull'), { m: steps.length });
+    return { kind: smaller.length ? 'ok' : 'full', text: head + (fb ? ' ' + fill(L('chkFallback'), { f: fb }) : '') };
+  }
+
+  /** The Overall view: totals over every task of this chat, from policy.metrics, and a
+   * check that the policy is really applied. */
+  function overallView(compact) {
+    const chk = checkLine();
+    const badge = chk.kind === 'ok' ? `<span class="cp-ov-badge cp-ov-ok">${esc(L('verified'))}</span>` : chk.kind === 'full' ? `<span class="cp-ov-badge cp-ov-full">${esc(L('notSaving'))}</span>` : '';
+    const check = `<p class="cp-ov-check cp-ov-check-${chk.kind}" role="status">${badge}<span>${esc(chk.text)}</span></p>`;
+    const mt = curMetrics();
+    const t = mt ? obj(mt.total) : null;
+    if (!t || !t.tasks) return `<div class="cp-ov" data-cp-overall>${check}${mt ? '' : ''}</div>`;
+    const saved = typeof t.t7Tokens === 'number' && typeof t.inputTokens === 'number' ? Math.max(0, t.t7Tokens - t.inputTokens) : null;
+    const sp = typeof t.savedPct === 'number' ? Math.round(t.savedPct) : pct(t.inputTokens, t.t7Tokens);
+    const tile = (k, v, sub, cls = '') => `<div class="cp-ov-tile ${cls}"><dt>${esc(k)}</dt><dd>${esc(v)}</dd>${sub ? `<span class="cp-ov-sub">${esc(sub)}</span>` : ''}</div>`;
+    const tiles = `<dl class="cp-ov-tiles">
+      ${tile(L('requests'), fmtN(t.requests), `${fmtN(t.tasks)} task${t.tasks === 1 ? '' : 's'}`)}
+      ${tile(L('saved'), sp == null ? '—' : `${sp}%`, saved == null ? '' : `${fmtK(saved)} tokens`, 'cp-ov-tile-hero')}
+      ${tile(L('tokensSent'), fmtK(t.inputTokens), `${L('ifT7')} ${fmtK(t.t7Tokens)}`)}
+      ${tile(L('avgLatency'), fmtMs(t.avgLatencyMs), typeof t.avgFirstTokenMs === 'number' ? `1st token ${fmtMs(t.avgFirstTokenMs)}` : '')}
+      ${compact ? '' : tile(L('tasksDone'), `${fmtN(t.completed)} / ${fmtN(t.tasks)}`, typeof t.successRate === 'number' ? `${Math.round(t.successRate * 100)}%` : '')}
+      ${tile(L('fallbacks'), fmtN(t.fallbacks), compact ? '' : `${L('retriesShort')} ${fmtN(t.retries)}`)}
+    </dl>`;
+    const byP = Object.entries(obj(mt.byPolicy)).filter(([, v]) => v && v.requests).sort((a, b) => (b[1].requests || 0) - (a[1].requests || 0));
+    const name = (id) => (registry().find((r) => r.id === id) || {}).name || '';
+    const bars = byP.length ? `<ul class="cp-ov-bars" aria-label="${esc(L('byPolicy'))}">${byP.map(([id, v]) => {
+      const s = typeof v.savedPct === 'number' ? Math.round(v.savedPct) : pct(v.inputTokens, v.t7Tokens) || 0;
+      return `<li class="cp-ov-bar"><span class="cp-ov-bar-head">${chip(id, 'cp-chip-id')}<span class="cp-ov-bar-name">${esc(name(id))}</span><span class="cp-ov-bar-num">${esc(fill(L('perRequest'), { n: fmtN(v.requests) }))} · ${s}%</span></span><span class="cp-ov-track"><span class="cp-ov-fill" style="width:${Math.max(2, Math.min(100, s))}%"></span></span></li>`;
+    }).join('')}</ul>` : '';
+    const src = Object.entries(obj(mt.bySource)).filter(([, n]) => n);
+    const srcLine = src.length ? `<p class="cp-ov-src"><span class="cp-label">${esc(L('pickedBy'))}</span> ${src.map(([k, n]) => `${chip(`${SOURCES[k] || k} ${n}`, 'cp-chip-src')}`).join(' ')}</p>` : '';
+    return `<div class="cp-ov" data-cp-overall>${check}${tiles}${bars}${compact ? '' : srcLine}</div>`;
+  }
 
   function errorPanel() {
     if (!lastError) return '';
@@ -338,6 +424,7 @@ const ContextPolicy = (() => {
     return `<div class="cp-root">${errorPanel()}
       <p class="cp-lead">${esc(L('note'))}</p>
       ${data.rulesWarning ? `<p class="cp-warn" role="status">${esc(data.rulesWarning)}</p>` : ''}
+      ${section('overall', L('overall'), overallView(false))}
       ${section('mode', L('mode'), modeControl() + pinControl())}
       ${section('task', L('task'), taskView(false))}
       ${section('rules', L('rules'), rulesList())}
@@ -351,11 +438,12 @@ const ContextPolicy = (() => {
   function renderTab() {
     if (!available()) return '';
     if (!data) return `<div class="cp-root cp-tab">${placeholder()}</div>`;
-    return `<div class="cp-root cp-tab">${errorPanel()}${modeControl()}${taskView(true)}<div class="cp-row">${btn(L('open'), 'data-cp="open"', 'cp-btn-primary')}</div></div>`;
+    return `<div class="cp-root cp-tab">${errorPanel()}${modeControl()}<div class="cp-tab-block"><h4 class="cp-h">${esc(L('overall'))}</h4>${overallView(true)}</div><div class="cp-tab-block"><h4 class="cp-h">${esc(L('task'))}</h4>${taskView(true)}</div><div class="cp-row">${btn(L('open'), 'data-cp="open"', 'cp-btn-primary')}</div></div>`;
   }
 
   // ------------------------------------------------------------- painting
   function paint() {
+    for (const fn of [...listeners]) { try { fn(); } catch (e) { /* a listener is not our problem */ } }
     for (const h of [...hosts]) {
       if (!h.el || !h.el.isConnected) { hosts.delete(h); continue; }
       const a = document.activeElement;
@@ -572,6 +660,10 @@ const ContextPolicy = (() => {
   /** A `context.policy` event from the engine: the step's policy and sizes. */
   function onEvent(type, payload) {
     if (type !== 'context.policy' || !payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+    // A step of another chat (a sub-agent, a background chat) is not this chat's number.
+    const k = sessionKey();
+    if (typeof payload.sessionKey === 'string' && payload.sessionKey && k && payload.sessionKey !== k) return;
+    queueMetrics();
     live = {
       policy: typeof payload.policy === 'string' ? payload.policy : null,
       source: typeof payload.source === 'string' ? payload.source : null,
@@ -593,7 +685,14 @@ const ContextPolicy = (() => {
     } catch (e) { console.warn('context policy install', e); }
   }
 
-  const out = { install, mount, render, renderTab, paintTab, open, close, isOpen, onEvent, refresh, available, data: () => data, error: () => lastError, unsupported: () => unsupported, labels: LABEL };
+  /** Totals and the policy check for other views (the Checklist's Activity). */
+  function summary() {
+    if (!available()) return null;
+    const mt = curMetrics();
+    return { mode: data ? mode() : null, pin: (data && data.pin && data.pin.policy) || null, live, task: (data && data.activeTask) || null, metrics: mt, steps: recentSteps(), check: data ? checkLine() : null, registry: registry() };
+  }
+  const subscribe = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
+  const out = { install, mount, render, renderTab, paintTab, open, close, isOpen, onEvent, refresh, available, data: () => data, metrics: curMetrics, summary, subscribe, error: () => lastError, unsupported: () => unsupported, labels: LABEL };
   if (typeof window !== 'undefined') window.__contextPolicies = out;
   return out;
 })();

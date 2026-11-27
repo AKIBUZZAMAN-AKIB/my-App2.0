@@ -893,6 +893,6 @@ The app has light, dark and system (follow the phone) themes. set_theme asks the
     LIMITS, CATALOG, ACTIONS, COMPONENT_NAMES, MODULE_NAMES, FUNCS,
     parsePointer, toPointer, readPointer, getAt, setAt, removeAt, applyOperation, applyPatches, emptySpec, clone,
     parseFormula, evalFormula, resolve, bindingPath, checkCondition, fillTemplate, isExpr, truthy,
-    validateSpec, formatIssues, treeToSpec, applyEdits, readMe, catalogGuide, weatherCode,
+    validateSpec, formatIssues, treeToSpec, applyEdits, readMe, catalogGuide, weatherCode, ALIASES,
   };
 })();
