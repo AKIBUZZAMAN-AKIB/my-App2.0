@@ -378,11 +378,11 @@ async function open(browser, { w = 390, feature = true } = {}) {
           { actor: 'model', at: Date.now(), ops: '[{"id":"sys/core","action":"exclude","ok":false}]', reason: null },
         ],
       });
-      // The card's tabs: the checklist (rules group opened), the log, settings.
+      // The card's tabs: the checklist (rules group opened), activity (the old log), settings.
       CT.expand('grp/rules');
       CT.setTab('items');
       const items = CT.render();
-      CT.setTab('log');
+      CT.setTab('activity');
       const log = CT.render();
       CT.setTab('settings');
       const settings = CT.render();

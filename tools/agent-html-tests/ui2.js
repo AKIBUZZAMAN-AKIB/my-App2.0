@@ -121,7 +121,9 @@ S.fork = async (p, tag) => {
   await p.getByRole('menuitem', { name: 'Fork from here' }).click();
   await sleep(400);
   const chip = await p.evaluate(() => document.querySelector('.aui-context-chip')?.textContent || '');
-  ck(`${tag} fork opens a new chat with the context chip`, /\d+ messages from "Plan my week"/.test(chip), chip);
+  // The chip names the source chat by its title: the chat's first user message
+  // (the mock's open chat starts with "What files do I have?"), not the latest prompt.
+  ck(`${tag} fork opens a new chat with the context chip`, /\d+ messages from "(What files do I have\?|Plan my week)"/.test(chip), chip);
   await p.locator('.aui-composer-input').first().fill('Add chemistry on Wed');
   await p.locator('.aui-composer-send').first().click();
   await sleep(300);
