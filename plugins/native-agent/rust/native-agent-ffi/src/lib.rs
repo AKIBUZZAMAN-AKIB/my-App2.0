@@ -2273,7 +2273,9 @@ uniffi::setup_scaffolding!();
 /// bridge method is needed): `memory.get`, `memory.settings`,
 /// `memory.reset`, `memory.turns`, `memory.versions`, `memory.version`,
 /// `memory.revert`, `memory.result`. The context tree's settings screen rides the
-/// same channel as `ctx.settings`.
+/// same channel as `ctx.settings`, and the Context Policies workspace as
+/// `policy.*` (without this prefix here `policy.get` fell through to the
+/// sub-agent manager and failed with `unknown action "policy.get"`).
 fn memory_request(
     config: &types::InitConfig,
     req: &serde_json::Value,
@@ -2283,6 +2285,7 @@ fn memory_request(
         && !action.starts_with("ctx.")
         && !action.starts_with("agents.")
         && !action.starts_with("social.")
+        && !action.starts_with("policy.")
     {
         return None;
     }
@@ -3902,6 +3905,48 @@ mod session_continuity_e2e_tests {
         ] {
             assert!(list.contains(&name), "{name} missing");
         }
+    }
+
+    #[test]
+    fn policy_actions_reach_the_policy_handler_through_the_subagents_entry_point() {
+        // Regression: the app calls `policy.*` through `NativeAgentHandle::subagents`
+        // (the same entry point as `ctx.*` and `memory.*`). `memory_request` did not
+        // route the `policy.` prefix, so `policy.get` fell through to the sub-agent
+        // manager and the Policy tab showed `unknown action "policy.get"`.
+        let config = sandbox("policy-entry");
+        let (base, _requests) = spawn_mock_provider();
+        let (handle, _events) = launch(config, &base);
+        let got: serde_json::Value = serde_json::from_str(
+            &handle
+                .subagents(r#"{"action":"policy.get","sessionKey":"chat-1"}"#.to_string())
+                .expect("policy.get must be answered"),
+        )
+        .unwrap();
+        assert!(got.get("error").is_none(), "policy.get failed: {got}");
+        assert!(
+            got.get("settings").is_some(),
+            "policy.get has no settings: {got}"
+        );
+        assert!(
+            got.get("registry").is_some(),
+            "policy.get has no registry: {got}"
+        );
+        for action in ["policy.metrics", "policy.proposals"] {
+            let out = handle
+                .subagents(format!(r#"{{"action":"{action}","sessionKey":"chat-1"}}"#))
+                .unwrap_or_else(|e| panic!("{action} failed: {e:?}"));
+            assert!(!out.contains("unknown action"), "{action}: {out}");
+        }
+        let v: serde_json::Value = serde_json::from_str(
+            &handle
+                .subagents(
+                    r#"{"action":"policy.validate","sessionKey":"chat-1","rules":{"version":1,"rules":[]}}"#
+                        .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(v.get("valid").is_some(), "policy.validate: {v}");
     }
 
     #[test]

@@ -30987,7 +30987,7 @@ const ContextPolicy = (() => {
       advanced: 'Advanced editor (JSON)', valid: 'Valid', invalid: 'Not valid', save: 'Save',
       exclusions: 'Exclusions', categories: 'Categories', groups: 'Memory groups', items: 'Items', protectedNote: 'Protected items (system, essentials, tools, task block) are always sent.',
       task: 'Active task', noTask: 'No task is running. A task starts with the first tool call of a turn.', request: 'Request', checklist: 'Temp checklist', source: 'Picked by', step: 'Steps', retries: 'Retries', escalations: 'Escalations',
-      timeline: 'Timeline', tokens: 'Tokens', sent: 'Sent', ifT7: 'With T7', saved: 'Saved', fallbacks: 'Fallbacks', recent: 'Recent tasks', events: 'Why', retry: 'Retry', loading: 'Loading…', confirmDel: 'Delete rule', confirmSave: 'Replace the whole rule set with this one?', unsaved: 'Unsaved changes',
+      timeline: 'Timeline', tokens: 'Tokens', sent: 'Sent', ifT7: 'With T7', saved: 'Saved', fallbacks: 'Fallbacks', recent: 'Recent tasks', events: 'Why', retry: 'Retry', loading: 'Loading…', unsupported: 'This app\u2019s engine does not answer Context Policies (policy.*) yet. Update the app to a build whose native engine includes them; the rest of the context card works as before.', unsupportedTitle: 'Needs an app update', confirmDel: 'Delete rule', confirmSave: 'Replace the whole rule set with this one?', unsaved: 'Unsaved changes',
     },
     bn: {
       title: 'Context Policies', open: 'Context Policies খুলুন', close: 'বন্ধ', note: 'Tool ও rules সবসময় পুরো যায়; শুধু chat-এর পুরনো অংশ ছোট হয়।',
@@ -30998,7 +30998,7 @@ const ContextPolicy = (() => {
       advanced: 'Advanced editor (JSON)', valid: 'বৈধ', invalid: 'বৈধ নয়', save: 'সংরক্ষণ',
       exclusions: 'Exclusions', categories: 'Category', groups: 'Memory group', items: 'Item', protectedNote: 'Protected item (system, essentials, tool, task block) সবসময় যায়।',
       task: 'চলমান task', noTask: 'কোনো task চলছে না। Turn-এর প্রথম tool call-এ task শুরু হয়।', request: 'Request', checklist: 'Temp checklist', source: 'কে বাছাই করেছে', step: 'ধাপ', retries: 'Retry', escalations: 'Escalation',
-      timeline: 'Timeline', tokens: 'Token', sent: 'পাঠানো', ifT7: 'T7 হলে', saved: 'বাঁচল', fallbacks: 'Fallback', recent: 'সাম্প্রতিক task', events: 'কেন', retry: 'আবার', loading: 'লোড হচ্ছে…', confirmDel: 'Rule মুছবেন', confirmSave: 'পুরো rule set এটা দিয়ে বদলাবেন?', unsaved: 'সংরক্ষণ হয়নি',
+      timeline: 'Timeline', tokens: 'Token', sent: 'পাঠানো', ifT7: 'T7 হলে', saved: 'বাঁচল', fallbacks: 'Fallback', recent: 'সাম্প্রতিক task', events: 'কেন', retry: 'আবার', loading: 'লোড হচ্ছে…', unsupported: 'এই app এর engine এখনো Context Policies (policy.*) চেনে না। যে build এর native engine এ এগুলো আছে, সেই app update করুন; context card এর বাকি সব আগের মতো কাজ করবে।', unsupportedTitle: 'App update লাগবে', confirmDel: 'Rule মুছবেন', confirmSave: 'পুরো rule set এটা দিয়ে বদলাবেন?', unsaved: 'সংরক্ষণ হয়নি',
     },
   };
   const lang = () => {
@@ -31009,6 +31009,9 @@ const ContextPolicy = (() => {
   // ------------------------------------------------------------------ state
   let data = null; // the last policy.get answer
   let lastError = null;
+  let unsupported = false; // the engine (or the bridge) does not know policy.* at all
+  // An engine or bridge without the policy actions answers like this; retrying cannot help.
+  const UNSUPPORTED_RE = /unknown (?:policy )?action[^"]*"?policy\.|engine is too old \(missing 'contextPolicy'\)/i;
   let busy = '';
   let draft = null; // rules document being edited (null = saved one)
   let jsonText = null; // advanced editor text (null = follows draft)
@@ -31060,7 +31063,9 @@ const ContextPolicy = (() => {
       lastError = null;
       return r || {};
     } catch (e) {
-      lastError = { what: what || action, message: String(e && e.message ? e.message : e) };
+      const message = String(e && e.message ? e.message : e);
+      if (UNSUPPORTED_RE.test(message)) unsupported = true;
+      lastError = { what: what || action, message };
       paint();
       return null;
     }
@@ -31072,7 +31077,7 @@ const ContextPolicy = (() => {
     paint();
     const r = await call('policy.get', {}, 'load');
     if (busy === 'load') busy = '';
-    if (r && typeof r === 'object') { data = r; if (draft == null) jsonText = null; }
+    if (r && typeof r === 'object') { data = r; unsupported = false; if (draft == null) jsonText = null; }
     paint();
   }
 
@@ -31279,10 +31284,20 @@ const ContextPolicy = (() => {
     return r + e || '<p class="cp-empty">—</p>';
   }
 
+  /** What shows before the first policy.get answer: never an endless "Loading…". */
+  function placeholder() {
+    if (unsupported) {
+      return `<div class="cp-warn cp-unsupported" role="alert" data-cp-unsupported="1"><b>${esc(L('unsupportedTitle'))}</b><br>${esc(L('unsupported'))}</div>`
+        + (lastError ? `<p class="cp-empty"><small>${esc(lastError.message)}</small></p>` : '');
+    }
+    if (lastError) return errorPanel();
+    return `<p class="cp-empty" role="status">${esc(L('loading'))}</p>`;
+  }
+
   /** The whole workspace (also what tests read). */
   function render() {
     if (!available()) return '';
-    if (!data) return `<div class="cp-root">${errorPanel()}<p class="cp-empty" role="status">${esc(L('loading'))}</p></div>`;
+    if (!data) return `<div class="cp-root">${placeholder()}</div>`;
     return `<div class="cp-root">${errorPanel()}
       <p class="cp-lead">${esc(L('note'))}</p>
       ${data.rulesWarning ? `<p class="cp-warn" role="status">${esc(data.rulesWarning)}</p>` : ''}
@@ -31298,7 +31313,7 @@ const ContextPolicy = (() => {
   /** The compact Policy tab of the context card. */
   function renderTab() {
     if (!available()) return '';
-    if (!data) return `<div class="cp-root cp-tab">${errorPanel()}<p class="cp-empty" role="status">${esc(L('loading'))}</p></div>`;
+    if (!data) return `<div class="cp-root cp-tab">${placeholder()}</div>`;
     return `<div class="cp-root cp-tab">${errorPanel()}${modeControl()}${taskView(true)}<div class="cp-row">${btn(L('open'), 'data-cp="open"', 'cp-btn-primary')}</div></div>`;
   }
 
@@ -31541,7 +31556,7 @@ const ContextPolicy = (() => {
     } catch (e) { console.warn('context policy install', e); }
   }
 
-  const out = { install, mount, render, renderTab, paintTab, open, close, isOpen, onEvent, refresh, available, data: () => data, error: () => lastError, labels: LABEL };
+  const out = { install, mount, render, renderTab, paintTab, open, close, isOpen, onEvent, refresh, available, data: () => data, error: () => lastError, unsupported: () => unsupported, labels: LABEL };
   if (typeof window !== 'undefined') window.__contextPolicies = out;
   return out;
 })();

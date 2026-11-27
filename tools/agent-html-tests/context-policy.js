@@ -11,7 +11,10 @@
 //   6. an engine error is shown with a retry;
 //   7. text is escaped; a context.policy event updates the live numbers;
 //   8. the workspace opens as a labelled modal, Escape closes it, and 320 px
-//      has no horizontal overflow.
+//      has no horizontal overflow;
+//   9. an engine/bridge that does not know policy.* (the phone's
+//      'load: subagents: unknown action "policy.get"') shows a clear
+//      "needs an app update" message, never an endless "Loading…".
 const { chromium } = require('./pw.js');
 const fs = require('fs');
 const path = require('path');
@@ -48,6 +51,7 @@ const ENGINE = `
   window.__runtime = { action: async (action, p) => {
     window.__sent.push({ action, p });
     if (window.__failNext === action) { window.__failNext = null; return { error: 'disk is full' }; }
+    if (window.__noPolicy && action.startsWith('policy.')) throw new Error('subagents: unknown action "' + action + '"');
     const s = window.__state;
     if (action === 'policy.get') return JSON.parse(JSON.stringify(s));
     if (action === 'ctx.settings') { Object.assign(s.settings, p.settings || {}); return { ok: true }; }
@@ -204,7 +208,36 @@ const settle = (page) => page.waitForTimeout(80);
       check('policy.get is asked for the open chat', r.key === 'chat-a', r.key);
       await ctx.close();
     }
-    // Small screens.
+    // An engine (or bridge) without policy.*: a clear message, no endless Loading.
+    {
+      const { ctx, page } = await open(browser);
+      await page.evaluate(() => { window.__noPolicy = true; });
+      const r = await page.evaluate(async () => {
+        window.__contextTree.install({ chat: { mainId: 'chat-a', on() {}, _onEvent() {} } });
+        const btn = document.querySelector('.topbar [data-ct-open], .ct-open, .ct-brain');
+        window.__contextTree.open(btn || document.body);
+        window.__contextTree.setTab('policy');
+        await new Promise((res) => setTimeout(res, 150));
+        const body = document.querySelector('.cc-body');
+        return {
+          text: body ? body.textContent : '',
+          unsupported: !!document.querySelector('.cc-body [data-cp-unsupported]'),
+          flag: window.__contextPolicies.unsupported(),
+        };
+      });
+      check('an engine without policy.* shows "needs an app update", not Loading…',
+        r.unsupported && r.flag === true && /app update/i.test(r.text) && !/Loading…/.test(r.text), JSON.stringify(r));
+      // Once the engine answers, the tab works again.
+      const back = await page.evaluate(async () => {
+        window.__noPolicy = false;
+        await window.__contextPolicies.refresh();
+        await new Promise((res) => setTimeout(res, 80));
+        return { flag: window.__contextPolicies.unsupported(), mode: !!document.querySelector('.cc-body .cp-seg') };
+      });
+      check('after an engine update the Policy tab loads normally', back.flag === false && back.mode, JSON.stringify(back));
+      await ctx.close();
+    }
+    // Small screens.    // Small screens.
     for (const w of [320, 768]) {
       const { ctx, page } = await open(browser, { w });
       await page.evaluate(() => window.__contextPolicies.open());

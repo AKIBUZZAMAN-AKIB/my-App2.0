@@ -9,7 +9,7 @@ const agent = vi.hoisted(() => {
   const listeners: Array<(event: any) => void> = [];
   return {
     listeners,
-    features: ['subagents', 'subagentQueue', 'crossSession', 'contextTree'] as string[],
+    features: ['subagents', 'subagentQueue', 'crossSession', 'contextTree', 'contextPolicy'] as string[],
     getEngineFeatures: vi.fn(async function (this: any) { return { engineVersion: 'test', features: agent.features }; }),
     subagents: vi.fn(async ({ requestJson }: { requestJson: string }) => ({ echo: JSON.parse(requestJson) })),
     addListener: vi.fn(async (_name: string, cb: (event: any) => void) => {
@@ -154,6 +154,19 @@ describe('NativeKit.agent.subagents', () => {
     }
   });
 
+  it('routes the Context Policies actions (policy.*) to the engine', async () => {
+    // Regression: the Policy tab showed 'load: subagents: unknown action "policy.get"'.
+    for (const action of ['policy.get', 'policy.validate', 'policy.save', 'policy.pin', 'policy.unpin', 'policy.preview', 'policy.metrics', 'policy.proposals', 'policy.approve', 'policy.reject']) {
+      await NativeKit.agent.subagents({ action, sessionKey: 'chat-1', id: 1 });
+    }
+    const sent = agent.subagents.mock.calls.map((c: any) => JSON.parse(c[0].requestJson));
+    expect(sent.map((r: any) => r.action)).toEqual(['policy.get', 'policy.validate', 'policy.save', 'policy.pin', 'policy.unpin', 'policy.preview', 'policy.metrics', 'policy.proposals', 'policy.approve', 'policy.reject']);
+    expect(sent[0].sessionKey).toBe('chat-1');
+    const lib = readFileSync(path.resolve(__dirname, '../plugins/native-agent/rust/native-agent-ffi/src/lib.rs'), 'utf8');
+    const router = lib.slice(lib.indexOf('fn memory_request('), lib.indexOf('fn memory_request(') + 800);
+    expect(router, 'NativeAgentHandle::subagents must route policy.* to memory_action').toContain('starts_with("policy.")');
+  });
+
   it('lets through every action the engine dispatches, and every action the page sends', async () => {
     const root = path.resolve(__dirname, '..');
     const ffi = path.join(root, 'plugins/native-agent/rust/native-agent-ffi/src');
@@ -179,6 +192,8 @@ describe('NativeKit.agent.subagents', () => {
       ...arms('subagents/advanced.rs', /fn advanced_app_request/),
       // memory_action answers every prefix NativeAgentHandle::subagents routes to it.
       ...arms('lib.rs', /pub\(crate\) fn memory_action/, ['memory.', 'ctx.', 'agents.', 'social.']),
+      // memory_action hands every `policy.*` action to context_policy::bridge::action.
+      ...arms('context_policy/bridge.rs', /pub fn action/, ['policy.']),
       'ask', 'memory.get',
     ]);
     // Sub-operations matched inside those handlers (queue ops, bulk filters) are not actions.
@@ -196,7 +211,10 @@ describe('NativeKit.agent.subagents', () => {
     for (const m of page.matchAll(/\b(?:call|csCall|run|act|subCall)\(\s*(?:ctx,\s*)?'([A-Za-z]+(?:\.[A-Za-z]+)?)'/g)) sentByPage.add(m[1]);
     for (const m of page.matchAll(/subagents\(\{\s*action:\s*'([A-Za-z.]+)'/g)) sentByPage.add(m[1]);
     // Panels that pass the action in a variable (the Context panel's send('ctx.tree')) name it as a dotted literal.
-    for (const m of page.matchAll(/'((?:memory|ctx|agents|social)\.[A-Za-z]+)'/g)) sentByPage.add(m[1]);
+    for (const m of page.matchAll(/'((?:memory|ctx|agents|social|policy)\.[A-Za-z]+)'/g)) sentByPage.add(m[1]);
+    // The Policy tab builds `policy.${a}` for approve / reject.
+    for (const m of page.matchAll(/`policy\.\$\{a\}`/g)) { void m; sentByPage.add('policy.approve'); sentByPage.add('policy.reject'); }
+    expect(sentByPage.has('policy.get'), 'the Policy tab sends policy.get').toBe(true);
     expect(sentByPage.has('ctx.settings'), 'the Context panel sends ctx.settings').toBe(true);
     const unknown = [...sentByPage].filter((a) => engine.has(a) && !bridge.has(a));
     expect(unknown, 'page actions the bridge rejects').toEqual([]);
