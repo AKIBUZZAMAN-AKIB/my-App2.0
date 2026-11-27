@@ -28,6 +28,8 @@ const ContextPolicy = (() => {
       overall: 'Overall', requests: 'Requests', tokensSent: 'Tokens sent', tokensSaved: 'Tokens saved', avgLatency: 'Avg latency', tasksDone: 'Tasks done', retriesShort: 'Retries', byPolicy: 'By policy', pickedBy: 'Picked by', lastTask: 'Last task',
       chkOff: 'Policies are off: every request sends the full context (T7). Nothing is shortened or measured.', chkNone: 'No request has gone out under a policy in this chat yet. Numbers appear after the first tool call of a turn.',
       chkWorking: '{n} of the last {m} requests went out smaller than the full context (T7), saving {t} tokens.', chkFull: 'The last {m} requests all went out at full size (T7): the picked policy kept everything, or a safeguard sent T7.', chkFallback: '{f} fell back to T7 for safety.', verified: 'Working', notSaving: 'Full size',
+      effective: 'Next request uses', effOff: 'T7 full context (policies are off)', effPinOff: 'You pinned {p}, but the mode is Off, so the pin is ignored. Turn on Manual or Auto.', effPin: '{p} (your pin) from the first tool call of a turn', effManual: 'the model\u2019s pick, else T7 (Manual mode applies only a pin or the model\u2019s own pick)', effAuto: 'pin \u2192 first matching rule \u2192 model\u2019s pick \u2192 auto, from the first tool call of a turn', effFirst: 'A turn\u2019s first request always goes full (T7); the policy starts at its first tool call.',
+      order: 'Order the engine tries them', dragHint: 'Drag \u2261 to reorder: the top rule is tried first. Priorities are rewritten to match.', moveUp: 'Move up', moveDown: 'Move down', rank: 'Tried #{n}', disabledRule: 'Off', noTotals: 'No task has run under a policy in this chat yet: the totals fill in after the first tool call.',
       perRequest: '{n} req', noMetrics: 'No totals from the engine yet.', events: 'Why', retry: 'Retry', loading: 'Loading…', unsupported: 'This app\u2019s engine does not answer Context Policies (policy.*) yet. Update the app to a build whose native engine includes them; the rest of the context card works as before.', unsupportedTitle: 'Needs an app update', confirmDel: 'Delete rule', confirmSave: 'Replace the whole rule set with this one?', unsaved: 'Unsaved changes',
     },
     bn: {
@@ -43,6 +45,8 @@ const ContextPolicy = (() => {
       overall: 'সার্বিক', requests: 'Request', tokensSent: 'পাঠানো token', tokensSaved: 'বাঁচানো token', avgLatency: 'গড় latency', tasksDone: 'শেষ হওয়া task', retriesShort: 'Retry', byPolicy: 'Policy অনুযায়ী', pickedBy: 'কে বাছাই করেছে', lastTask: 'শেষ task',
       chkOff: 'Policy বন্ধ: প্রতিটি request পুরো context (T7) পাঠায়। কিছু ছোট হয় না, মাপাও হয় না।', chkNone: 'এই chat-এ এখনো কোনো request policy দিয়ে যায়নি। Turn-এর প্রথম tool call-এর পর সংখ্যা দেখা যাবে।',
       chkWorking: 'শেষ {m}টি request-এর {n}টি পুরো context (T7)-এর চেয়ে ছোট গেছে, {t} token বেঁচেছে।', chkFull: 'শেষ {m}টি request সবই পুরো আকারে (T7) গেছে: বাছাই করা policy সব রেখেছে, অথবা safeguard T7 পাঠিয়েছে।', chkFallback: '{f}টি নিরাপত্তার জন্য T7-এ ফিরে গেছে।', verified: 'কাজ করছে', notSaving: 'পুরো আকার',
+      effective: 'পরের request এ যাবে', effOff: 'T7 পুরো context (policy বন্ধ)', effPinOff: 'আপনি {p} pin করেছেন, কিন্তু mode বন্ধ, তাই pin কাজ করবে না। Manual বা Auto চালু করুন।', effPin: '{p} (আপনার pin), turn এর প্রথম tool call থেকে', effManual: 'model এর বাছাই, না হলে T7 (Manual mode এ শুধু pin বা model এর বাছাই খাটে)', effAuto: 'pin \u2192 প্রথম মিলে যাওয়া rule \u2192 model এর বাছাই \u2192 auto, turn এর প্রথম tool call থেকে', effFirst: 'Turn এর প্রথম request সবসময় পুরো (T7) যায়; policy শুরু হয় প্রথম tool call এ।',
+      order: 'Engine যে ক্রমে চেষ্টা করে', dragHint: '\u2261 ধরে টেনে ক্রম বদলান: উপরের rule আগে চেষ্টা হয়। Priority সেই অনুযায়ী বদলে যায়।', moveUp: 'উপরে', moveDown: 'নিচে', rank: '#{n} এ চেষ্টা', disabledRule: 'বন্ধ', noTotals: 'এই chat এ এখনো কোনো task policy দিয়ে চলেনি: প্রথম tool call এর পর মোট হিসাব আসবে।',
       perRequest: '{n} req', noMetrics: 'Engine থেকে এখনো মোট হিসাব আসেনি।', events: 'কেন', retry: 'আবার', loading: 'লোড হচ্ছে…', unsupported: 'এই app এর engine এখনো Context Policies (policy.*) চেনে না। যে build এর native engine এ এগুলো আছে, সেই app update করুন; context card এর বাকি সব আগের মতো কাজ করবে।', unsupportedTitle: 'App update লাগবে', confirmDel: 'Rule মুছবেন', confirmSave: 'পুরো rule set এটা দিয়ে বদলাবেন?', unsaved: 'সংরক্ষণ হয়নি',
     },
   };
@@ -120,13 +124,19 @@ const ContextPolicy = (() => {
     }
   }
 
+  let dataKey = null; // the chat `data` belongs to
+  let refreshTimer = null;
   async function refresh() {
     if (!available()) return;
+    // Another chat is open now: its numbers, task and pin are not this one's, so they never show under it.
+    const key = sessionKey();
+    if (data && dataKey !== key) { data = null; live = null; draft = null; jsonText = null; builder = null; }
     busy = busy || 'load';
     paint();
     const r = await call('policy.get', {}, 'load');
     if (busy === 'load') busy = '';
-    if (r && typeof r === 'object') { data = r; unsupported = false; if (draft == null) jsonText = null; }
+    if (key !== sessionKey()) return; // the chat changed while it loaded
+    if (r && typeof r === 'object') { data = r; dataKey = key; unsupported = false; if (draft == null) jsonText = null; }
     if (r) await loadMetrics();
     paint();
   }
@@ -146,6 +156,12 @@ const ContextPolicy = (() => {
     return metrics;
   }
   const curMetrics = () => (metrics && metricsKey === sessionKey() ? metrics : null);
+  /** Reread policy.get soon after a step: the check line, the timeline and the steps
+   * come from its events, so they must follow every step, not only a new task. */
+  function queueRefresh() {
+    if (refreshTimer) return;
+    refreshTimer = setTimeout(() => { refreshTimer = null; refresh().catch(() => {}); }, 900);
+  }
   function queueMetrics() {
     if (metricsTimer) return;
     metricsTimer = setTimeout(() => { metricsTimer = null; loadMetrics().then(() => paint()).catch(() => {}); }, 900);
@@ -196,6 +212,21 @@ const ContextPolicy = (() => {
     return { kind: smaller.length ? 'ok' : 'full', text: head + (fb ? ' ' + fill(L('chkFallback'), { f: fb }) : '') };
   }
 
+  /** What the engine will really use, read the way policy_selector.rs decides it:
+   * Off sends T7 and ignores a pin; Manual uses the pin, else the model's own pick, else
+   * T7; Auto tries the pin, then the rules by priority, then the model, then auto. */
+  function effective() {
+    const m = mode();
+    const pin = data && data.pin && data.pin.policy;
+    if (m === 'off') return pin ? { kind: 'warn', text: fill(L('effPinOff'), { p: pin }) } : { kind: 'off', text: L('effOff') };
+    if (pin) return { kind: 'ok', text: fill(L('effPin'), { p: pin }) };
+    return { kind: 'ok', text: m === 'manual' ? L('effManual') : L('effAuto') };
+  }
+  function effectiveLine() {
+    const e = effective();
+    return `<div class="cp-eff cp-eff-${e.kind}" role="status" data-cp-effective="${esc(e.kind)}"><span class="cp-eff-k">${esc(L('effective'))}</span><span class="cp-eff-v">${esc(e.text)}</span>${mode() !== 'off' ? `<span class="cp-eff-note">${esc(L('effFirst'))}</span>` : ''}</div>`;
+  }
+
   /** The Overall view: totals over every task of this chat, from policy.metrics, and a
    * check that the policy is really applied. */
   function overallView(compact) {
@@ -204,7 +235,14 @@ const ContextPolicy = (() => {
     const check = `<p class="cp-ov-check cp-ov-check-${chk.kind}" role="status">${badge}<span>${esc(chk.text)}</span></p>`;
     const mt = curMetrics();
     const t = mt ? obj(mt.total) : null;
-    if (!t || !t.tasks) return `<div class="cp-ov" data-cp-overall>${check}${mt ? '' : ''}</div>`;
+    const tile0 = (k, v) => `<div class="cp-ov-tile cp-ov-tile-empty"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`;
+    if (!t || !t.tasks) {
+      // Nothing measured yet: the Overall still shows its tiles (at zero) and says why, never an empty box.
+      const steps = recentSteps();
+      const sent = steps.reduce((a, e) => a + e.inputTokens, 0), full = steps.reduce((a, e) => a + e.t7Tokens, 0);
+      const sp = full ? pct(sent, full) : null;
+      return `<div class="cp-ov" data-cp-overall>${effectiveLine()}${check}<dl class="cp-ov-tiles">${tile0(L('requests'), fmtN(steps.length))}${tile0(L('saved'), sp == null ? '\u2014' : `${sp}%`)}${tile0(L('tokensSent'), steps.length ? fmtK(sent) : '\u2014')}${tile0(L('fallbacks'), fmtN(arr(data && data.events).filter((e) => e && e.kind === 'fallback').length))}</dl><p class="cp-small cp-muted">${esc(mt ? L('noTotals') : L('noMetrics'))}</p></div>`;
+    }
     const saved = typeof t.t7Tokens === 'number' && typeof t.inputTokens === 'number' ? Math.max(0, t.t7Tokens - t.inputTokens) : null;
     const sp = typeof t.savedPct === 'number' ? Math.round(t.savedPct) : pct(t.inputTokens, t.t7Tokens);
     const tile = (k, v, sub, cls = '') => `<div class="cp-ov-tile ${cls}"><dt>${esc(k)}</dt><dd>${esc(v)}</dd>${sub ? `<span class="cp-ov-sub">${esc(sub)}</span>` : ''}</div>`;
@@ -224,7 +262,7 @@ const ContextPolicy = (() => {
     }).join('')}</ul>` : '';
     const src = Object.entries(obj(mt.bySource)).filter(([, n]) => n);
     const srcLine = src.length ? `<p class="cp-ov-src"><span class="cp-label">${esc(L('pickedBy'))}</span> ${src.map(([k, n]) => `${chip(`${SOURCES[k] || k} ${n}`, 'cp-chip-src')}`).join(' ')}</p>` : '';
-    return `<div class="cp-ov" data-cp-overall>${check}${tiles}${bars}${compact ? '' : srcLine}</div>`;
+    return `<div class="cp-ov" data-cp-overall>${effectiveLine()}${check}${tiles}${bars}${compact ? '' : srcLine}</div>`;
   }
 
   function errorPanel() {
@@ -267,18 +305,41 @@ const ContextPolicy = (() => {
     return key ? { join: key, conds: w[key] } : { join: 'all', conds: r.if ? [r.if] : [] };
   }
 
+  /** The rules in the order the engine tries them (rule_evaluator.rs: priority,
+   * highest first, then rule ID), each with its index in the document. */
+  function ordered(rules) {
+    return rules.map((r, i) => ({ r, i })).sort((a, b) => (Number(b.r.priority) || 0) - (Number(a.r.priority) || 0) || String(a.r.id || '').localeCompare(String(b.r.id || '')));
+  }
+  /** Write priorities so the engine tries the rules in `order` (document indexes, first = tried first). */
+  function applyOrder(order) {
+    const d = editDraft();
+    const n = order.length;
+    const step = Math.max(1, Math.min(10, Math.floor(1000 / Math.max(1, n))));
+    order.forEach((di, k) => { const r = d.rules[di]; if (r) r.priority = Math.max(0, Math.min(1000, (n - k) * step)); });
+    paint();
+  }
+  function moveRule(di, delta) {
+    const order = ordered(arr(rulesDoc().rules)).map((x) => x.i);
+    const at = order.indexOf(di), to = at + delta;
+    if (at < 0 || to < 0 || to >= order.length) return;
+    order.splice(to, 0, order.splice(at, 1)[0]);
+    applyOrder(order);
+    focusIn(`[data-cp-drag][data-i="${di}"]`);
+  }
+
   function rulesList() {
     const rules = arr(rulesDoc().rules);
-    const list = rules.length ? `<ul class="cp-list">${rules.map((r, i) => {
+    const rows = ordered(rules);
+    const list = rules.length ? `<p class="cp-small cp-muted cp-drag-hint">${esc(L('dragHint'))}</p><ol class="cp-list cp-rules" data-cp-rules aria-label="${esc(L('order'))}">${rows.map(({ r, i }, k) => {
       const { join, conds } = ruleConds(r);
       const then = obj(r.then).policy || r.policy || '?';
-      return `<li class="cp-rule" data-rule="${esc(r.id)}">
-        <div class="cp-rule-head"><label class="cp-check"><input type="checkbox" data-cp-in="rule-enabled" data-i="${i}"${r.enabled !== false ? ' checked' : ''} aria-label="${esc(L('enabled'))} ${esc(r.id)}"></label>
+      return `<li class="cp-rule${r.enabled === false ? ' cp-rule-off' : ''}" data-rule="${esc(r.id)}" data-i="${i}">
+        <div class="cp-rule-head"><button type="button" class="cp-drag" data-cp-drag="1" data-i="${i}" aria-label="${esc(L('order'))}: ${esc(r.id)} (${esc(fill(L('rank'), { n: k + 1 }))})" title="${esc(L('dragHint'))}">\u2261</button><span class="cp-rank" title="${esc(fill(L('rank'), { n: k + 1 }))}">${k + 1}</span><label class="cp-check"><input type="checkbox" data-cp-in="rule-enabled" data-i="${i}"${r.enabled !== false ? ' checked' : ''} aria-label="${esc(L('enabled'))} ${esc(r.id)}"></label>
           <span class="cp-rule-id">${esc(r.id)}</span>
-          <label class="cp-prio"><span class="cp-sr">${esc(L('priority'))}</span><input class="cp-input cp-input-num" type="number" min="0" max="1000" value="${esc(r.priority == null ? 0 : r.priority)}" data-cp-in="rule-priority" data-i="${i}" aria-label="${esc(L('priority'))} ${esc(r.id)}"></label>
-          ${btn(L('edit'), `data-cp="rule-edit" data-i="${i}"`, 'cp-btn-quiet cp-btn-sm')}${btn(L('del'), `data-cp="rule-del" data-i="${i}"`, 'cp-btn-danger cp-btn-sm')}</div>
-        <div class="cp-rule-body"><span class="cp-kw">IF</span> ${conds.map((c) => `<code>${esc(condText(c))}</code>`).join(` <span class="cp-kw">${join === 'any' ? 'OR' : 'AND'}</span> `) || '<code>true</code>'} <span class="cp-kw">THEN</span> ${chip(then, 'cp-chip-id')}</div></li>`;
-    }).join('')}</ul>` : `<p class="cp-empty">${esc(L('noRules'))}</p>`;
+              <span class="cp-rule-btns">${btn(L('edit'), `data-cp="rule-edit" data-i="${i}"`, 'cp-btn-quiet cp-btn-sm')}${btn(L('del'), `data-cp="rule-del" data-i="${i}"`, 'cp-btn-danger cp-btn-sm')}</span></div>
+        <div class="cp-rule-body"><span class="cp-kw">IF</span> ${conds.map((c) => `<code>${esc(condText(c))}</code>`).join(` <span class="cp-kw">${join === 'any' ? 'OR' : 'AND'}</span> `) || '<code>true</code>'} <span class="cp-kw">THEN</span> ${chip(then, 'cp-chip-id')}${r.enabled === false ? ` <span class="cp-chip cp-chip-status">${esc(L('disabledRule'))}</span>` : ''}</div>
+        <div class="cp-rule-foot"><label class="cp-prio"><span class="cp-label">${esc(L('priority'))}</span><input class="cp-input cp-input-num" type="number" min="0" max="1000" value="${esc(r.priority == null ? 0 : r.priority)}" data-cp-in="rule-priority" data-i="${i}" aria-label="${esc(L('priority'))} ${esc(r.id)}"></label></div></li>`;
+    }).join('')}</ol>` : `<p class="cp-empty">${esc(L('noRules'))}</p>`;
     const props = arr(data && data.proposals);
     const proposals = props.length ? `<div class="cp-sub"><h4 class="cp-h4">${esc(L('proposals'))}</h4><ul class="cp-list">${props.map((p) => {
       const r = obj(p.rule);
@@ -292,7 +353,7 @@ const ContextPolicy = (() => {
 
   function newBuilder(policy) {
     const f = fields()[0];
-    return { id: '', priority: 50, join: 'all', policy: policy || 'T1', conds: [{ field: f ? f.field : '', op: f ? (f.operators || ['=='])[0] : '==', value: '' }], editing: -1, sample: (builder && builder.sample) || '' };
+    return { id: '', priority: 50, join: 'all', policy: policy || 'T1', conds: [{ field: f ? f.field : '', op: f ? (f.operators || ['=='])[0] : '==', value: isBool(f) ? 'true' : '' }], editing: -1, sample: (builder && builder.sample) || '' };
   }
   function condRow(c, i) {
     const fs = fields();
@@ -301,9 +362,12 @@ const ContextPolicy = (() => {
     return `<div class="cp-cond" data-i="${i}">
       <select class="cp-input" data-cp-in="b-field" data-i="${i}" aria-label="Field">${fs.map((x) => `<option value="${esc(x.field)}"${x.field === c.field ? ' selected' : ''}>${esc(x.field)}</option>`).join('')}</select>
       <select class="cp-input cp-input-op" data-cp-in="b-op" data-i="${i}" aria-label="Operator">${ops.map((o) => `<option${o === c.op ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>
-      ${c.op === 'exists' ? '' : f.type === 'bool' ? `<select class="cp-input" data-cp-in="b-value" data-i="${i}" aria-label="Value"><option${c.value === 'true' ? ' selected' : ''}>true</option><option${c.value === 'false' ? ' selected' : ''}>false</option></select>` : `<input class="cp-input" data-cp-in="b-value" data-i="${i}" value="${esc(c.value)}" aria-label="Value" placeholder="${f.type === 'int' || f.type === 'number' ? '0' : 'value'}">`}
+      ${c.op === 'exists' ? '' : isBool(f) ? `<select class="cp-input" data-cp-in="b-value" data-i="${i}" aria-label="Value"><option${c.value === 'true' ? ' selected' : ''}>true</option><option${c.value === 'false' ? ' selected' : ''}>false</option></select>` : `<input class="cp-input" data-cp-in="b-value" data-i="${i}" value="${esc(c.value)}" aria-label="Value" placeholder="${isInt(f) ? (c.op === 'in' ? '1, 2' : '0') : c.op === 'in' ? 'a, b' : 'value'}">`}
       <button type="button" class="cp-icon-btn" data-cp="b-del" data-i="${i}" aria-label="${esc(L('remove'))}" title="${esc(L('remove'))}">×</button></div>`;
   }
+  // The engine names its field types "string", "int" and "boolean" (dsl_validator.rs FieldType::as_str).
+  const isBool = (f) => f && (f.type === 'boolean' || f.type === 'bool');
+  const isInt = (f) => f && (f.type === 'int' || f.type === 'integer' || f.type === 'number');
   function builderView() {
     if (!builder) builder = newBuilder();
     const b = builder;
@@ -327,8 +391,11 @@ const ContextPolicy = (() => {
       const f = fields().find((x) => x.field === c.field) || {};
       const raw = String(c.value == null ? '' : c.value).trim();
       let v = raw;
-      if (c.op === 'in') v = `[${raw.split(',').map((s) => JSON.stringify(s.trim())).filter((s) => s !== '""').join(', ')}]`;
-      else if (f.type === 'string' || f.type === 'str') v = JSON.stringify(raw);
+      // A list keeps the field's type: numbers stay numbers for an int field, or the engine rejects the rule.
+      if (c.op === 'in') v = `[${raw.split(',').map((s) => s.trim()).filter(Boolean).map((s) => (isInt(f) && /^-?\d+$/.test(s) ? s : JSON.stringify(s))).join(', ')}]`;
+      else if (isBool(f)) v = raw === 'false' ? 'false' : 'true';
+      else if (isInt(f)) v = /^-?\d+$/.test(raw) ? raw : JSON.stringify(raw);
+      else v = JSON.stringify(raw);
       return `${c.field} ${c.op} ${v}`;
     });
     return { id: b.id.trim(), enabled: true, priority: Number(b.priority) || 0, if: { [b.join]: conds }, then: { policy: b.policy } };
@@ -443,6 +510,7 @@ const ContextPolicy = (() => {
 
   // ------------------------------------------------------------- painting
   function paint() {
+    if (drag) { drag.stale = true; return; } // never rebuild the list under a finger that is dragging a rule
     for (const fn of [...listeners]) { try { fn(); } catch (e) { /* a listener is not our problem */ } }
     for (const h of [...hosts]) {
       if (!h.el || !h.el.isConnected) { hosts.delete(h); continue; }
@@ -463,6 +531,94 @@ const ContextPolicy = (() => {
     el.addEventListener('change', onChange);
     el.addEventListener('input', onInput);
     el.addEventListener('keydown', onKey);
+    el.addEventListener('pointerdown', onDragStart);
+  }
+
+  // ------------------------------------------------------- rule drag & drop
+  // Pointer events, so it works with a finger as well as a mouse. The dragged row moves
+  // inside its own list only (it never leaves the panel), the panel's scroller follows
+  // the finger near its top and bottom edges, and the drop rewrites the priorities so
+  // the engine tries the rules in the order shown.
+  let drag = null;
+  function scroller(el) {
+    for (let n = el && el.parentElement; n; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (/(auto|scroll)/.test(cs.overflowY) && n.scrollHeight > n.clientHeight) return n;
+    }
+    return null;
+  }
+  function onDragStart(ev) {
+    const h = ev.target && ev.target.closest && ev.target.closest('[data-cp-drag]');
+    if (!h || (ev.button != null && ev.button !== 0)) return;
+    const li = h.closest('.cp-rule'), list = li && li.closest('[data-cp-rules]');
+    if (!li || !list) return;
+    ev.preventDefault();
+    const r = li.getBoundingClientRect();
+    drag = { li, list, id: ev.pointerId, y0: ev.clientY, top0: r.top, h: r.height, sc: scroller(list), raf: 0, y: ev.clientY, moved: false };
+    li.classList.add('cp-dragging');
+    list.classList.add('cp-sorting');
+    // On the window, not the handle: moving the row in the list drops a pointer capture.
+    window.addEventListener('pointermove', onDragMove, { passive: false });
+    window.addEventListener('pointerup', onDragEnd);
+    window.addEventListener('pointercancel', onDragEnd);
+    drag.handle = h;
+    tick();
+  }
+  function onDragMove(ev) {
+    if (!drag || ev.pointerId !== drag.id) return;
+    ev.preventDefault();
+    drag.y = ev.clientY;
+    if (Math.abs(drag.y - drag.y0) > 3) drag.moved = true;
+    place();
+  }
+  /** Keep the row under the finger, clamped to its list, and move it among its siblings. */
+  function place(again) {
+    const d = drag;
+    const lr = d.list.getBoundingClientRect();
+    const nowTop = d.li.getBoundingClientRect().top - (parseFloat(d.li.style.transform.replace(/[^-\d.]/g, '')) || 0);
+    let dy = d.y - d.y0 - (nowTop - d.top0);
+    const minDy = lr.top - nowTop, maxDy = lr.bottom - d.h - nowTop;
+    dy = Math.max(minDy, Math.min(maxDy, dy));
+    d.li.style.transform = `translateY(${Math.round(dy)}px)`;
+    const mid = nowTop + dy + d.h / 2;
+    const sibs = [...d.list.children].filter((x) => x !== d.li);
+    let before = null;
+    for (const s of sibs) { const b = s.getBoundingClientRect(); if (mid < b.top + b.height / 2) { before = s; break; } }
+    const cur = d.li.nextElementSibling === before || (!before && d.li === d.list.lastElementChild);
+    if (!cur && !again) {
+      d.list.insertBefore(d.li, before);
+      d.moved = true;
+      place(true); // the row's natural place moved: recompute its offset so it stays under the finger
+    }
+  }
+  /** Scroll the panel while the finger rests near its top or bottom edge. */
+  function tick() {
+    if (!drag) return;
+    const sc = drag.sc;
+    if (sc) {
+      const r = sc.getBoundingClientRect(), edge = 40;
+      let v = 0;
+      if (drag.y < r.top + edge) v = -Math.ceil((r.top + edge - drag.y) / 4);
+      else if (drag.y > r.bottom - edge) v = Math.ceil((drag.y - (r.bottom - edge)) / 4);
+      if (v) { const b = sc.scrollTop; sc.scrollTop = b + v; if (sc.scrollTop !== b) place(); }
+    }
+    drag.raf = requestAnimationFrame(tick);
+  }
+  function onDragEnd(ev) {
+    if (!drag || (ev && ev.pointerId !== drag.id)) return;
+    const d = drag;
+    drag = null;
+    cancelAnimationFrame(d.raf);
+    window.removeEventListener('pointermove', onDragMove, { passive: false });
+    window.removeEventListener('pointerup', onDragEnd);
+    window.removeEventListener('pointercancel', onDragEnd);
+    d.li.classList.remove('cp-dragging');
+    d.list.classList.remove('cp-sorting');
+    d.li.style.transform = '';
+    const order = [...d.list.children].map((x) => Number(x.dataset.i)).filter((n) => Number.isInteger(n));
+    const was = ordered(arr(rulesDoc().rules)).map((x) => x.i);
+    if (d.moved && order.join() !== was.join()) applyOrder(order);
+    else if (d.stale) paint();
   }
 
   function mount(el) {
@@ -625,7 +781,7 @@ const ContextPolicy = (() => {
       if (t.checked && at < 0) list.push(id); else if (!t.checked && at >= 0) list.splice(at, 1);
       d.exclusions = { ...obj(d.exclusions), always_exclude: ex };
       paint();
-    } else if (k === 'b-field') { const f = fields().find((x) => x.field === t.value); builder.conds[i] = { field: t.value, op: f ? arr(f.operators)[0] || '==' : '==', value: '' }; paint(); }
+    } else if (k === 'b-field') { const f = fields().find((x) => x.field === t.value); builder.conds[i] = { field: t.value, op: f ? arr(f.operators)[0] || '==' : '==', value: isBool(f) ? 'true' : '' }; paint(); }
     else if (k === 'b-op') { builder.conds[i].op = t.value; paint(); }
     else if (k === 'b-value' && t.tagName === 'SELECT') builder.conds[i].value = t.value;
     else if (k === 'b-join') builder.join = t.value === 'any' ? 'any' : 'all';
@@ -646,6 +802,11 @@ const ContextPolicy = (() => {
 
   function onKey(ev) {
     const t = ev.target;
+    if (t && t.dataset && t.dataset.cpDrag && (ev.key === 'ArrowUp' || ev.key === 'ArrowDown')) {
+      ev.preventDefault();
+      moveRule(Number(t.dataset.i), ev.key === 'ArrowUp' ? -1 : 1);
+      return;
+    }
     if (!t || !t.classList || !t.classList.contains('cp-seg-btn')) return;
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(ev.key)) return;
     ev.preventDefault();
@@ -663,7 +824,6 @@ const ContextPolicy = (() => {
     // A step of another chat (a sub-agent, a background chat) is not this chat's number.
     const k = sessionKey();
     if (typeof payload.sessionKey === 'string' && payload.sessionKey && k && payload.sessionKey !== k) return;
-    queueMetrics();
     live = {
       policy: typeof payload.policy === 'string' ? payload.policy : null,
       source: typeof payload.source === 'string' ? payload.source : null,
@@ -672,8 +832,9 @@ const ContextPolicy = (() => {
       t7Tokens: typeof payload.t7Tokens === 'number' ? payload.t7Tokens : null,
       reason: typeof payload.reason === 'string' ? payload.reason : null,
     };
-    if (data && live.taskId && (!data.activeTask || data.activeTask.taskId !== live.taskId)) refresh();
-    else paint();
+    paint();
+    queueRefresh(); // policy.get + policy.metrics: the events behind the check line and the totals
+
   }
 
   function install() {
