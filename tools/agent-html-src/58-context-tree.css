@@ -722,3 +722,27 @@ p.cc-sel-note b { color: var(--foreground); }
 .aui-user-message-root[data-cc-mark="summarizing"]::before, .aui-assistant-message-root[data-cc-mark="summarizing"] { animation: cc-pulse 1.4s ease-in-out infinite; }
 @keyframes cc-pulse { 50% { opacity: .55; } }
 @media (prefers-reduced-motion: reduce) { [data-cc-mark="summarizing"], [data-cc-mark="summarizing"]::before { animation: none !important; } }
+
+/* ---------- Summary rows: placed where their turns were, with a tag ---------- */
+.cc-sum-tag { flex: none; padding: 0 6px; border-radius: 4px; background: color-mix(in srgb, var(--cc-summary) 12%, transparent); color: var(--cc-summary); font-size: 0.625rem; font-weight: 600; line-height: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cc-sum-src, .cc-sum-focus { flex: none; color: var(--muted-foreground); font-size: 0.625rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 30%; }
+.cc-sum-focus { font-style: italic; }
+.cc-req-badge { font-variant-numeric: tabular-nums; }
+
+/* ---------- Turns & real requests (Activity) ---------- */
+.cc-rq .cc-act-h { display: flex; align-items: center; gap: 6px; }
+.cc-rq-turns { list-style: none; margin: 0; padding: 0; }
+.cc-rq-turn { border-bottom: 1px solid var(--border); }
+.cc-rq-turn:last-child { border-bottom: 0; }
+.cc-rq-turn > details > summary { display: flex; align-items: center; gap: 6px; padding: 6px 0; cursor: pointer; list-style: none; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.cc-rq-turn > details > summary::-webkit-details-marker { display: none; }
+.cc-rq-prompt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-rq-tok { flex: none; white-space: nowrap; }
+.cc-rq-tok small, .cc-rq-what small { color: var(--muted-foreground); }
+.cc-rq-save { flex: none; min-width: 38px; text-align: right; color: var(--muted-foreground); font-size: 0.6875rem; }
+.cc-rq-meta { margin: 0 0 4px; color: var(--muted-foreground); font-size: 0.6875rem; }
+.cc-rq-reqs { list-style: none; margin: 0 0 6px; padding: 0; }
+.cc-rq-req { display: grid; grid-template-columns: 28px 1fr auto 38px 64px 48px; align-items: baseline; gap: 6px; padding: 3px 0; border-top: 1px dashed var(--border); font-size: 0.6875rem; font-variant-numeric: tabular-nums; }
+.cc-rq-n, .cc-rq-io, .cc-rq-ms { color: var(--muted-foreground); }
+.cc-rq-io, .cc-rq-ms { text-align: right; white-space: nowrap; }
+.cc-rq-bad .cc-rq-what { color: var(--destructive, #dc2626); }

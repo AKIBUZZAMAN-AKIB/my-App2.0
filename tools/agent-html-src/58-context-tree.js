@@ -31,7 +31,7 @@ const ContextTree = (() => {
   };
   const ACTOR_LABEL = { model: 'Model', policy: 'Engine policy', user: 'You', engine: 'Engine' };
 
-  let state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '', memory: null };
+  let state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '', memory: null, requests: null };
   /** Memory rows waiting for the engine's answer: rid -> action. */
   const pendingMem = new Map();
   // null = the engine has not told us yet, so the panel shows the tree (the
@@ -109,6 +109,8 @@ const ContextTree = (() => {
         model: p.model || state.model,
         // The chat memory as checklist groups (memory_checklist.rs).
         memory: p.memory && typeof p.memory === 'object' && Array.isArray(p.memory.groups) ? p.memory : state.memory,
+        // Every model request per turn (request_log.rs): one turn is many requests.
+        requests: p.requests && typeof p.requests === 'object' && Array.isArray(p.requests.turns) ? p.requests : state.requests,
       };
       if (p.settings) applySettings(p.settings);
       else if (typeof p.enabled === 'boolean') settings = { enabled: true, thresholdPercent: settings ? settings.thresholdPercent : null };
@@ -120,6 +122,9 @@ const ContextTree = (() => {
     } else if (type === 'context.tree_changed') {
       // The model changed the tree mid-turn: read the new state from the engine.
       refresh();
+    } else if (type === 'context.request') {
+      // A request was sent (a step, a retry or a summary): read the ledger again.
+      if (!p.sessionKey || p.sessionKey === activeKey()) readRequests();
     }
   }
 
@@ -198,6 +203,22 @@ const ContextTree = (() => {
   }
 
   /** Read the switch and the tree for the open chat from the engine. */
+  /** Read the request ledger again, at most every 600 ms (one turn can send many). */
+  let reqTimer = null;
+  function readRequests() {
+    if (reqTimer) return;
+    reqTimer = setTimeout(() => {
+      reqTimer = null;
+      const send = ctxSend();
+      if (!send || !activeKey()) return;
+      Promise.resolve(send('ctx.requests', {}))
+        .then((r) => { if (r && Array.isArray(r.turns)) { state.requests = r; if (panel.open) paint(true); } })
+        .catch(() => { /* an older engine without the ledger */ });
+    }, 600);
+  }
+  /** The ledger row of turn `n` in the open chat, if requests were filed for it. */
+  const turnReqs = (n) => (state.requests && Array.isArray(state.requests.turns) ? state.requests.turns.find((t) => Number(t.turn) === Number(n)) || null : null);
+
   function refresh() {
     // Same gate as the card itself: an engine that does not list "contextTree" has no
     // ctx.* actions, and asking anyway answered every load and chat switch with
@@ -319,7 +340,7 @@ const ContextTree = (() => {
         busy = null;
         const ok = !!(res && res.reset);
         if (ok) {
-          state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: state.model || '' };
+          state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: state.model || '', memory: null, requests: null };
           lastReset = { at: Date.now(), removed: (res && res.removed) || {} };
         }
         paint();
@@ -503,6 +524,39 @@ const ContextTree = (() => {
     return list.map(({ e }, i) => ({ e, n: Number(e.step) > 0 ? Number(e.step) : i + 1 }));
   }
 
+  /** Turns against real requests, from the engine's request ledger: per turn how many
+   * requests were really sent, tokens full / sent / saved, and the chat's totals. */
+  function requestsBlock() {
+    const L = state.requests;
+    const t = L && L.total;
+    if (!t || !t.requests) return '';
+    const tile = (k, v, sub, cls = '') => `<div class="cc-act-tile ${cls}"><dt>${esc(k)}</dt><dd>${esc(v)}</dd>${sub ? `<span>${esc(sub)}</span>` : ''}</div>`;
+    const io = t.inputTokens || t.outputTokens ? `Provider: ${short(t.inputTokens)} in \u00b7 ${short(t.outputTokens)} out` : '';
+    const head = `<dl class="cc-act-tiles">
+      ${tile('Turns', num(t.turns), 'messages you sent')}
+      ${tile('Real requests', num(t.requests), `${t.requestsPerTurn} per turn${t.summaryRequests ? ` \u00b7 ${plural(t.summaryRequests, 'summary')}` : ''}`.replace('summarys', 'summaries'))}
+      ${tile('Tokens sent', short(t.sentTokens), `of ${short(t.fullTokens)} full`)}
+      ${tile('Saved', `${t.savedPct}%`, `${short(t.savedTokens)} tokens`, 'cc-act-hero')}
+    </dl>${io ? `<p class="cc-act-cap">${esc(io)}${t.overflowRetries ? ` \u00b7 ${esc(plural(t.overflowRetries, 'overflow retry'))}`.replace('retrys', 'retries') : ''}</p>` : ''}`;
+    const turnRow = (r) => {
+      const key = 'rq/' + r.turn;
+      const open = !!(panel.detailsOpen && panel.detailsOpen[key]);
+      const reqs = (r.list || []).map((q) => {
+        const what = q.kind === 'summary' ? 'Summary' : q.status === 'overflow' ? `Step ${q.step} \u00b7 retry` : `Step ${q.step}`;
+        const tok = q.fullTokens == null ? `${short(q.sentTokens)}` : `${short(q.sentTokens)} <small>of ${short(q.fullTokens)}</small>`;
+        const sv = q.kind === 'summary' ? '<span class="cc-rq-save">cost</span>' : q.savedPct > 0 ? `<span class="cc-rq-save cc-act-pos">\u2212${esc(String(Math.round(q.savedPct)))}%</span>` : '<span class="cc-rq-save">full</span>';
+        return `<li class="cc-rq-req${q.status === 'overflow' ? ' cc-rq-bad' : ''}"><span class="cc-rq-n">#${esc(num(q.n))}</span><span class="cc-rq-what">${esc(what)}${q.policy ? ` <small>${esc(q.policy)}</small>` : ''}</span><span class="cc-rq-tok">${tok}</span>${sv}<span class="cc-rq-io" title="Provider input / output tokens">${q.inputTokens ? esc(short(q.inputTokens)) + ' / ' + esc(short(q.outputTokens)) : '\u2014'}</span><span class="cc-rq-ms">${esc(msText(q.latencyMs))}</span></li>`;
+      }).join('');
+      return `<li class="cc-rq-turn"><details data-key="${esc(key)}"${open ? ' open' : ''}><summary><span class="cc-num">${esc(String(r.turn))}</span><span class="cc-rq-prompt">${esc(clip(r.prompt || `Turn ${r.turn}`, 60))}</span><span class="cc-badge">${esc(num(r.requests))} req</span><span class="cc-rq-tok">${esc(short(r.sentTokens))} <small>of ${esc(short(r.fullTokens))}</small></span><span class="cc-rq-save${r.savedPct > 0 ? ' cc-act-pos' : ''}">${r.savedPct > 0 ? `\u2212${esc(String(Math.round(r.savedPct)))}%` : 'full'}</span></summary>
+        <p class="cc-rq-meta">${esc([plural(r.steps, 'step'), r.summaryRequests ? plural(r.summaryRequests, 'summary').replace('summarys', 'summaries') : '', r.overflowRetries ? plural(r.overflowRetries, 'retry').replace('retrys', 'retries') : '', `saved ${num(r.savedTokens)} tokens`, (r.models || []).join(', '), msText(r.latencyMs)].filter(Boolean).join(' \u00b7 '))}</p>
+        <ol class="cc-rq-reqs">${reqs}</ol></details></li>`;
+    };
+    const turns = L.turns || [];
+    const openT = !!(panel.detailsOpen && panel.detailsOpen.rqturns);
+    return `<section class="cc-act cc-rq" data-slot="requests" aria-label="Turns and real requests"><h4 class="cc-act-h">Turns &amp; real requests ${infoBtn('requests')}</h4>${tip('requests')}${head}
+      <details class="cc-act-more" data-key="rqturns"${openT ? ' open' : ''}><summary>Per turn <span class="cc-act-count">${esc(num(turns.length))}</span></summary><ul class="cc-rq-turns">${turns.map(turnRow).join('')}</ul></details></section>`;
+  }
+
   /** Requests, the policy used and what it saved, then the window changes: the Activity tab. */
   function activityBlock() {
     const ps = policySummary();
@@ -599,6 +653,8 @@ const ContextTree = (() => {
     segment: 'A summary of exactly these turns, written once and never changed. R = its own range version. \u0394 = what it changed against earlier ranges. The box in front says whether this summary goes at all: untick it to leave the range\u2019s summary out of the next requests, tick it to always send it. Sum sends the summary (default), Raw sends the original turns instead, Both sends both. Open it to send single original turns.',
     ranges: 'Every range summary with its own version (R1, R2\u2026), the memory version it was built on, and what it changed against the earlier ranges.',
     data: 'Everything this chat\u2019s memory stores, as saved.',
+    tempSummary: 'A summary made on request: it stands in for the turns in its tag, which stay stored. Untick it to leave it out of the next request.',
+    requests: 'One message you send is one turn, but answering it can take many requests to the model: one per tool step, a retry when the window overflowed, and the summarizer\u2019s own requests. Full is what each request would carry with every item of this chat in; Sent is what really went after the checklist, memory and policy; Saved is the difference.',
     rolling: 'The summary that stands in for the turns before it when the window had to be compacted.',
     summary: 'The chat\u2019s running summary: goals, decisions, facts, files, tasks and ranges. Only the parts that fit the request are sent; each part is a row under Chat memory in the Checklist, coloured by whether it was sent, left out or is waiting behind \u201cshow more\u201d.',
     log: 'Every change to what the requests carry: who made it (you, the model or the engine), why, and how many tokens it saved.',
@@ -823,9 +879,12 @@ const ContextTree = (() => {
     (tt ? tt.calls : []).forEach((p, i) => { const k = i + 1; const cur = calls.get(k) || { node: null, part: null }; cur.part = p; calls.set(k, cur); });
     const total = [it, ...kids, ...results].filter(Boolean).reduce((a, x) => a + sentOf(x), 0);
     const count = calls.size + results.length;
+    // One turn, many requests: how many this turn really sent (open chat only).
+    const tr = !RK ? turnReqs(n) : null;
+    const reqBadge = tr ? `<span class="cc-badge cc-req-badge" title="${esc(`${plural(tr.requests, 'request')} for this turn \u00b7 ${num(tr.sentTokens)} of ${num(tr.fullTokens)} tokens sent \u00b7 ${tr.savedPct}% saved`)}">${esc(num(tr.requests))} req</span>` : '';
     const inner = open ? `<div class="cc-kids">${[...calls.keys()].sort((a, b) => a - b).map((k) => callNode(n, k, calls.get(k).node, calls.get(k).part, turnOut)).join('')}${results.map((r) => leafRow(r, `<button class="cc-link" type="button" data-open-result="${esc(String(r.id).replace(/^res\//, ''))}"${RK ? ` data-key="${esc(RK)}"` : ''}>Open</button>`)).join('')}${count ? '' : '<p class="cc-none">No tool calls</p>'}</div>` : '';
     return `<div class="cc-node cc-turn ct-state-${esc(st)}${tmark ? ' cc-m-' + tmark : ''}${ra.on ? ' cc-selected' : ''}" data-turn="${n}">
-      <div class="ct-item cc-row cc-g-turns cc-actrow" data-node="${esc(nid)}"${ra.attrs}${act.select ? ' tabindex="0"' : ''}>${selDot(ra.on)}${twisty(id, 'turn ' + n)}${it ? control(it) : `<span class="ct-sym">${SYMBOL.in}</span>`}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(title, 80))}</span>${count ? `<span class="cc-badge">${count}</span>` : ''}${newest ? '<span class="cc-badge">now</span>' : ''}<span class="ct-cost">${esc(short(total))}</span><button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(title, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button>${tmark && tmark !== 'out' ? markChip(tmark) : ''}${menuBtn('turn ' + n)}</div>
+      <div class="ct-item cc-row cc-g-turns cc-actrow" data-node="${esc(nid)}"${ra.attrs}${act.select ? ' tabindex="0"' : ''}>${selDot(ra.on)}${twisty(id, 'turn ' + n)}${it ? control(it) : `<span class="ct-sym">${SYMBOL.in}</span>`}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(title, 80))}</span>${count ? `<span class="cc-badge" title="Tool calls and results">${count}</span>` : ''}${reqBadge}${newest ? '<span class="cc-badge">now</span>' : ''}<span class="ct-cost">${esc(short(total))}</span><button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(title, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button>${tmark && tmark !== 'out' ? markChip(tmark) : ''}${menuBtn('turn ' + n)}</div>
       ${inner}
     </div>`;
   }
@@ -912,7 +971,7 @@ const ContextTree = (() => {
       inner = `<div class="cc-kids">${parts || raw || '<p class="cc-none">No tool calls</p>'}</div>`;
     }
     return `<div class="cc-node cc-covered${sendsRaw ? ' cc-raw-on' : ''}" data-covered="${n}">
-      <div class="cc-row cc-g-turns">${twisty(id, 'original turn ' + n)}${check}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(text, 70))}</span>${calls.length ? `<span class="cc-badge">${calls.length}</span>` : ''}${sendsRaw ? '<span class="cc-badge cc-raw-badge" title="The original goes to the model">raw</span>' : ''}<button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(text, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button>${tmark && tmark !== 'out' ? markChip(tmark) : ''}${menuBtn('turn ' + n)}</div>
+      <div class="cc-row cc-g-turns">${twisty(id, 'original turn ' + n)}${check}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(text, 70))}</span>${calls.length ? `<span class="cc-badge">${calls.length}</span>` : ''}${sendsRaw ? '<span class="cc-badge cc-raw-badge" title="The original goes to the model">raw</span>' : ''}<button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(text, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button></div>
       ${inner}
     </div>`;
   }
@@ -968,6 +1027,37 @@ const ContextTree = (() => {
     </div>`;
   }
 
+  /** Where a summary belongs and what it covers: the continuity summary
+   * (`sum/1-N`) right after turn N, the earlier-chat summary (`sum/chat`) above
+   * the first stored turn, a temporary summary (`tmp/...`) right after the last
+   * turn it stands in for. `turns` is what it covers, `tag` says it in words. */
+  function sumWhere(s, firstTurn) {
+    const r = rangeOf(s.id);
+    if (r) return { at: r[1] + 0.6, turns: rowRange(r[0], r[1]), tag: `Turns ${r[0] === r[1] ? r[0] : r[0] + '\u2013' + r[1]}`, src: 'Chat summary', info: 'rolling' };
+    if (s.id === 'sum/chat') {
+      const before = firstTurn < 1e9 ? firstTurn : 0;
+      return { at: 0.4, turns: [], tag: before > 1 ? `Before turn ${before}` : 'Earlier chat', src: 'Chat summary', info: 'rolling' };
+    }
+    const covers = Array.isArray(s.covers) ? s.covers.map(Number).filter((n) => n > 0).sort((a, b) => a - b) : [];
+    const by = s.madeBy === 'user' ? 'By you' : s.madeBy === 'model' ? 'By the agent' : s.madeBy ? 'By ' + s.madeBy : '';
+    if (covers.length) return { at: covers[covers.length - 1] + 0.55, turns: covers, tag: `Turn${covers.length === 1 ? '' : 's'} ${turnsText(covers)}`, src: by ? `Summary \u00b7 ${by}` : 'Summary', info: 'tempSummary' };
+    return { at: 1e9, turns: [], tag: 'Unplaced', src: by ? `Summary \u00b7 ${by}` : 'Summary', info: 'tempSummary' };
+  }
+  const rowRange = (a, b) => Array.from({ length: Math.max(0, Math.min(400, b - a + 1)) }, (_, i) => a + i);
+  /** A summary row, where its turns were: selectable, with its checkbox and a
+   * tag that says which turns it stands in for and who made it. */
+  function sumNode(s, w) {
+    const key = RK || activeKey();
+    const ra = rowAct({ kind: 'sum', key, node: s.id, a: w.turns.length ? w.turns[0] : '', b: w.turns.length ? w.turns[w.turns.length - 1] : '', label: s.title || w.tag, list: w.turns });
+    const st = stateOf(s);
+    const focus = s.focus ? `<span class="cc-sum-focus" title="Focus">${esc(clip(s.focus, 60))}</span>` : '';
+    const tag = `<span class="cc-sum-tag" title="${esc(w.src + ' of ' + w.tag.toLowerCase())}">${esc(w.tag)}</span>`;
+    return `<div class="cc-node cc-seg-node ct-kind-summary cc-sum ct-state-${esc(st)}${ra.on ? ' cc-selected' : ''}" data-summary="${esc(s.id)}">
+      <div class="ct-item cc-row cc-g-summary cc-actrow ct-state-${esc(st)}" data-node="${esc(s.id)}"${ra.attrs}${act.select ? ' tabindex="0"' : ''}>${selDot(ra.on)}${noTwisty}${control(s)}${tag}<span class="ct-title">${esc(clip(s.title || w.src, 70))}</span>${focus}<span class="cc-sum-src">${esc(w.src)}</span>${infoBtn(w.info)}<span class="ct-cost">${esc(costText(s))}</span>${menuBtn(w.src + ' ' + w.tag)}</div>
+      ${tip(w.info)}
+    </div>`;
+  }
+
   /** One conversation's stored items, sorted into the tree: its rules and
    * memory, and its turns in order with each range summary right after the
    * turns it covers. */
@@ -989,9 +1079,10 @@ const ContextTree = (() => {
     for (const [n, list] of parts) if (!turnNodes.has(n)) entries.push({ at: n, html: () => turnNode(n, null, list, results.get(n) || [], threadTurn(turns, n, ''), false) });
     for (const [n, list] of results) if (!turnNodes.has(n) && !parts.has(n)) entries.push({ at: n, html: () => turnNode(n, null, [], list, threadTurn(turns, n, ''), false) });
     segs.forEach((s, i) => entries.push({ at: (Number(s.toTurn) || 0) + 0.5, html: () => segmentNode(s, memNode, turns, i) }));
+    const firstTurn = Math.min(...[...turnNodes.keys(), ...parts.keys(), ...results.keys()], 1e9);
     for (const s of sums) {
-      const r = rangeOf(s.id);
-      entries.push({ at: r ? r[1] + 0.6 : 1e9, html: () => `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(s, infoBtn('rolling'))}${tip('rolling')}</div>` });
+      const w = sumWhere(s, firstTurn);
+      entries.push({ at: w.at, html: () => sumNode(s, w) });
     }
     entries.sort((a, b) => a.at - b.at);
     const nums = new Set([...turnNodes.keys(), ...parts.keys(), ...results.keys()]);
@@ -1298,9 +1389,9 @@ const ContextTree = (() => {
 
   /** Attributes that make a row selectable and give it a menu. */
   function rowAct(d) {
-    const id = d.kind === 'seg' ? `seg:${d.key || ''}:${d.rid}` : `turn:${d.key || ''}:${d.n}`;
+    const id = d.kind === 'seg' ? `seg:${d.key || ''}:${d.rid}` : d.kind === 'sum' ? `sum:${d.key || ''}:${d.node}` : `turn:${d.key || ''}:${d.n}`;
     const on = act.sel.has(id);
-    return { id, on, attrs: ` data-act-id="${esc(id)}" data-act-kind="${d.kind}" data-act-key="${esc(d.key || '')}" data-act-n="${esc(d.n || '')}" data-act-rid="${esc(d.rid || '')}" data-act-a="${esc(d.a || '')}" data-act-b="${esc(d.b || '')}" data-act-node="${esc(d.node || '')}" data-act-label="${esc(d.label || '')}"${act.select ? ` aria-selected="${on}"` : ''}` };
+    return { id, on, attrs: ` data-act-id="${esc(id)}" data-act-kind="${d.kind}" data-act-key="${esc(d.key || '')}" data-act-n="${esc(d.n || '')}" data-act-rid="${esc(d.rid || '')}" data-act-a="${esc(d.a || '')}" data-act-b="${esc(d.b || '')}" data-act-node="${esc(d.node || '')}" data-act-label="${esc(d.label || '')}"${d.list ? ` data-act-list="${esc(d.list.join(','))}"` : ''}${act.select ? ` aria-selected="${on}"` : ''}` };
   }
   const selDot = (on) => (act.select ? `<span class="cc-sel-dot${on ? ' on' : ''}" aria-hidden="true"><svg viewBox="0 0 24 24" width="12" height="12"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>` : '');
   const menuBtn = (label) => `<button class="cc-kebab" type="button" data-row-menu="1" aria-haspopup="menu" aria-label="${esc('More actions for ' + label)}">${MENU_ICON}</button>`;
@@ -1310,9 +1401,10 @@ const ContextTree = (() => {
   function rowData(el) {
     const d = el && el.dataset;
     if (!d || !d.actId) return null;
-    return { id: d.actId, kind: d.actKind, key: d.actKey || activeKey(), n: Number(d.actN) || 0, rid: d.actRid, a: Number(d.actA) || 0, b: Number(d.actB) || 0, node: d.actNode, label: d.actLabel };
+    const list = d.actList ? d.actList.split(',').map(Number).filter((n) => n > 0) : null;
+    return { id: d.actId, kind: d.actKind, key: d.actKey || activeKey(), n: Number(d.actN) || 0, rid: d.actRid, a: Number(d.actA) || 0, b: Number(d.actB) || 0, node: d.actNode, label: d.actLabel, list };
   }
-  const rowTurns = (r) => (r.kind === 'seg' ? Array.from({ length: Math.max(0, r.b - r.a + 1) }, (_, i) => r.a + i) : [r.n]);
+  const rowTurns = (r) => (r.kind === 'seg' ? Array.from({ length: Math.max(0, r.b - r.a + 1) }, (_, i) => r.a + i) : r.kind === 'sum' ? (r.list || []) : [r.n]);
 
   /* the menu */
   function menuItems(r) {
@@ -1328,6 +1420,14 @@ const ContextTree = (() => {
       items.push({ sep: true });
       items.push(p === 'hidden' ? { k: 'unhide', icon: 'show', label: 'Show in checklist', hint: 'Back in the list, chosen by relevance' } : { k: 'hide', icon: 'hide', label: 'Hide from checklist', hint: 'Not sent and kept off the list', tone: 'hidden' });
       items.push({ k: 'delete', icon: 'del', label: 'Delete summary', hint: 'Removed from the checklist and the chat', danger: true });
+    } else if (r.kind === 'sum') {
+      const it = rowItem(r);
+      const st = it ? stateOf(it) : 'in';
+      const span = rowTurns(r);
+      if (span.length) items.push({ k: 'summarize', icon: 'summarize', label: 'Summarize these turns again', hint: `One fresh summary of turns ${turnsText(span)}` });
+      items.push({ sep: true });
+      if (it && switchable(it)) items.push(st === 'out' ? { k: 'turn-in', icon: 'always', label: 'Send again', hint: 'Back in the window', tone: 'always' } : { k: 'turn-out', icon: 'out', label: 'Leave out', hint: 'Not sent, stays stored', tone: 'out' });
+      if (span.length) items.push({ k: 'go', icon: 'go', label: `Go to turn ${span[0]} in chat`, hint: '' });
     } else {
       const it = rowItem(r);
       const st = it ? stateOf(it) : 'in';
@@ -1432,7 +1532,7 @@ const ContextTree = (() => {
       paint(true);
       return;
     }
-    if (k === 'go') { const r = rows[0]; goToTurn(r.kind === 'seg' ? r.a : r.n, '', r.key && r.key !== activeKey() ? r.key : ''); return; }
+    if (k === 'go') { const r = rows[0]; const n = r.kind === 'seg' ? r.a : r.kind === 'sum' ? (rowTurns(r)[0] || 0) : r.n; if (n) goToTurn(n, '', r.key && r.key !== activeKey() ? r.key : ''); return; }
     if (k === 'summarize') { summarizeRows(rows); return; }
     if (/^pick-/.test(k)) {
       const action = { 'pick-in': 'include', 'pick-auto': 'auto', 'pick-out': 'exclude' }[k];
@@ -1450,6 +1550,7 @@ const ContextTree = (() => {
     if (k === 'hide') {
       for (const r of rows) {
         if (r.kind === 'seg') segSet(r, 'hide');
+        else if (r.kind === 'sum') continue;
         else { const it = rowItem(r); if (it && switchable(it)) { setHiddenTurn(r.key, r.n, true); setItem(it.id, false, r.key && r.key !== activeKey() ? r.key : ''); } }
       }
       say(rows.length === 1 ? 'Hidden from the checklist and left out' : `${rows.length} rows hidden and left out`);
@@ -1459,6 +1560,7 @@ const ContextTree = (() => {
     if (k === 'unhide') {
       for (const r of rows) {
         if (r.kind === 'seg') segSet(r, 'unhide');
+        else if (r.kind === 'sum') continue;
         else { setHiddenTurn(r.key, r.n, false); const it = rowItem(r); if (it && switchable(it)) setItem(it.id, true, r.key && r.key !== activeKey() ? r.key : ''); }
       }
       endSelect();
@@ -1541,7 +1643,7 @@ const ContextTree = (() => {
     const other = rows.find((r) => r.key && r.key !== key);
     if (other) { say('Open that chat to summarize its turns.', 'error'); return; }
     const nums = [...new Set(rows.flatMap(rowTurns))].sort((a, b) => a - b);
-    if (!nums.length) return;
+    if (!nums.length) { say('Select a turn, a range or a summary of turns to summarize.', 'error'); return; }
     let rt = null;
     try { rt = appRef && appRef.chat && appRef.chat.main; } catch (e) { rt = null; }
     if (!rt || typeof rt.append !== 'function') { say('The chat is not ready to summarize yet.', 'error'); return; }
@@ -1774,7 +1876,7 @@ const ContextTree = (() => {
 
   /** Activity: the selection breakdown, then requests, policy, savings and window changes. */
   function tabActivity() {
-    return `${errorNote()}${selectionSummary()}${activityBlock()}`;
+    return `${errorNote()}${selectionSummary()}${requestsBlock()}${activityBlock()}`;
   }
 
   function tabSettings() {
@@ -2335,7 +2437,7 @@ const ContextTree = (() => {
           return base(event);
         };
         if (typeof runtime.on === 'function') {
-          runtime.on('main', () => { state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '' }; pendingSet = new Map(); convs.clear(); attachToggles(); refresh(); });
+          runtime.on('main', () => { state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '', memory: null, requests: null }; pendingSet = new Map(); convs.clear(); attachToggles(); refresh(); });
           // The composer can be rebuilt (a chat switch): keep the chip there.
           runtime.on('threads', () => attachToggles());
         }
