@@ -530,31 +530,38 @@ const ContextTree = (() => {
     const L = state.requests;
     const t = L && L.total;
     if (!t || !t.requests) return '';
-    const tile = (k, v, sub, cls = '') => `<div class="cc-act-tile ${cls}"><dt>${esc(k)}</dt><dd>${esc(v)}</dd>${sub ? `<span>${esc(sub)}</span>` : ''}</div>`;
-    const io = t.inputTokens || t.outputTokens ? `Provider: ${short(t.inputTokens)} in \u00b7 ${short(t.outputTokens)} out` : '';
-    const head = `<dl class="cc-act-tiles">
-      ${tile('Turns', num(t.turns), 'messages you sent')}
-      ${tile('Real requests', num(t.requests), `${t.requestsPerTurn} per turn${t.summaryRequests ? ` \u00b7 ${plural(t.summaryRequests, 'summary')}` : ''}`.replace('summarys', 'summaries'))}
-      ${tile('Tokens sent', short(t.sentTokens), `of ${short(t.fullTokens)} full`)}
-      ${tile('Saved', `${t.savedPct}%`, `${short(t.savedTokens)} tokens`, 'cc-act-hero')}
-    </dl>${io ? `<p class="cc-act-cap">${esc(io)}${t.overflowRetries ? ` \u00b7 ${esc(plural(t.overflowRetries, 'overflow retry'))}`.replace('retrys', 'retries') : ''}</p>` : ''}`;
+    const pct = (v) => `\u2212${Math.round(v)}%`;
+    const stat = (k, title, v, sub, cls = '') => `<li class="cc-rq-stat ${cls}" title="${esc(title)}">${svgI(k, 13)}<b>${v}</b>${sub ? `<small>${sub}</small>` : ''}</li>`;
+    const head = `<ul class="cc-rq-strip" aria-label="Chat totals">
+      ${stat('chat', `${plural(t.turns, 'turn')} (messages you sent)`, esc(num(t.turns)))}
+      ${stat('bolt', `${plural(t.requests, 'real request')} \u00b7 ${t.requestsPerTurn} per turn`, esc(num(t.requests)))}
+      ${stat('up', `${num(t.sentTokens)} tokens sent of ${num(t.fullTokens)} full`, esc(short(t.sentTokens)), `/${esc(short(t.fullTokens))}`)}
+      ${stat('down', `${t.savedPct}% saved \u00b7 ${num(t.savedTokens)} tokens`, esc(`${t.savedPct}%`), '', 'cc-rq-hero')}
+    </ul>`;
+    const extra = [
+      t.inputTokens || t.outputTokens ? mi('io', `Provider: ${num(t.inputTokens)} input / ${num(t.outputTokens)} output tokens`, `${short(t.inputTokens)}/${short(t.outputTokens)}`) : '',
+      t.summaryRequests ? mi('sum', `${t.summaryRequests} summarizer request${t.summaryRequests === 1 ? '' : 's'}`, t.summaryRequests, 'cc-mi-summ') : '',
+      t.overflowRetries ? mi('retry', `${t.overflowRetries} retr${t.overflowRetries === 1 ? 'y' : 'ies'} after the window overflowed`, t.overflowRetries, 'cc-mi-bad') : '',
+    ].filter(Boolean).join('');
     const turnRow = (r) => {
       const key = 'rq/' + r.turn;
       const open = !!(panel.detailsOpen && panel.detailsOpen[key]);
       const reqs = (r.list || []).map((q) => {
-        const what = q.kind === 'summary' ? 'Summary' : q.status === 'overflow' ? `Step ${q.step} \u00b7 retry` : `Step ${q.step}`;
-        const tok = q.fullTokens == null ? `${short(q.sentTokens)}` : `${short(q.sentTokens)} <small>of ${short(q.fullTokens)}</small>`;
-        const sv = q.kind === 'summary' ? '<span class="cc-rq-save">cost</span>' : q.savedPct > 0 ? `<span class="cc-rq-save cc-act-pos">\u2212${esc(String(Math.round(q.savedPct)))}%</span>` : '<span class="cc-rq-save">full</span>';
-        return `<li class="cc-rq-req${q.status === 'overflow' ? ' cc-rq-bad' : ''}"><span class="cc-rq-n">#${esc(num(q.n))}</span><span class="cc-rq-what">${esc(what)}${q.policy ? ` <small>${esc(q.policy)}</small>` : ''}</span><span class="cc-rq-tok">${tok}</span>${sv}<span class="cc-rq-io" title="Provider input / output tokens">${q.inputTokens ? esc(short(q.inputTokens)) + ' / ' + esc(short(q.outputTokens)) : '\u2014'}</span><span class="cc-rq-ms">${esc(msText(q.latencyMs))}</span></li>`;
+        const what = q.kind === 'summary' ? mi('sum', 'Summarizer request', null, 'cc-mi-summ')
+          : q.status === 'overflow' ? mi('retry', `Step ${q.step}: retry after the window overflowed`, q.step, 'cc-mi-bad')
+          : `<span class="cc-rq-step" title="Step ${esc(String(q.step))}">${esc(String(q.step))}</span>`;
+        const tok = q.fullTokens == null ? `${short(q.sentTokens)}` : `${short(q.sentTokens)}<small>/${short(q.fullTokens)}</small>`;
+        const sv = q.kind === 'summary' ? '<span class="cc-rq-save" title="Extra cost of the summary">+</span>' : q.savedPct > 0 ? `<span class="cc-rq-save cc-act-pos" title="Saved against full">${esc(pct(q.savedPct))}</span>` : '<span class="cc-rq-save" title="Sent in full">\u2014</span>';
+        return `<li class="cc-rq-req${q.status === 'overflow' ? ' cc-rq-bad' : ''}"><span class="cc-rq-n" title="Request ${esc(num(q.n))}">${esc(num(q.n))}</span><span class="cc-rq-what">${what}${q.policy ? ` <small>${esc(q.policy)}</small>` : ''}</span><span class="cc-rq-tok" title="Tokens sent / full">${tok}</span>${sv}<span class="cc-rq-io" title="Provider input / output tokens">${q.inputTokens ? esc(short(q.inputTokens)) + '/' + esc(short(q.outputTokens)) : '\u2014'}</span><span class="cc-rq-ms" title="Response time">${esc(msText(q.latencyMs))}</span></li>`;
       }).join('');
-      return `<li class="cc-rq-turn"><details data-key="${esc(key)}"${open ? ' open' : ''}><summary><span class="cc-num">${esc(String(r.turn))}</span><span class="cc-rq-prompt">${esc(clip(r.prompt || `Turn ${r.turn}`, 60))}</span><span class="cc-badge">${esc(num(r.requests))} req</span><span class="cc-rq-tok">${esc(short(r.sentTokens))} <small>of ${esc(short(r.fullTokens))}</small></span><span class="cc-rq-save${r.savedPct > 0 ? ' cc-act-pos' : ''}">${r.savedPct > 0 ? `\u2212${esc(String(Math.round(r.savedPct)))}%` : 'full'}</span></summary>
+      return `<li class="cc-rq-turn"><details data-key="${esc(key)}"${open ? ' open' : ''}><summary><span class="cc-num">${esc(String(r.turn))}</span><span class="cc-rq-prompt" title="${esc(r.prompt || `Turn ${r.turn}`)}">${esc(clip(r.prompt || `Turn ${r.turn}`, 200))}</span>${mi('bolt', `${plural(r.requests, 'request')} for this turn`, num(r.requests), 'cc-mi-req')}<span class="cc-rq-tok" title="${esc(`${num(r.sentTokens)} sent of ${num(r.fullTokens)} full`)}">${esc(short(r.sentTokens))}<small>/${esc(short(r.fullTokens))}</small></span><span class="cc-rq-save${r.savedPct > 0 ? ' cc-act-pos' : ''}" title="${esc(`Saved ${num(r.savedTokens)} tokens`)}">${r.savedPct > 0 ? esc(pct(r.savedPct)) : '\u2014'}</span></summary>
         <p class="cc-rq-meta">${esc([plural(r.steps, 'step'), r.summaryRequests ? plural(r.summaryRequests, 'summary').replace('summarys', 'summaries') : '', r.overflowRetries ? plural(r.overflowRetries, 'retry').replace('retrys', 'retries') : '', `saved ${num(r.savedTokens)} tokens`, (r.models || []).join(', '), msText(r.latencyMs)].filter(Boolean).join(' \u00b7 '))}</p>
         <ol class="cc-rq-reqs">${reqs}</ol></details></li>`;
     };
     const turns = L.turns || [];
     const openT = !!(panel.detailsOpen && panel.detailsOpen.rqturns);
-    return `<section class="cc-act cc-rq" data-slot="requests" aria-label="Turns and real requests"><h4 class="cc-act-h">Turns &amp; real requests ${infoBtn('requests')}</h4>${tip('requests')}${head}
-      <details class="cc-act-more" data-key="rqturns"${openT ? ' open' : ''}><summary>Per turn <span class="cc-act-count">${esc(num(turns.length))}</span></summary><ul class="cc-rq-turns">${turns.map(turnRow).join('')}</ul></details></section>`;
+    return `<section class="cc-act cc-rq" data-slot="requests" aria-label="Turns and real requests"><h4 class="cc-act-h">${svgI('bolt', 13)} Requests ${infoBtn('requests')}</h4>${tip('requests')}${head}${extra ? `<p class="cc-rq-extra">${extra}</p>` : ''}
+      <details class="cc-act-more" data-key="rqturns"${openT ? ' open' : ''}><summary>${svgI('chat', 12)} <span class="cc-act-count">${esc(num(turns.length))}</span></summary><ul class="cc-rq-turns">${turns.map(turnRow).join('')}</ul></details></section>`;
   }
 
   /** Requests, the policy used and what it saved, then the window changes: the Activity tab. */
@@ -647,14 +654,14 @@ const ContextTree = (() => {
   const tabList = () => BASE_TABS.filter(([id]) => id !== 'policy' || policyOn());
   const INFO = {
     meter: 'Tokens the next request carries, by kind, against the model\u2019s window. Below, tick an item to include it and untick to leave it out; nothing is deleted. \u25cf in \u00b7 \u25cb out \u00b7 \u25d0 note only \u00b7 \u2726 replaced by a summary \u00b7 \u26bf locked.',
-    turn: 'Every stored chat, newest first. Open one to see its turns, each tool call with its result, and its range summaries; tick a box to keep an item in that chat\'s context or leave it out. The arrow opens the chat or jumps to the turn.',
+    turn: 'Every stored chat, newest first. Open one to see its turns, each tool call with its result, and its range summaries; tick a box to keep an item in that chat\'s context or leave it out. The arrow opens the chat or jumps to the turn. On a row: \u26a1 real requests, the wrench tool calls, \u03a3 and a violet bar a summarized turn, a struck-through title a left-out item; the number on the right is the tokens it sends. Long titles scroll sideways.',
     call: 'One tool call with its result. It can be left out on its own; the rest of the turn stays.',
     result: 'A large tool result kept in storage. Left out, the model sees only its id and can read it back.',
     segment: 'A summary of exactly these turns, written once and never changed. R = its own range version. \u0394 = what it changed against earlier ranges. The box in front says whether this summary goes at all: untick it to leave the range\u2019s summary out of the next requests, tick it to always send it. Sum sends the summary (default), Raw sends the original turns instead, Both sends both. Open it to send single original turns.',
     ranges: 'Every range summary with its own version (R1, R2\u2026), the memory version it was built on, and what it changed against the earlier ranges.',
     data: 'Everything this chat\u2019s memory stores, as saved.',
-    tempSummary: 'A summary made on request: it stands in for the turns in its tag, which stay stored. Untick it to leave it out of the next request.',
-    requests: 'One message you send is one turn, but answering it can take many requests to the model: one per tool step, a retry when the window overflowed, and the summarizer\u2019s own requests. Full is what each request would carry with every item of this chat in; Sent is what really went after the checklist, memory and policy; Saved is the difference.',
+    tempSummary: 'A summary made on request: it stands in for the turns in its tag, which stay stored. The person icon means you made it, the spark that the agent did, the target shows its focus. Untick it to leave it out of the next request.',
+    requests: 'One message you send is one turn (\u25a2), but answering it can take many real requests to the model (\u26a1): one per tool step, a retry when the window overflowed (\u21bb); a turn shows \u26a1 only when it took more than one, and the summarizer\u2019s own requests (\u03a3). \u2191 is what was really sent, after the checklist, memory and policy, out of the full chat; \u2193 is what was saved. Tap a turn for its requests: number, step, sent/full, saved, provider in/out and response time.',
     rolling: 'The summary that stands in for the turns before it when the window had to be compacted.',
     summary: 'The chat\u2019s running summary: goals, decisions, facts, files, tasks and ranges. Only the parts that fit the request are sent; each part is a row under Chat memory in the Checklist, coloured by whether it was sent, left out or is waiting behind \u201cshow more\u201d.',
     log: 'Every change to what the requests carry: who made it (you, the model or the engine), why, and how many tokens it saved.',
@@ -783,6 +790,34 @@ const ContextTree = (() => {
   };
   const noTwisty = '<span class="cc-tw cc-tw-none" aria-hidden="true"></span>';
   const GO_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  /* Minimal row glyphs: colour and a small icon stand in for words; the words
+   * live in the tooltip (title / aria-label), the (i) tip and the menu. */
+  const MI = {
+    bolt: '<path d="M13 3L5 14h6l-1 7 8-11h-6z"/>',
+    tool: '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-.5-.5-2.5z"/>',
+    user: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c1-3.5 3.8-5 7-5s6 1.5 7 5"/>',
+    spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+    stack: '<path d="M4 6h16M4 11h16M4 16h10"/>',
+    focus: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/>',
+    raw: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/>',
+    delta: '<path d="M12 4L3 20h18z"/>',
+    alert: '<circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16v.5"/>',
+    retry: '<path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/>',
+    sum: '<path d="M17 5H7l6 7-6 7h10"/>',
+    chat: '<path d="M4 5h16v11H9l-5 4z"/>',
+    up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+    down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+    io: '<path d="M7 20V5M3 9l4-4 4 4M17 4v15M13 15l4 4 4-4"/>',
+    always: '<path d="M12 3v13M7 11l5 5 5-5"/><path d="M5 21h14"/>',
+    hide: '<path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c5 0 9 4.5 10 7-.4 1-1.3 2.4-2.6 3.7M6.4 6.4C4.3 7.8 2.7 10 2 12c1 2.5 5 7 10 7 1.6 0 3-.4 4.3-1"/>',
+    eye: '<path d="M2 12c1-2.5 5-7 10-7s9 4.5 10 7c-1 2.5-5 7-10 7S3 14.5 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    archive: '<path d="M3 4h18v4H3zM5 8v12h14V8M10 12h4"/>',
+  };
+  const svgI = (k, sz = 12) => `<svg viewBox="0 0 24 24" width="${sz}" height="${sz}" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${MI[k] || ''}</svg>`;
+  /** A small glyph, optionally with a number beside it; `title` says it in words. */
+  const mi = (k, title, n, cls = '') => `<span class="cc-mi cc-mi-${k}${cls ? ' ' + cls : ''}" role="img" title="${esc(title)}" aria-label="${esc(title)}">${svgI(k)}${n != null && n !== '' ? `<b>${esc(String(n))}</b>` : ''}</span>`;
+  /** The glyph that says who made a summary. */
+  const srcIco = (w) => (w.by === 'user' ? 'user' : w.by ? 'spark' : 'stack');
   /** The chat a "go to" button opens, when it is not the open one. */
   const goKey = () => (RK && RK !== activeKey() ? ` data-go-key="${esc(RK)}"` : '');
 
@@ -797,7 +832,7 @@ const ContextTree = (() => {
   }
   function costText(it) {
     const st = stateOf(it);
-    return st === 'in' ? short(it.tokens) : st === 'note' ? `${short(noteCost(it))} note` : st === 'temp' ? 'summary' : 'out';
+    return st === 'in' ? short(it.tokens) : st === 'note' ? short(noteCost(it)) : '\u2013';
   }
 
   /** The token use by colour group: the old "Token breakdown", now one bar. */
@@ -825,7 +860,7 @@ const ContextTree = (() => {
   function leafRow(it, extra = '') {
     const st = stateOf(it);
     return `<div class="ct-item cc-row cc-g-${groupOf(it) || 'memory'} ct-state-${esc(st)}${kindOf(it) === 'summary' ? ' ct-kind-summary' : ''}" data-node="${esc(it.id)}">
-      ${noTwisty}${control(it)}<span class="ct-title">${esc(it.title || it.id)}</span>${extra}<span class="ct-cost">${esc(costText(it))}</span></div>`;
+      ${noTwisty}${control(it)}<span class="ct-title" title="${esc(it.title || it.id)}">${esc(it.title || it.id)}</span>${extra}<span class="ct-cost" title="${esc(STATE_LABEL[st] || st)}">${esc(costText(it))}</span></div>`;
   }
 
   /** A collapsible group of plain items (rules, memory, anything else). */
@@ -856,7 +891,7 @@ const ContextTree = (() => {
       </div>` : '';
     const ctl = node ? control(node) : `<span class="ct-sym" title="Follows its turn">${SYMBOL[st] || '\u00b7'}</span>`;
     return `<div class="cc-node cc-call ct-state-${esc(st)}" data-call="${esc(n + '/' + k)}">
-      <div class="ct-item cc-row cc-g-calls" data-node="${esc(node ? node.id : `turn/t${n}/call/${k}`)}">${twisty(id, name)}${ctl}<span class="ct-title"><span class="cc-tool">${esc(name)}</span> <span class="cc-args">${esc(clip(args.replace(/\s+/g, ' '), 60))}</span></span>${err ? '<span class="cc-badge cc-bad">error</span>' : ''}<span class="ct-cost">${node ? esc(costText(node)) : ''}</span></div>
+      <div class="ct-item cc-row cc-g-calls" data-node="${esc(node ? node.id : `turn/t${n}/call/${k}`)}">${twisty(id, name)}${ctl}<span class="ct-title"><span class="cc-tool">${esc(name)}</span> <span class="cc-args">${esc(clip(args.replace(/\s+/g, ' '), 60))}</span></span><span class="cc-meta">${err ? mi('alert', 'Tool error', null, 'cc-mi-bad') : ''}</span><span class="ct-cost">${node ? esc(costText(node)) : ''}</span></div>
       ${body}
     </div>`;
   }
@@ -881,10 +916,11 @@ const ContextTree = (() => {
     const count = calls.size + results.length;
     // One turn, many requests: how many this turn really sent (open chat only).
     const tr = !RK ? turnReqs(n) : null;
-    const reqBadge = tr ? `<span class="cc-badge cc-req-badge" title="${esc(`${plural(tr.requests, 'request')} for this turn \u00b7 ${num(tr.sentTokens)} of ${num(tr.fullTokens)} tokens sent \u00b7 ${tr.savedPct}% saved`)}">${esc(num(tr.requests))} req</span>` : '';
-    const inner = open ? `<div class="cc-kids">${[...calls.keys()].sort((a, b) => a - b).map((k) => callNode(n, k, calls.get(k).node, calls.get(k).part, turnOut)).join('')}${results.map((r) => leafRow(r, `<button class="cc-link" type="button" data-open-result="${esc(String(r.id).replace(/^res\//, ''))}"${RK ? ` data-key="${esc(RK)}"` : ''}>Open</button>`)).join('')}${count ? '' : '<p class="cc-none">No tool calls</p>'}</div>` : '';
+    const reqBadge = tr && tr.requests > 1 ? mi('bolt', `${plural(tr.requests, 'request')} for this turn \u00b7 ${num(tr.sentTokens)} of ${num(tr.fullTokens)} tokens sent \u00b7 ${tr.savedPct}% saved`, num(tr.requests), 'cc-mi-req') : '';
+    const markI = tmark === 'hidden' ? mi('hide', 'Hidden from the checklist') : '';
+    const inner = open ? `<div class="cc-kids">${[...calls.keys()].sort((a, b) => a - b).map((k) => callNode(n, k, calls.get(k).node, calls.get(k).part, turnOut)).join('')}${results.map((r) => leafRow(r, `<button class="cc-go" type="button" data-open-result="${esc(String(r.id).replace(/^res\//, ''))}"${RK ? ` data-key="${esc(RK)}"` : ''} aria-label="Open result" title="Open result">${svgI('eye', 14)}</button>`)).join('')}${count ? '' : '<p class="cc-none">No tool calls</p>'}</div>` : '';
     return `<div class="cc-node cc-turn ct-state-${esc(st)}${tmark ? ' cc-m-' + tmark : ''}${ra.on ? ' cc-selected' : ''}" data-turn="${n}">
-      <div class="ct-item cc-row cc-g-turns cc-actrow" data-node="${esc(nid)}"${ra.attrs}${act.select ? ' tabindex="0"' : ''}>${selDot(ra.on)}${twisty(id, 'turn ' + n)}${it ? control(it) : `<span class="ct-sym">${SYMBOL.in}</span>`}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(title, 80))}</span>${count ? `<span class="cc-badge" title="Tool calls and results">${count}</span>` : ''}${reqBadge}${newest ? '<span class="cc-badge">now</span>' : ''}<span class="ct-cost">${esc(short(total))}</span><button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(title, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button>${tmark && tmark !== 'out' ? markChip(tmark) : ''}${menuBtn('turn ' + n)}</div>
+      <div class="ct-item cc-row cc-g-turns cc-actrow" data-node="${esc(nid)}"${ra.attrs}${act.select ? ' tabindex="0"' : ''}>${selDot(ra.on)}${twisty(id, 'turn ' + n)}${it ? control(it) : `<span class="ct-sym">${SYMBOL.in}</span>`}<span class="cc-num">${n}</span><span class="ct-title" title="${esc(title)}">${esc(clip(title, 240))}</span><span class="cc-meta">${markI}${count ? mi('tool', plural(count, 'tool call or result'), count) : ''}${reqBadge}${newest ? '<span class="cc-now" role="img" title="Latest turn" aria-label="Latest turn"><svg viewBox="0 0 8 8" width="7" height="7" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg></span>' : ''}</span><span class="ct-cost" title="${esc(tmark === 'summarized' ? 'Summarized: a summary stands in for this turn' : `${num(total)} tokens sent`)}">${esc(total ? short(total) : '\u2013')}</span><button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(title, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button>${menuBtn('turn ' + n)}</div>
       ${inner}
     </div>`;
   }
@@ -964,14 +1000,14 @@ const ContextTree = (() => {
         const args = p.argsText || asText(p.args != null ? p.args : p.input);
         const res = p.result != null ? asText(p.result) : '';
         const err = p.isError;
-        return `<div class="cc-node cc-call" data-orig-call="${n}/${i + 1}"><div class="cc-row cc-g-calls">${twisty(cid, name)}<span class="ct-sym" title="Follows its turn">${sendsRaw ? SYMBOL.in : SYMBOL.temp}</span><span class="ct-title"><span class="cc-tool">${esc(name)}</span> <span class="cc-args">${esc(clip(String(args || '').replace(/\s+/g, ' '), 60))}</span></span>${err ? '<span class="cc-badge cc-bad">error</span>' : ''}</div>
+        return `<div class="cc-node cc-call" data-orig-call="${n}/${i + 1}"><div class="cc-row cc-g-calls">${twisty(cid, name)}<span class="ct-sym" title="Follows its turn">${sendsRaw ? SYMBOL.in : SYMBOL.temp}</span><span class="ct-title"><span class="cc-tool">${esc(name)}</span> <span class="cc-args">${esc(clip(String(args || '').replace(/\s+/g, ' '), 60))}</span></span><span class="cc-meta">${err ? mi('alert', 'Tool error', null, 'cc-mi-bad') : ''}</span></div>
           ${o ? `<div class="cc-detail">${args && args !== '{}' ? `<div class="cc-detail-k">Input</div><pre class="cc-pre">${esc(clip(args, 800))}</pre>` : ''}<div class="cc-detail-k">Result${err ? ' (error)' : ''}</div><pre class="cc-pre${err ? ' cc-err' : ''}">${res ? esc(clip(res, 2400)) : '\u2014'}</pre></div>` : ''}</div>`;
       }).join('');
       const raw = !calls.length && orig && orig.text ? `<pre class="cc-pre">${esc(clip(orig.text, 2400))}</pre>` : '';
       inner = `<div class="cc-kids">${parts || raw || '<p class="cc-none">No tool calls</p>'}</div>`;
     }
     return `<div class="cc-node cc-covered${sendsRaw ? ' cc-raw-on' : ''}" data-covered="${n}">
-      <div class="cc-row cc-g-turns">${twisty(id, 'original turn ' + n)}${check}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(text, 70))}</span>${calls.length ? `<span class="cc-badge">${calls.length}</span>` : ''}${sendsRaw ? '<span class="cc-badge cc-raw-badge" title="The original goes to the model">raw</span>' : ''}<button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(text, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button></div>
+      <div class="cc-row cc-g-turns">${twisty(id, 'original turn ' + n)}${check}<span class="cc-num">${n}</span><span class="ct-title" title="${esc(text)}">${esc(clip(text, 240))}</span><span class="cc-meta">${calls.length ? mi('tool', plural(calls.length, 'tool call'), calls.length) : ''}${sendsRaw ? mi('raw', 'The original goes to the model', null, 'cc-mi-raw') : ''}</span><button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(text, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button></div>
       ${inner}
     </div>`;
   }
@@ -1011,6 +1047,7 @@ const ContextTree = (() => {
       const byRange = mode === 'raw' || mode === 'both';
       const meta = [`R${rev}`, seg.baseVersion ? `built on v${seg.baseVersion}` : '', seg.topic ? `#${seg.topic}` : '', seg.createdAt ? when(seg.createdAt) : ''].filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join('');
       inner = `<div class="cc-detail cc-g-summary">
+        <div class="cc-seg-ctl"><span class="cc-rev" title="Range version">R${rev}</span>${modes}${infoBtn('segment:' + a + '-' + b)}</div>
         ${seg.title ? `<p class="cc-seg-title">${esc(seg.title)}</p>` : ''}
         <p class="cc-seg-text">${esc(seg.summary || '')}</p>
         <p class="cc-seg-meta">${meta}</p>
@@ -1022,8 +1059,8 @@ const ContextTree = (() => {
     const st = mode === 'raw' || !incOn ? 'out' : (memNode ? stateOf(memNode) : 'in');
     const picked = mode === 'summary' ? [...raw.turns].filter((n) => n >= a && n <= b).length : 0;
     return `<div class="cc-node cc-seg-node ct-kind-summary ct-state-${esc(st)} cc-mode-${esc(mode)} cc-m-${esc(smark)}${ra.on ? ' cc-selected' : ''}" data-segment="${a}-${b}" data-rev="${rev}">
-      <div class="cc-row cc-g-summary cc-actrow"${ra.attrs}${act.select ? ' tabindex="0"' : ''}>${selDot(ra.on)}${twisty(id, `summary of turns ${a} to ${b}`)}${incBox}<span class="cc-rev" title="Range version">R${rev}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 60))}</span>${nChg ? `<span class="cc-badge cc-chg-badge" title="${nChg} change${nChg === 1 ? '' : 's'} against earlier ranges">\u0394${nChg}</span>` : ''}${picked ? `<span class="cc-badge cc-raw-badge" title="Original turns sent beside the summary">+${picked}</span>` : ''}${smark === 'hidden' || smark === 'out' || smark === 'always' ? markChip(smark) : ''}${modes}${infoBtn('segment:' + a + '-' + b)}${menuBtn(`summary of turns ${a} to ${b}`)}</div>
-      ${tip('segment:' + a + '-' + b)}${inner}
+      <div class="cc-row cc-g-summary cc-actrow"${ra.attrs}${act.select ? ' tabindex="0"' : ''}>${selDot(ra.on)}${twisty(id, `summary of turns ${a} to ${b}`)}${incBox}<span class="cc-num" title="${esc(`Summary of turns ${a}\u2013${b} \u00b7 R${rev}`)}">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title" title="${esc(seg.title || seg.topic || seg.summary || 'Summary')}">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 240))}</span><span class="cc-meta">${mode !== 'summary' ? mi('raw', mode === 'raw' ? 'Sends the original turns instead' : 'Sends the summary and the original turns', null, 'cc-mi-raw') : ''}${nChg ? mi('delta', `${nChg} change${nChg === 1 ? '' : 's'} against earlier ranges`, nChg, 'cc-mi-summ') : ''}${picked ? mi('raw', `${picked} original turn${picked === 1 ? '' : 's'} sent beside the summary`, '+' + picked, 'cc-mi-raw') : ''}${smark === 'always' ? mi('always', 'Always sent', null, 'cc-mi-always') : smark === 'hidden' ? mi('hide', 'Hidden from the checklist') : ''}</span>${menuBtn(`summary of turns ${a} to ${b}`)}</div>
+      ${inner}${open ? tip('segment:' + a + '-' + b) : ''}
     </div>`;
   }
 
@@ -1033,15 +1070,16 @@ const ContextTree = (() => {
    * turn it stands in for. `turns` is what it covers, `tag` says it in words. */
   function sumWhere(s, firstTurn) {
     const r = rangeOf(s.id);
-    if (r) return { at: r[1] + 0.6, turns: rowRange(r[0], r[1]), tag: `Turns ${r[0] === r[1] ? r[0] : r[0] + '\u2013' + r[1]}`, src: 'Chat summary', info: 'rolling' };
+    if (r) return { at: r[1] + 0.6, turns: rowRange(r[0], r[1]), tag: `${r[0] === r[1] ? r[0] : r[0] + '\u2013' + r[1]}`, long: `Turns ${r[0] === r[1] ? r[0] : r[0] + '\u2013' + r[1]}`, src: 'Chat summary', info: 'rolling' };
     if (s.id === 'sum/chat') {
       const before = firstTurn < 1e9 ? firstTurn : 0;
-      return { at: 0.4, turns: [], tag: before > 1 ? `Before turn ${before}` : 'Earlier chat', src: 'Chat summary', info: 'rolling' };
+      return { at: 0.4, turns: [], tag: before > 1 ? `<${before}` : '\u2026', long: before > 1 ? `Before turn ${before}` : 'Earlier chat', src: 'Chat summary', info: 'rolling' };
     }
     const covers = Array.isArray(s.covers) ? s.covers.map(Number).filter((n) => n > 0).sort((a, b) => a - b) : [];
     const by = s.madeBy === 'user' ? 'By you' : s.madeBy === 'model' ? 'By the agent' : s.madeBy ? 'By ' + s.madeBy : '';
-    if (covers.length) return { at: covers[covers.length - 1] + 0.55, turns: covers, tag: `Turn${covers.length === 1 ? '' : 's'} ${turnsText(covers)}`, src: by ? `Summary \u00b7 ${by}` : 'Summary', info: 'tempSummary' };
-    return { at: 1e9, turns: [], tag: 'Unplaced', src: by ? `Summary \u00b7 ${by}` : 'Summary', info: 'tempSummary' };
+    const who = s.madeBy || '';
+    if (covers.length) return { at: covers[covers.length - 1] + 0.55, turns: covers, tag: turnsText(covers), long: `Turn${covers.length === 1 ? '' : 's'} ${turnsText(covers)}`, src: by ? `Summary \u00b7 ${by}` : 'Summary', by: who, info: 'tempSummary' };
+    return { at: 1e9, turns: [], tag: '?', long: 'Unplaced', src: by ? `Summary \u00b7 ${by}` : 'Summary', by: who, info: 'tempSummary' };
   }
   const rowRange = (a, b) => Array.from({ length: Math.max(0, Math.min(400, b - a + 1)) }, (_, i) => a + i);
   /** A summary row, where its turns were: selectable, with its checkbox and a
@@ -1050,11 +1088,14 @@ const ContextTree = (() => {
     const key = RK || activeKey();
     const ra = rowAct({ kind: 'sum', key, node: s.id, a: w.turns.length ? w.turns[0] : '', b: w.turns.length ? w.turns[w.turns.length - 1] : '', label: s.title || w.tag, list: w.turns });
     const st = stateOf(s);
-    const focus = s.focus ? `<span class="cc-sum-focus" title="Focus">${esc(clip(s.focus, 60))}</span>` : '';
-    const tag = `<span class="cc-sum-tag" title="${esc(w.src + ' of ' + w.tag.toLowerCase())}">${esc(w.tag)}</span>`;
+    const focus = s.focus ? mi('focus', 'Focus: ' + s.focus, null, 'cc-mi-summ') : '';
+    const tag = `<span class="cc-sum-tag" title="${esc(w.src + ' \u00b7 ' + w.long)}">${esc(w.tag)}</span>`;
+    const tipKey = w.info + ':' + s.id;
+    const srcBtn = `<button class="cc-src" type="button" data-info="${esc(tipKey)}" aria-expanded="${panel.tips.has(tipKey)}" title="${esc(w.src)}" aria-label="${esc(w.src + ' \u2014 about this')}">${svgI(srcIco(w))}</button>`;
+    const stTitle = st === 'out' ? 'Left out of the next request' : (STATE_LABEL[st] || st);
     return `<div class="cc-node cc-seg-node ct-kind-summary cc-sum ct-state-${esc(st)}${ra.on ? ' cc-selected' : ''}" data-summary="${esc(s.id)}">
-      <div class="ct-item cc-row cc-g-summary cc-actrow ct-state-${esc(st)}" data-node="${esc(s.id)}"${ra.attrs}${act.select ? ' tabindex="0"' : ''}>${selDot(ra.on)}${noTwisty}${control(s)}${tag}<span class="ct-title">${esc(clip(s.title || w.src, 70))}</span>${focus}<span class="cc-sum-src">${esc(w.src)}</span>${infoBtn(w.info)}<span class="ct-cost">${esc(costText(s))}</span>${menuBtn(w.src + ' ' + w.tag)}</div>
-      ${tip(w.info)}
+      <div class="ct-item cc-row cc-g-summary cc-actrow ct-state-${esc(st)}" data-node="${esc(s.id)}"${ra.attrs}${act.select ? ' tabindex="0"' : ''}>${selDot(ra.on)}${noTwisty}${control(s)}${tag}<span class="ct-title" title="${esc(s.title || w.src)}">${esc(clip(s.title || w.src, 240))}</span><span class="cc-meta">${focus}${srcBtn}</span><span class="ct-cost" title="${esc(stTitle)}">${esc(costText(s))}</span>${menuBtn(w.src + ' ' + w.long)}</div>
+      ${panel.tips.has(tipKey) ? `<p class="cc-tip" role="note">${esc([w.src + ' \u00b7 ' + w.long, s.focus ? 'Focus: ' + s.focus : '', INFO[w.info] || ''].filter(Boolean).join(' \u2014 '))}</p>` : ''}
     </div>`;
   }
 
@@ -1162,19 +1203,19 @@ const ContextTree = (() => {
     const open = panel.expanded.has(id);
     const name = (isCur ? (t.title || (appRef && appRef.chat && appRef.chat.mainItem && appRef.chat.mainItem.title)) : t.title) || 'New chat';
     const c = isCur ? null : convs.get(t.id);
-    let inner = '', meta = '';
+    let inner = '', meta = '', metaT = '';
     NS = isCur ? '' : `c:${t.id}|`; RK = isCur ? '' : t.id;
     try {
       if (isCur) {
         const q = curParts;
-        meta = `${q.turnCount} turn${q.turnCount === 1 ? '' : 's'} \u00b7 ${short(q.sent)}`;
+        meta = `${q.turnCount} \u00b7 ${short(q.sent)}`; metaT = `${plural(q.turnCount, 'turn')} \u00b7 ${num(q.sent)} tokens`;
         if (open) {
-          const memRow = q.memNode ? `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(q.memNode, `<button class="cc-link" type="button" data-tab-go="summary">View</button>`)}</div>` : '';
+          const memRow = q.memNode ? `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(q.memNode, `<button class="cc-go" type="button" data-tab-go="summary" aria-label="View summary" title="View summary">${svgI('eye', 14)}</button>`)}</div>` : '';
           inner = q.empty ? '<p class="cc-none">Nothing stored yet</p>' : memRow + q.body();
         }
       } else if (c && c.at) {
         const q = convParts(c.items, threadTurns(c.msgs || []), segsOf(t.id));
-        meta = `${q.turnCount} turn${q.turnCount === 1 ? '' : 's'} \u00b7 ${short(q.sent)}`;
+        meta = `${q.turnCount} \u00b7 ${short(q.sent)}`; metaT = `${plural(q.turnCount, 'turn')} \u00b7 ${num(q.sent)} tokens`;
         if (open) {
           const memRow = q.memNode ? `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(q.memNode)}</div>` : '';
           const err = c.error ? `<p class="ct-note ct-error" role="alert">${esc(c.error)} <button class="ct-error-retry" type="button" data-conv-retry="${esc(t.id)}">Retry</button></p>` : '';
@@ -1187,10 +1228,10 @@ const ContextTree = (() => {
       if (open && !isCur && !c) setTimeout(() => loadConv(t.id), 0);
       if (open && !isCur && (!c || c.loading)) inner = (c && c.at ? inner : '') + '<p class="cc-none" role="status" aria-busy="true">Loading\u2026</p>';
     } finally { NS = ''; RK = ''; }
-    const go = isCur ? '<span class="cc-badge cc-here">Open now</span>'
+    const go = isCur ? '<span class="cc-go cc-here" role="img" title="Open now" aria-label="Open now"><svg viewBox="0 0 8 8" width="7" height="7" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg></span>'
       : `<button class="cc-go cc-open" type="button" data-open-conv="${esc(t.id)}" aria-label="Open chat ${esc(clip(name, 40))}">${GO_ICON}</button>`;
     return `<div class="cc-node cc-conv${isCur ? ' cc-conv-current' : ''}" data-conv="${esc(t.id)}"${isCur ? ' data-current="true"' : ''}>
-      <div class="cc-row cc-conv-head cc-g-turns">${twisty(id, 'chat ' + name)}<span class="ct-title">${esc(clip(name, 60))}</span>${t.archived ? '<span class="cc-badge">Archived</span>' : ''}<span class="ct-cost">${esc(meta)}</span>${go}</div>
+      <div class="cc-row cc-conv-head cc-g-turns">${twisty(id, 'chat ' + name)}<span class="ct-title" title="${esc(name)}">${esc(clip(name, 200))}</span><span class="cc-meta">${t.archived ? mi('archive', 'Archived') : ''}</span><span class="ct-cost cc-conv-meta"${metaT ? ` title="${esc(metaT)}"` : ''}>${esc(meta)}</span>${go}</div>
       ${open ? `<div class="cc-kids">${inner}</div>` : ''}
     </div>`;
   }
@@ -1466,7 +1507,10 @@ const ContextTree = (() => {
     rowEl.classList.add('cc-menu-for');
     const items = menuItems(r);
     const wide = panel.root.getBoundingClientRect().width >= 520 && !(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
-    const title = r.kind === 'seg' ? `Summary of turns ${r.a}\u2013${r.b}` : `Turn ${r.n}`;
+    const span = r.kind === 'sum' ? rowTurns(r) : [];
+    const title = r.kind === 'seg' ? `Summary of turns ${r.a}\u2013${r.b}`
+      : r.kind === 'sum' ? (span.length ? `Summary of turn${span.length === 1 ? '' : 's'} ${turnsText(span)}` : 'Chat summary')
+      : `Turn ${r.n}`;
     const mark = r.kind === 'seg' ? segMark(r.key, r.rid, modeOf(rawOf(r.key), r.a, r.b)) : turnMark(r);
     host.innerHTML = `<div class="cc-scrim" data-menu-close="1"></div>
       <div class="cc-sheet${wide ? ' cc-pop' : ''}" role="menu" aria-label="${esc(title)}">
