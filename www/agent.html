@@ -4178,6 +4178,11 @@ ol.sw-group-order li::before { counter-increment: sw-ord; content: counter(sw-or
   background: transparent; color: var(--muted-foreground); font: inherit; font-weight: 500; cursor: pointer; border-radius: 8px 8px 0 0;
 }
 .cc-card .cc-tab[aria-selected="true"] { color: var(--foreground); border-bottom-color: var(--primary, currentColor); }
+/* Five tabs on a phone: let them share the row so Policy is not cut off. */
+@media (max-width: 440px) {
+  .ct-panel.cc-card .cc-tabs { gap: 0; }
+  .ct-panel.cc-card .cc-tab { flex: 1 1 auto; min-width: 0; padding-left: 4px; padding-right: 4px; font-size: 0.75rem; white-space: nowrap; }
+}
 .cc-card .cc-tab:focus-visible, .cc-card button:focus-visible, .cc-card input:focus-visible { outline: 2px solid var(--ring, var(--primary)); outline-offset: 1px; }
 .cc-card .ct-close { flex: none; width: 34px; height: 34px; min-height: 34px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
 .cc-card .cc-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px 10px 10px; }
