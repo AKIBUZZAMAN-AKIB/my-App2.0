@@ -239,12 +239,14 @@ const ContextTree = (() => {
   /** One checklist action on a memory row (`mem/<ID>`): include, exclude,
    * auto, all_versions, latest, inactive, active, remove. It applies to the
    * next request; the panel reads the tree again afterwards. */
-  function setMemory(rid, action) {
+  function setMemory(rid, action, key) {
     const send = ctxSend();
     if (!send || !rid || !action) return Promise.resolve(false);
+    // Another chat's row (a range summary of a chat that is not open) changes in that chat's own checklist.
+    const other = !!key && key !== activeKey();
     pendingMem.set(rid, action);
     paint();
-    return Promise.resolve(send('ctx.set', { ops: [{ id: `mem/${rid}`, action }] }))
+    return Promise.resolve(send('ctx.set', { ops: [{ id: `mem/${rid}`, action }], ...(other ? { sessionKey: key } : {}) }))
       .then((r) => {
         const rows = r && Array.isArray(r.memory) ? r.memory : [];
         const op = rows.find((o) => o && (o.rid === rid || o.id === `mem/${rid}`)) || rows[0];
@@ -259,6 +261,37 @@ const ContextTree = (() => {
         return false;
       })
       .finally(() => { pendingMem.delete(rid); paint(); refresh(); });
+  }
+
+  /** The engine's checklist row of one memory record (`S<from>-<to>` for a range
+   * summary) in the open chat's memory, or null when the panel has not got it. */
+  function memRecord(rid) {
+    const m = state.memory;
+    if (!m || !Array.isArray(m.groups)) return null;
+    for (const g of m.groups) {
+      for (const r of (Array.isArray(g.items) ? g.items : [])) if (r && r.rid === rid) return r;
+    }
+    return null;
+  }
+  /** Whether a range's summary goes with the next request, from the engine's own pick:
+   * `out` (unticked) never, `in` always, `auto` when relevance sends it. The last
+   * choice made here is used until the engine's answer comes back, and for a chat
+   * whose memory is not loaded. */
+  const segPicks = new Map(); // `${key}|S1-5` -> 'in' | 'out'
+  function segIncluded(key, rid) {
+    const pend = pendingMem.get(rid);
+    if (pend === 'include') return { on: true, pend: true, auto: false };
+    if (pend === 'exclude') return { on: false, pend: true, auto: false };
+    const r = (!key || key === activeKey()) ? memRecord(rid) : null;
+    if (r) {
+      const pick = r.pick || 'auto';
+      if (pick === 'out') return { on: false, auto: false };
+      if (pick === 'in') return { on: true, auto: false };
+      // Same reading as the memory checklist's own box: under auto, ticked when the engine sends it.
+      return { on: r.colour === 'sent' || r.colour === 'pinned', auto: true };
+    }
+    const local = segPicks.get(`${key}|${rid}`);
+    return { on: local !== 'out', auto: !local };
   }
 
   /** "Reset tree" (plan §15.4): start this chat's tree again. Every item, note,
@@ -558,7 +591,7 @@ const ContextTree = (() => {
     turn: 'Every stored chat, newest first. Open one to see its turns, each tool call with its result, and its range summaries; tick a box to keep an item in that chat\'s context or leave it out. The arrow opens the chat or jumps to the turn.',
     call: 'One tool call with its result. It can be left out on its own; the rest of the turn stays.',
     result: 'A large tool result kept in storage. Left out, the model sees only its id and can read it back.',
-    segment: 'A summary of exactly these turns, written once and never changed. R = its own range version. \u0394 = what it changed against earlier ranges. Sum sends the summary (default), Raw sends the original turns instead, Both sends both. Open it to send single original turns.',
+    segment: 'A summary of exactly these turns, written once and never changed. R = its own range version. \u0394 = what it changed against earlier ranges. The box in front says whether this summary goes at all: untick it to leave the range\u2019s summary out of the next requests, tick it to always send it. Sum sends the summary (default), Raw sends the original turns instead, Both sends both. Open it to send single original turns.',
     ranges: 'Every range summary with its own version (R1, R2\u2026), the memory version it was built on, and what it changed against the earlier ranges.',
     data: 'Everything this chat\u2019s memory stores, as saved.',
     rolling: 'The summary that stands in for the turns before it when the window had to be compacted.',
@@ -887,6 +920,11 @@ const ContextTree = (() => {
     const mode = modeOf(raw, a, b);
     const rev = revOf(seg, index);
     const nChg = Array.isArray(seg.changes) ? seg.changes.filter((c) => c.kind !== 'more').length : 0;
+    const rid = `S${a}-${b}`;
+    const inc = segIncluded(key, rid);
+    // Raw sends the original turns instead, so there is no summary to include.
+    const incOn = mode !== 'raw' && inc.on;
+    const incBox = `<input class="cc-seg-check" type="checkbox" data-seg-rid="${esc(rid)}" data-key="${esc(key || '')}"${incOn ? ' checked' : ''}${inc.auto && mode !== 'raw' ? ' data-auto="1"' : ''}${inc.pend || mode === 'raw' || panel.rawBusy ? ' disabled' : ''} aria-label="${esc(`Send the summary of turns ${a} to ${b}`)}" title="${esc(mode === 'raw' ? 'Raw mode sends the original turns instead of this summary' : incOn ? 'Summary goes with the next request \u2014 untick to leave it out' : 'Summary is left out \u2014 tick to send it')}">`;
     const modes = `<span class="cc-seg-modes" role="radiogroup" aria-label="What turns ${a} to ${b} send">${RAW_MODES.map(([m, l, t]) => `<button class="cc-mode${m === mode ? ' on' : ''}" type="button" role="radio" aria-checked="${m === mode}" data-raw-mode="${m}" data-raw-range="${a}-${b}" data-key="${esc(key || '')}" title="${esc(t)}"${panel.rawBusy ? ' disabled' : ''}>${l}</button>`).join('')}</span>`;
     let inner = '';
     if (open) {
@@ -908,10 +946,10 @@ const ContextTree = (() => {
         <div class="cc-kids" role="group" aria-label="Original turns ${a} to ${b}">${covered.map((n) => coveredTurn(key, n, turns[n - 1] || null, orig ? orig.turns.get(n) : null, byRange || raw.turns.has(n), byRange, a, b)).join('')}</div>
       </div>`;
     }
-    const st = mode === 'raw' ? 'out' : (memNode ? stateOf(memNode) : 'in');
+    const st = mode === 'raw' || !incOn ? 'out' : (memNode ? stateOf(memNode) : 'in');
     const picked = mode === 'summary' ? [...raw.turns].filter((n) => n >= a && n <= b).length : 0;
     return `<div class="cc-node cc-seg-node ct-kind-summary ct-state-${esc(st)} cc-mode-${esc(mode)}" data-segment="${a}-${b}" data-rev="${rev}">
-      <div class="cc-row cc-g-summary">${twisty(id, `summary of turns ${a} to ${b}`)}<span class="cc-rev" title="Range version">R${rev}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 60))}</span>${nChg ? `<span class="cc-badge cc-chg-badge" title="${nChg} change${nChg === 1 ? '' : 's'} against earlier ranges">\u0394${nChg}</span>` : ''}${picked ? `<span class="cc-badge cc-raw-badge" title="Original turns sent beside the summary">+${picked}</span>` : ''}${modes}${infoBtn('segment:' + a + '-' + b)}</div>
+      <div class="cc-row cc-g-summary">${twisty(id, `summary of turns ${a} to ${b}`)}${incBox}<span class="cc-rev" title="Range version">R${rev}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 60))}</span>${nChg ? `<span class="cc-badge cc-chg-badge" title="${nChg} change${nChg === 1 ? '' : 's'} against earlier ranges">\u0394${nChg}</span>` : ''}${picked ? `<span class="cc-badge cc-raw-badge" title="Original turns sent beside the summary">+${picked}</span>` : ''}${modes}${infoBtn('segment:' + a + '-' + b)}</div>
       ${tip('segment:' + a + '-' + b)}${inner}
     </div>`;
   }
@@ -1351,6 +1389,14 @@ const ContextTree = (() => {
   function onBodyChange(ev) {
     const t = ev.target;
     if (t && t.classList && t.classList.contains('cc-mem-check')) setMemory(t.dataset.rid, t.checked ? 'include' : 'exclude');
+    else if (t && t.classList && t.classList.contains('cc-seg-check')) {
+      // A range summary's own row in the memory checklist (`mem/S<from>-<to>`): unticked, the
+      // engine leaves that summary out of every request (even when relevant); ticked, it always goes.
+      const k = t.dataset.key || activeKey();
+      const rid = t.dataset.segRid;
+      segPicks.set(`${k}|${rid}`, t.checked ? 'in' : 'out');
+      setMemory(rid, t.checked ? 'include' : 'exclude', k);
+    }
     else if (t && t.classList && t.classList.contains('ct-check')) setItem(t.dataset.id, !!t.checked, t.dataset.key || '');
     else if (t && t.classList && t.classList.contains('cc-raw-check')) setRaw(t.dataset.key || activeKey(), { turn: Number(t.dataset.rawTurn), raw: !!t.checked });
   }

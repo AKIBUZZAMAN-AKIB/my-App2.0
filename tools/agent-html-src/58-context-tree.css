@@ -480,6 +480,11 @@
 .cc-mem-legend > span { display: inline-flex; align-items: center; gap: 4px; }
 .cc-mem-legend .cc-mem-dot { margin-left: 0; }
 .cc-mem-check[data-auto="1"] { opacity: .7; }
+/* A range summary's own include box (mem/S<from>-<to>): ticked = the summary is sent. */
+.cc-seg-check { flex: none; width: 16px; height: 16px; margin: 0 2px 0 0; accent-color: var(--cc-summary, var(--primary)); cursor: pointer; }
+.cc-seg-check[data-auto="1"] { opacity: .7; }
+.cc-seg-check:disabled { opacity: .4; cursor: not-allowed; }
+.cc-seg-node.ct-state-out > .cc-row .ct-title { color: var(--muted-foreground); text-decoration: line-through; text-decoration-thickness: 1px; }
 .cc-mem-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
 .cc-mem-versions { margin: 4px 0 0 0; padding-left: 18px; font-size: 12px; }
 .cc-mem-versions li { margin: 2px 0; overflow-wrap: anywhere; }
