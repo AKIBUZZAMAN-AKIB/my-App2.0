@@ -19,7 +19,6 @@
 .sa-team-myes, .sa-team-mno { display: flex; gap: .35rem; align-items: flex-start; font-size: .8rem; overflow-wrap: anywhere; min-width: 0; }
 .sa-team-myes > svg { color: var(--success, #16a34a); flex: none; }
 .sa-team-mno > svg { color: var(--destructive, #dc2626); flex: none; }
-.sa-team-btns { flex-wrap: wrap; }
 .sa-team-timeline .sa-vevent[data-comms-kind="blocked"] { opacity: .85; }
 .sa-vmeter-sm { height: 4px; margin-top: .3rem; }
 [data-slot="agent-graph-own"] .sa-diagram, [data-slot="agent-graph-team"] .sa-diagram { max-width: 100%; overflow: auto; }

@@ -181,20 +181,23 @@ async function suite(browser, w) {
   await p.evaluate((x) => { const s = window.__sa.subs.get(x.c); s.parentId = x.b; s.depth = 3; window.__sa.emit('subagent.reparented', { ...s }); }, ids);
   await sleep(300);
 
-  // pause / resume / stop tree on alpha (running, with beta and gamma restarted)
+  // pause / resume / stop tree live in the header and its ··· menu, not in Team (one home per action)
   await p.evaluate((x) => { for (const id of [x.b, x.c]) { const s = window.__sa.subs.get(id); s.status = 'running'; s.runs = (s.runs || 1) + 1; window.__sa.emit('subagent.started', { ...s }); } }, ids);
   await openAgent(p, ids.b, 'team');
+  check(`${w}px Team has no second set of run controls`, !(await p.$('[data-slot="team-pause"], [data-slot="team-stop"], [data-slot="team-stop-tree"]')));
   n0 = (await subCalls(p)).length;
-  await p.click('[data-slot="team-pause"]'); await sleep(600);
+  await p.click('[data-slot="subagent-more"]'); await sleep(200);
+  await p.click('[data-slot="subagent-menu-pause"]'); await sleep(600);
   check(`${w}px Pause sends pause for beta`, (await callsSince(p, n0)).some((c) => c.action === 'pause' && c.id === ids.b));
-  check(`${w}px after Pause the Resume button shows`, !!(await p.$('[data-slot="team-resume"]')));
-  await p.click('[data-slot="team-resume"]'); await sleep(600);
+  check(`${w}px after Pause the header shows Resume`, !!(await p.$('[data-slot="agent-actions"] [data-slot="subagent-resume"]')));
+  await p.click('[data-slot="agent-actions"] [data-slot="subagent-resume"]'); await sleep(600);
   check(`${w}px Resume sends resume`, (await callsSince(p, n0)).some((c) => c.action === 'resume' && c.id === ids.b));
   await openAgent(p, ids.a, 'team');
-  const st = await p.$eval('[data-slot="team-stop-tree"]', (e) => e.innerText).catch(() => '');
+  await p.click('[data-slot="subagent-more"]'); await sleep(200);
+  const st = await p.$eval('[data-slot="subagent-menu-stop-tree"]', (e) => e.innerText).catch(() => '');
   check(`${w}px Stop-tree names the 2 agents below`, /2 below/.test(st), st);
   n0 = (await subCalls(p)).length;
-  await p.click('[data-slot="team-stop-tree"]'); await sleep(400);
+  await p.click('[data-slot="subagent-menu-stop-tree"]'); await sleep(400);
   await confirm(p);
   const stt = (await callsSince(p, n0)).find((c) => c.action === 'stopTree');
   check(`${w}px stopTree sent for alpha after confirming`, stt && stt.id === ids.a, JSON.stringify(stt));

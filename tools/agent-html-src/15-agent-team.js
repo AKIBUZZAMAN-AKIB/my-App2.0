@@ -4,8 +4,9 @@
    Team: who an agent may message (the chat's topology, its own canMessage,
    hidden / hiddenFrom, the engine's live allow matrix with the reason for
    every "no"), the live message timeline, a composer that messages the agent
-   or broadcasts, pause / resume / stop / stop-with-sub-agents / move under
-   another parent, and the chat's team rules (topology, rate limit, pause all).
+   or broadcasts, move under another parent, and the chat's team rules
+   (topology, rate limit, pause all). Run controls (stop, pause, resume, stop
+   with sub-agents) live only in the agent's header and its ··· menu.
    Graph: one agent's neighbourhood (parent, its sub-tree, who it messaged and
    the tools it called) and the whole team with every real parent edge.
    The Main agent gets the same tabs for the chat as a whole.
@@ -130,21 +131,6 @@ const AgentTeam = (() => {
   }
 
   /* ---- controls: pause / resume / stop / stop the sub-tree ---- */
-  function controls(ctx, r, list) {
-    const paused = !!r.paused || r.status === 'paused';
-    const tree = subtree(list, r.id, ctx.parentOf);
-    const anyActive = tree.some((t) => active(ctx.records.get(t)));
-    const done = async (res) => { if (res?.subagent) ctx.upsert(res.subagent); ctx.rebuild(); };
-    const btn = (slot, label, ic, on, cls = 'btn-outline') => h('button', { type: 'button', class: `btn ${cls} btn-sm`, 'data-slot': slot, onclick: on }, icon(ic), label);
-    return T().section('Run', 'agent-team-controls',
-      T().hint(paused ? 'Paused. Resume goes on from where it stopped.' : active(r) ? 'Running. Pause stops it after the current step and keeps its place.' : 'Not running.'),
-      h('div', { class: 'row-actions sa-vrow sa-team-btns' },
-        paused ? btn('team-resume', 'Resume', 'play', async () => done(await ctx.act('resume', { id: r.id }, 'Resumed.')), 'btn-default') : null,
-        !paused && active(r) ? btn('team-pause', 'Pause', 'pause', async () => done(await ctx.act('pause', { id: r.id }, 'Paused.'))) : null,
-        active(r) ? btn('team-stop', 'Stop', 'square', async () => done(await ctx.act('stop', { id: r.id }, 'Stop requested.'))) : null,
-        tree.length > 1 && anyActive ? btn('team-stop-tree', `Stop it and ${tree.length - 1} below`, 'square', () => confirmDialog({ title: `Stop ${r.name} and the agents below it?`, description: `${tree.length} agents stop. Their work so far is kept.`, confirmLabel: 'Stop all', destructive: true, onConfirm: async () => { const res = await ctx.act('stopTree', { id: r.id }); if (res) toast(`${(res.stopped || []).length} stopped.`, { type: 'success' }); ctx.rebuild(); } }), 'btn-outline sa-danger') : null));
-  }
-
   /* ---- move under another parent ---- */
   function moveSection(ctx, r, list) {
     const cur = ctx.parentOf(r);
@@ -359,7 +345,7 @@ const AgentTeam = (() => {
       const rules = permsSection(ctx, r, list, data);
       const onEdit = () => { rules.scrollIntoView?.({ block: 'start', behavior: 'smooth' }); (rules.querySelector('[data-slot=team-rule-role]') || rules.querySelector('select'))?.focus({ preventScroll: true }); };
       const swarm = ctx.openSwarm && typeof AgentSwarm !== 'undefined' ? AgentSwarm.roleLine(ctx, r, () => ctx.openSwarm('swarm', r.id), onEdit) : null;
-      setChildren(box, swarm, controls(ctx, r, list), rules, reachSection(ctx, r, list, data), composer(ctx, { target: r, subtreeIds: tree }), timelineSection(ctx, data, fetcher, { only: r.id }), moveSection(ctx, r, list));
+      setChildren(box, swarm, rules, reachSection(ctx, r, list, data), composer(ctx, { target: r, subtreeIds: tree }), timelineSection(ctx, data, fetcher, { only: r.id }), moveSection(ctx, r, list));
     });
   }
 

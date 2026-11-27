@@ -121,14 +121,15 @@ async function suite(browser, w, dark) {
   check(`${tag}: ${labelled ? 'wide line: Stop and Open as chat keep their labels' : 'tight line: buttons are icon-only'}`, labelled ? btns.filter((b) => ['subagent-stop', 'subagent-open-chat'].includes(b.s)).every((b) => b.text) : btns.filter((b) => b.s && b.s !== 'agent-switcher').every((b) => !b.text && b.w === 32), JSON.stringify({ w: hb?.w, btns }));
   const st = await p.evaluate(() => { const c = document.querySelector('[data-slot="agent-header-row"] [data-slot="agent-status"]'); return { text: c?.textContent, title: c?.title }; });
   check(`${tag}: the status keeps its word (as text or tooltip) for readers`, /Running/.test(st.text || '') && /Running/.test(st.title || ''), JSON.stringify(st));
-  // Everything still reachable: the graph (on the line or in ···), the whole path, back, expand, close.
+  // Everything still reachable: the graph (on the line or in the Graph tab), the whole path, back, expand, close.
   const graphOnLine = slots.includes('agent-graph');
   await p.click('[data-slot="subagent-more"]');
   await sleep(200);
   const graphInMenu = await p.evaluate(() => !!document.querySelector('[role="menu"] [data-slot="subagent-menu-graph"]'));
   await p.keyboard.press('Escape');
   await sleep(150);
-  check(`${tag}: the team graph is one tap away (${graphOnLine ? 'on the line' : 'in ···'}), never both`, graphOnLine !== graphInMenu, JSON.stringify({ graphOnLine, graphInMenu, w: hb?.w }));
+  const graphTab = await p.evaluate(() => !!document.querySelector('[data-slot="agent-view-tabs"] [data-tab="graph"]'));
+  check(`${tag}: the team graph has one home (${graphOnLine ? 'on the line' : 'the Graph tab'}), never repeated in ···`, !graphInMenu && (graphOnLine || graphTab), JSON.stringify({ graphOnLine, graphInMenu, graphTab, w: hb?.w }));
   await p.click('[data-slot="agent-switcher"]');
   await sleep(200);
   const path = await p.evaluate(() => [...document.querySelectorAll('[role="menu"] [data-slot="agent-switch-all"], [role="menu"] [data-slot="agent-path-item"], [role="menu"] [data-slot="agent-path-here"]')].map((e) => e.querySelector('.truncate').textContent.trim()));
@@ -274,9 +275,13 @@ async function suite(browser, w, dark) {
   await p.click('[data-slot="subagent-more"]');
   await sleep(250);
   const menu = await p.evaluate(() => { const m = document.querySelector('.sa-more-menu'); if (!m) return null; const r = m.getBoundingClientRect(); return { slots: [...m.querySelectorAll('[data-slot]')].map((e) => e.dataset.slot), heads: m.innerText, out: r.right > document.documentElement.clientWidth + 1 || r.left < -1, role: m.getAttribute('role') }; });
-  const want = ['subagent-menu-interrupt', 'subagent-menu-pause', 'subagent-menu-stop-tree', 'subagent-rerun', 'subagent-menu-open-chat', 'subagent-menu-select', 'subagent-menu-copy-last', 'subagent-attach', 'subagent-menu-export', 'subagent-menu-rename', 'subagent-menu-settings', 'subagent-menu-tools', 'subagent-menu-context', 'subagent-menu-memory', 'subagent-menu-team', 'subagent-save-preset', 'subagent-menu-copy-id', 'subagent-delete-data'];
+  const want = ['subagent-menu-interrupt', 'subagent-menu-pause', 'subagent-menu-stop-tree', 'subagent-rerun', 'subagent-menu-select', 'subagent-attach', 'subagent-menu-export', 'subagent-save-preset', 'subagent-menu-copy-id', 'subagent-delete-data'];
   const missing = want.filter((x) => !(menu?.slots || []).includes(x));
-  check(`${tag}: the ··· menu has every control for a running agent`, menu && !missing.length, `missing ${missing.join(', ')}`);
+  check(`${tag}: the ··· menu has every control with no other home (running agent)`, menu && !missing.length, `missing ${missing.join(', ')}`);
+  // One home per action: nothing the header line, a tab or a chat reply already has.
+  const dupes = ['subagent-menu-retry', 'subagent-menu-resume', 'subagent-menu-open-chat', 'subagent-menu-copy-last', 'subagent-menu-rename', 'subagent-menu-settings', 'subagent-menu-tools', 'subagent-menu-context', 'subagent-menu-memory', 'subagent-menu-team', 'subagent-menu-swarm', 'subagent-menu-priority', 'subagent-menu-graph'].filter((x) => (menu?.slots || []).includes(x));
+  check(`${tag}: the ··· menu repeats nothing from the header, the tabs or the chat`, menu && !dupes.length, `duplicates ${dupes.join(', ')}`);
+  check(`${tag}: the ··· menu is short (≤ 10 items for a running agent)`, menu && menu.slots.length <= 10, String(menu?.slots.length));
   check(`${tag}: the menu is grouped (Run / Chat / Agent) and on screen`, menu && /Run[\s\S]*Chat[\s\S]*Agent/.test(menu.heads) && !menu.out, JSON.stringify({ out: menu?.out }));
   await p.click('[data-slot="subagent-menu-pause"]');
   await sleep(400);
@@ -285,24 +290,14 @@ async function suite(browser, w, dark) {
   await p.click('[data-slot="subagent-resume"]');
   await sleep(400);
   check(`${tag}: Resume sends resume`, (await lastCall(p, 'resume'))?.id === ids.a);
-  await p.click('[data-slot="subagent-more"]');
-  await sleep(200);
-  await p.click('[data-slot="subagent-menu-rename"]');
-  await sleep(250);
-  await p.fill('[data-slot="subagent-rename-input"]', 'Lead researcher');
-  await p.click('[data-slot="subagent-rename-save"]');
-  await sleep(400);
-  const cf = await lastCall(p, 'configure');
-  check(`${tag}: Edit title sends configure with the title`, cf?.id === ids.a && cf.title === 'Lead researcher', JSON.stringify(cf));
+  await pickTab(p, 'settings');
+  const setTab = await p.evaluate(() => ({ title: !!document.querySelector('[data-slot="agent-settings-identity"] [data-key="title"]'), model: !!document.querySelector('[data-slot="agent-content"] [data-key="model"]'), setup: !!document.querySelector('[data-slot="subagent-setup"]') }));
+  check(`${tag}: Settings is the one home for title and model (no second Setup block)`, setTab.title && setTab.model && !setTab.setup, JSON.stringify(setTab));
+  await pickTab(p, 'overview');
   await p.click('[data-slot="subagent-more"]');
   await sleep(200);
   const [dl] = await Promise.all([p.waitForEvent('download', { timeout: 3000 }).catch(() => null), p.click('[data-slot="subagent-menu-export"]').catch(() => null)]);
   check(`${tag}: Export chat downloads a Markdown file`, !!dl && /\.md$/.test(dl.suggestedFilename()), dl ? dl.suggestedFilename() : 'no download');
-  await p.click('[data-slot="subagent-more"]');
-  await sleep(200);
-  await p.click('[data-slot="subagent-menu-settings"]');
-  await sleep(350);
-  check(`${tag}: Model and limits opens Settings`, await p.evaluate(() => document.querySelector('[data-slot="agent-view-tabs"] [data-tab="settings"]')?.getAttribute('aria-selected') === 'true'));
   await p.click('[data-slot="subagent-more"]');
   await sleep(200);
   await p.click('[data-slot="subagent-menu-select"]');

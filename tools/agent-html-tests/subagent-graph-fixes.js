@@ -317,18 +317,13 @@ async function testDetailAndSetup(browser) {
   check('a parent in the path menu opens that agent', (await p.textContent('.sa-detail-name')) === 'alpha');
   await p.evaluate((id) => window.__subagents.open(window.__app, { id, agentTab: 'settings' }), ids.b);
   await sleep(400);
-  // Per-agent setup: model, tools, hidden, hidden from, can message -> configure.
-  await p.locator('[data-slot="subagent-setup"] > summary').click();
-  const inputs = p.locator('[data-slot="subagent-setup"] input[type="text"]');
-  await inputs.nth(0).fill('llama-3');
-  await inputs.nth(2).fill('read_file, web_fetch');
-  await inputs.nth(3).fill('alpha');
-  await inputs.nth(4).fill('gamma');
-  await p.locator('[data-slot="subagent-setup"] input[type="checkbox"]').check();
-  await p.locator('[data-slot="subagent-setup-save"]').click();
-  await sleep(400);
+  // One home per setting: model in Settings (no second Setup block); tools in Tools; hidden / can message in Team.
+  check('Settings has no duplicate Setup block', !(await p.$('[data-slot="subagent-setup"]')));
+  await p.fill('[data-slot="agent-content"] [data-key="model"]', 'llama-3');
+  await p.click('[data-slot="agent-settings-save"]');
+  await sleep(500);
   const cfg = (await subCalls(p)).filter((c) => c.action === 'configure').pop();
-  check('Setup saves model, tools, hidden, hiddenFrom and canMessage to the engine', cfg && cfg.id === ids.b && cfg.model === 'llama-3' && JSON.stringify(cfg.tools) === '["read_file","web_fetch"]' && cfg.hidden === true && JSON.stringify(cfg.hiddenFrom) === '["alpha"]' && JSON.stringify(cfg.canMessage) === '["gamma"]', JSON.stringify(cfg));
+  check('Settings saves the model to the engine', cfg && cfg.id === ids.b && cfg.model === 'llama-3', JSON.stringify(cfg));
   check('detail: no page errors', !errs.length, errs.join(' / '));
   await ctx.close();
 }

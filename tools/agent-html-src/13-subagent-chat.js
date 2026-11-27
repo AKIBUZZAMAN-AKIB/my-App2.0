@@ -270,7 +270,7 @@ const SubagentChat = (() => {
       canAttach() ? { label: 'Versions', icon: 'history', onSelect: () => openVersions(rec), attrs: { 'data-slot': 'subagent-chat-versions' } } : null,
       { separator: true },
       { label: 'Agent details', sub: 'Overview, activity, settings', icon: 'info', onSelect: () => Subagents.open(appRef, { id: rec.id }), attrs: { 'data-slot': 'subagent-chat-details' } },
-      { label: 'Model and limits', icon: 'sliders-horizontal', onSelect: () => Subagents.open(appRef, { id: rec.id, section: 'setup' }), attrs: { 'data-slot': 'subagent-chat-setup' } },
+      { label: 'Settings', sub: 'Model, limits, prompt', icon: 'sliders-horizontal', onSelect: () => Subagents.open(appRef, { id: rec.id, agentTab: 'settings' }), attrs: { 'data-slot': 'subagent-chat-setup' } },
       graphBtn.getClientRects().length ? null : { label: 'Team graph', icon: 'git-fork', onSelect: () => Subagents.open(appRef, { tab: 'diagram' }), attrs: { 'data-slot': 'subagent-chat-graph' } },
     ], { side: 'bottom', align: 'end', label: `${rec.name} actions` }));
     setChildren(header,

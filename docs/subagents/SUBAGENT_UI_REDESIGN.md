@@ -160,3 +160,54 @@ path menu lists All agents › Title alpha › Title beta and All agents opens t
 agents; expand on the line widens the docked panel (wide only); × closes; a long name truncates with an ellipsis and
 the line still fits. Open as chat: one line, no path row, the path menu runs from Main agent down, the graph once.
 `subagent-graph-fixes.js` reads the ancestry from the path menu and opens a parent from it.
+
+## Fourth pass: one home per action
+
+### What was still wrong
+
+On a phone an opened agent offered most actions twice or three times. The header line had Try again and Open as
+chat, and ⋯ listed both again. The tab row's More menu (Activity, Team, Graph, Goals, Tools, Context, Memory) and
+the Settings tab were each mirrored in ⋯ as shortcuts (Model and limits, Tools and permissions, Context and
+compaction, Memory, Move or message, Team graph, Swarm role). Edit title… repeated Settings › Identity › Title. Copy last
+reply repeated the Copy button on every reply. Queue priority only switched to Overview, where the priority
+picker already is. Settings also had a second Setup block under its Save button (Model, Provider, Tools, Hidden,
+Hidden from, Can message), so model and provider showed twice on one screen, and tools and messaging rules were
+also in Tools and Team › Agent rules. "Messages to other agents per minute" was in Settings and in Team › Agent
+rules. Team had its own Run row (Pause / Resume / Stop / Stop with the agents below), which repeated the
+header and ⋯. A long overflow menu full of shortcuts hides the few actions that only live there.
+
+### Rule
+
+Material 3 and Apple HIG: the overflow holds secondary actions that have no visible home; it does not mirror
+navigation (tabs) or actions already on the bar. Linear / GitHub: one grouped menu, destructive last. So each
+action has exactly one home:
+
+| Action | Its one home |
+|---|---|
+| Stop / Resume / Try again | Header line (the primary action for the agent's state) |
+| Open as chat | Header line |
+| Title, description, model, provider, temperature, prompt, limits, memory mode, compaction | Settings tab |
+| Tools on or off | Tools tab |
+| Who it may message, hidden, hidden from, message rate, move under another parent, swarm role | Team tab |
+| Agent's graph and the whole team's | Graph tab (and the graph icon on the line when it fits) |
+| Context, Memory | Their tabs |
+| Copy / Send to main chat for one reply | On the reply |
+| Queue priority | Overview (queue box) |
+| Interrupt, Pause, Stop it and the agents below, Run again…, Select messages, Attach result, Export chat, Save as preset, Copy agent id, Delete data… | ⋯ menu |
+
+### What it is now
+
+- ⋯ is grouped Run (Interrupt, Pause, Stop it and N below, Run again…), Chat (Select messages, Attach result, Export
+  chat), Agent (Save as preset, Copy agent id), then Delete data… in red, alone. It shows 10 items for a running agent
+  at most, where it used to show 18 or more.
+- Settings is one form. The Setup block is gone, and so is the message rate field, which lives in Team › Agent rules.
+- Team has no Run row.
+- In Open as chat, ⋯ › Model and limits is now **Settings** and opens the Settings tab. The old `section: 'setup'`
+  link still works and opens Settings.
+
+### Checks
+
+`subagent-view.js`: ⋯ has every action with no other home, none of the removed duplicates, and ≤ 10 items; the
+graph is never in ⋯; Settings has the title and model and no Setup block. `team-graph.js`: Team has no run row;
+Pause, Resume and Stop with the agents below work from the header and ⋯. `subagent-graph-fixes.js`: Settings
+saves the model. `agent-view.js`: Settings Save no longer sends `peerRateLimit`.
