@@ -254,6 +254,16 @@ const SUBAGENT_AGENTS_ACTIONS = [
   'agents.deliver', 'agents.expire', 'agents.inbox', 'agents.message', 'agents.parity',
   'social.feed', 'social.like', 'social.post',
 ] as const;
+/**
+ * Context Policies (TCPE, lib.rs memory_action -> context_policy::bridge, engine
+ * feature 'contextPolicy'): the Policy tab and the Context Policies workspace.
+ * They were missing here, so the Policy tab failed in the bridge with
+ * 'subagents: unknown action "policy.get"' before the request reached the engine.
+ */
+const SUBAGENT_POLICY_ACTIONS = [
+  'policy.get', 'policy.validate', 'policy.save', 'policy.pin', 'policy.unpin', 'policy.preview',
+  'policy.metrics', 'policy.proposals', 'policy.approve', 'policy.reject',
+] as const;
 /** Actions that act on one chat's context tree and need its sessionKey. */
 const SUBAGENT_SESSION_KEY_ACTIONS = ['ctx.tree', 'ctx.set', 'ctx.reset'];
 export const SUBAGENT_ACTIONS: readonly string[] = [
@@ -266,6 +276,7 @@ export const SUBAGENT_ACTIONS: readonly string[] = [
   ...SUBAGENT_MEMORY_ACTIONS,
   ...SUBAGENT_CTX_ACTIONS,
   ...SUBAGENT_AGENTS_ACTIONS,
+  ...SUBAGENT_POLICY_ACTIONS,
 ];
 /** Actions that act on one agent and need its id. */
 const SUBAGENT_ID_ACTIONS = [
@@ -281,6 +292,7 @@ type SubagentAction =
   | (typeof SUBAGENT_ADVANCED_ACTIONS)[number]
   | (typeof SUBAGENT_MEMORY_ACTIONS)[number]
   | (typeof SUBAGENT_CTX_ACTIONS)[number]
+  | (typeof SUBAGENT_POLICY_ACTIONS)[number]
   | (typeof SUBAGENT_AGENTS_ACTIONS)[number];
 export type SubagentRequest = {
   action?: SubagentAction;
@@ -1263,6 +1275,7 @@ const NativeKit: any = {
       if (SUBAGENT_QUEUE_ACTIONS.includes(action)) await requireEngineFeature('subagentQueue', `subagents.${action}`);
       if (SESSION_ACTIONS.includes(action)) await requireEngineFeature('crossSession', `subagents.${action}`);
       if (action.startsWith('ctx.')) await requireEngineFeature('contextTree', `subagents.${action}`);
+      if (action.startsWith('policy.')) await requireEngineFeature('contextPolicy', `subagents.${action}`);
       if (SUBAGENT_SESSION_KEY_ACTIONS.includes(action) && !(typeof request.sessionKey === 'string' && request.sessionKey.trim())) throw new Error(`subagents: ${action} needs a sessionKey`);
       if (action === 'ask' && !(request.targetSessionKey && typeof request.message === 'string' && request.message.trim())) throw new Error('subagents: ask needs targetSessionKey and message');
       if (SUBAGENT_ID_ACTIONS.includes(action) && !request.id) throw new Error(`subagents: ${action} needs an id`);
