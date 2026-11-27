@@ -809,6 +809,17 @@ async fn run_agent_turn_inner(
         }
         if let Some(fold) = memory_fold.as_mut() {
             fold.sync(&messages);
+            // A row unticked, hidden or deleted in the checklist while this
+            // task runs leaves the very next request, not only the next turn.
+            if memory_loop::refresh_picks(
+                fold,
+                &mut messages,
+                &meter,
+                &ctx.config.db_path,
+                &ctx.session_key,
+            ) {
+                assembly_actions.push("memory_picks_refreshed");
+            }
             // Optional memory (other goals, history, segments) goes before
             // anything touches the recent turns or the current request.
             let over = total_cost_with(&messages, &token_cost).saturating_sub(context_budget);

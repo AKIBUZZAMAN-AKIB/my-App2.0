@@ -904,7 +904,13 @@ pub fn select_with(
     // never cut, even when it alone is over the cap.
     let text = loop {
         let shown: BTreeSet<String> = kept.iter().map(|x| x.id.clone()).collect();
-        let not_shown = not_shown_line(mem, st, &active, &shown);
+        // A record taken out in the checklist (unticked, hidden or deleted)
+        // is not advertised in the "not shown" list either: listing it there
+        // invited the model to recall it, so an unticked range summary still
+        // reached the request through `ctx recall`.
+        let mut listed_as_shown = shown.clone();
+        listed_as_shown.extend(picks.exclude.iter().cloned());
+        let not_shown = not_shown_line(mem, st, &active, &listed_as_shown);
         let text = render(mem, st, &active, &kept, &truncated, history, &not_shown);
         if count(&text) <= inp.max_tokens {
             break text;

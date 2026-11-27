@@ -1436,7 +1436,9 @@ pub fn build_picks_with(
             continue;
         };
         match row.pick.as_str() {
-            "out" => {
+            // `hidden` (taken off the checklist) and `deleted` (removed by
+            // the person) are never sent either, exactly like `out`.
+            "out" | "hidden" | "deleted" => {
                 p.exclude.insert(rid.clone());
                 continue;
             }
@@ -2084,6 +2086,10 @@ pub const OP_ACTIONS: &[&str] = &[
     "inactive",
     "active",
     "remove",
+    "hide",
+    "unhide",
+    "delete",
+    "restore",
 ];
 
 /// Apply checklist ops on memory rows. `include`/`pin` always send the row,
@@ -2184,6 +2190,9 @@ pub fn apply_ops(
             "include" | "pin" => (set_pick(Some("in"), None), format!("{rid} is always sent from the next request")),
             "exclude" => (set_pick(Some("out"), None), format!("{rid} is not sent from the next request (kept, and listed in the checklist)")),
             "auto" | "unpin" => (set_pick(Some("auto"), None), format!("{rid} is chosen by relevance again")),
+            "hide" => (set_pick(Some("hidden"), None), format!("{rid} is hidden from the checklist and not sent from the next request")),
+            "delete" => (set_pick(Some("deleted"), None), format!("{rid} is deleted: never sent again, not listed, not advertised for recall")),
+            "unhide" | "restore" => (set_pick(Some("auto"), None), format!("{rid} is back in the checklist and chosen by relevance again")),
             "all_versions" => (set_pick(None, Some("all")), format!("{rid} is sent with its earlier versions when it is sent")),
             "latest" => (set_pick(None, Some("latest")), format!("{rid} is sent in its newest version only")),
             "inactive" => (set_tag("inactive"), format!("#{tag} is inactive: kept in the list, it no longer pulls {rid} in")),

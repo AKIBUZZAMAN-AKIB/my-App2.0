@@ -42,6 +42,12 @@ pub(super) struct Injected {
     /// The checklist's picks and #tags for this request (memory_checklist.rs),
     /// kept so a smaller re-selection honours them too.
     picks: tm::select::Picks,
+    /// The checklist rows and the token cap of this turn's selection, kept so
+    /// a checklist change made while the task runs (`refresh_picks`) can
+    /// choose the block again before the next step.
+    records: Vec<crate::context_tree::memory_checklist::Record>,
+    anchors: Vec<crate::context_tree::memory_checklist::Anchor>,
+    max_tokens: usize,
     /// Summarized turns put back as written (raw-vs-summary selection,
     /// `turn_memory::raw_select`), in turn order, with the first message of
     /// each so the context tree can number them by their real turn even
@@ -91,6 +97,70 @@ pub(super) fn reselect_smaller(
     messages[at] = block;
     inj.selection = sel;
     Some(before - after)
+}
+
+/// The person can untick, hide or delete a memory row (a range summary,
+/// a decision, …) in the context panel while a task is running. The memory
+/// block used to be chosen once, at the first step of the run, so the change
+/// only reached the model on the *next user message*: every later step of
+/// the running task still sent the unticked summary. Before every step the
+/// checklist picks are read again; when they changed, the block is chosen
+/// again with them and the status is saved, so the panel's colours and the
+/// request agree from the very next step. Returns true when the block changed.
+pub(super) fn refresh_picks(
+    fold: &mut MemoryFold,
+    messages: &mut [Message],
+    meter: &TokenMeter,
+    db_path: &str,
+    key: &str,
+) -> bool {
+    let Some(inj) = fold.injected.as_mut() else {
+        return false;
+    };
+    if inj.records.is_empty() {
+        return false;
+    }
+    let Ok(conn) = crate::db::open_db(db_path) else {
+        return false;
+    };
+    // Anchors were placed in the view at the first step; keep the same ones.
+    let picks = crate::context_tree::memory_checklist::build_picks_with(
+        &conn,
+        key,
+        &inj.records,
+        &inj.anchors,
+    );
+    if picks == inj.picks {
+        return false;
+    }
+    let Some(at) = messages.iter().position(tm::is_memory_message) else {
+        return false;
+    };
+    let count = |s: &str| meter.text(s);
+    let sel = tm::select::select_with(
+        &tm::select::Input {
+            mem: &inj.mem,
+            goals: &inj.goals,
+            query: &inj.query,
+            previous: &inj.previous,
+            fts_turns: &inj.fts_turns,
+            max_tokens: inj.max_tokens,
+        },
+        &picks,
+        &count,
+    );
+    let _ = crate::context_tree::memory_checklist::save_status(
+        &conn,
+        key,
+        &sel,
+        &picks,
+        &inj.records,
+        now_ms(),
+    );
+    messages[at] = tm::memory_block(&sel.text);
+    inj.selection = sel;
+    inj.picks = picks;
+    true
 }
 
 impl MemoryFold {
@@ -1056,7 +1126,23 @@ pub(super) async fn apply(
     let memory_tokens = meter.message(&block);
     let mut raw_msgs: Vec<Message> = Vec::new();
     let mut raw_turns: Vec<(u32, String)> = Vec::new();
+    // A range the person unticked (or hid, or deleted) in the checklist goes
+    // nowhere: not its summary (picks.exclude, select.rs) and not its
+    // original turns either, even when "Both" or a per-turn "raw" box was
+    // set for it earlier. Before this, an unticked range in "Both" mode kept
+    // sending its originals, so the range looked "always sent".
+    let excluded_ranges: Vec<(u32, u32)> = picks
+        .exclude
+        .iter()
+        .filter_map(|rid| {
+            let (a, b) = rid.strip_prefix('S')?.split_once('-')?;
+            Some((a.parse().ok()?, b.parse().ok()?))
+        })
+        .collect();
     for &n in &raw_plan.raw_turns {
+        if excluded_ranges.iter().any(|&(a, b)| n >= a && n <= b) {
+            continue;
+        }
         let Some(t) = turns.get((n as usize).wrapping_sub(1)) else {
             continue;
         };
@@ -1095,6 +1181,9 @@ pub(super) async fn apply(
         previous,
         fts_turns,
         picks,
+        records: mem_rows,
+        anchors,
+        max_tokens,
         raw_turns,
     });
     Ok(Some(fold))
