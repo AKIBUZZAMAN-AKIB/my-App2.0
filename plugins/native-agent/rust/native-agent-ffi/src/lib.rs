@@ -2522,6 +2522,57 @@ pub(crate) fn memory_action(
             }
             out
         }
+        "ctx.checklist" => {
+            // The person's own checklists (store.rs `ucl/…`) and the switch on
+            // the model's (`cat/…`, `task/pick`). `op`: create, rename, cap,
+            // delete, include, exclude, add, remove. Returns the new lists.
+            use context_tree::store as cs;
+            cs::ensure_tables(conn).map_err(|e| err(e.to_string()))?;
+            let now = now_millis();
+            let op = req.get("op").and_then(|v| v.as_str()).unwrap_or("");
+            let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let title = req.get("title").and_then(|v| v.as_str());
+            let cap = req.get("cap").and_then(|v| v.as_i64());
+            let items: Vec<String> = req
+                .get("items")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let mine = id.starts_with(cs::USER_CHECKLIST_PREFIX);
+            let res: rusqlite::Result<(bool, String)> = turn_memory::write_tx(conn, |tx| {
+                let _ = cs::ensure_session(tx, key, now);
+                let out = match op {
+                    "create" => {
+                        let nid = cs::create_user_checklist(tx, key, title.unwrap_or(""), cap, now)?;
+                        if !items.is_empty() {
+                            cs::add_checklist_items(tx, key, &nid, &items, now)?;
+                        }
+                        (true, nid)
+                    }
+                    "rename" if mine => (cs::update_user_checklist(tx, key, &id, title, None, now)?, id.clone()),
+                    "cap" if mine => (cs::update_user_checklist(tx, key, &id, None, Some(cap), now)?, id.clone()),
+                    "delete" if mine => (cs::delete_user_checklist(tx, key, &id)?, id.clone()),
+                    "include" | "exclude" if !id.is_empty() => {
+                        (cs::set_checklist_included(tx, key, &id, op == "include", now)?, id.clone())
+                    }
+                    "add" if mine => (cs::add_checklist_items(tx, key, &id, &items, now)? > 0, id.clone()),
+                    "remove" if mine => (cs::remove_checklist_items(tx, key, &id, &items)? > 0, id.clone()),
+                    _ => (false, id.clone()),
+                };
+                if out.0 {
+                    let _ = cs::bump_rev(tx, key, now);
+                }
+                Ok(out)
+            });
+            let (ok, nid) = res.map_err(|e: rusqlite::Error| err(e.to_string()))?;
+            let nodes = cs::load_nodes(conn, key).unwrap_or_default();
+            serde_json::json!({
+                "ok": ok,
+                "op": op,
+                "id": nid,
+                "checklists": context_tree::wiring::checklists_json(conn, key, &nodes),
+            })
+        }
         "ctx.reset" => {
             // Plan §15.4: start this chat's tree again. Every ctx_* row of the
             // session goes (notes, temp summaries, strategy, log); the global

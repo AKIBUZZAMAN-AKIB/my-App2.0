@@ -256,7 +256,11 @@ pub fn step_view(inp: &StepInput<'_>) -> StepView {
     };
     let tid = task.task_id.clone();
     // Keep the goal's steer messages and focus current.
-    let pick = store::get_pick(&conn, inp.session_key).ok().flatten();
+    // The person can switch the model's pick off in the panel (AI checklists).
+    let pick = store::get_pick(&conn, inp.session_key)
+        .ok()
+        .flatten()
+        .filter(|_| !crate::context_tree::store::ai_task_pick_off(&conn, inp.session_key));
     let mut new_steer = false;
     if let Ok(mut goal) = serde_json::from_value::<TaskGoal>(task.goal_json.clone()) {
         for s in &n.steers {

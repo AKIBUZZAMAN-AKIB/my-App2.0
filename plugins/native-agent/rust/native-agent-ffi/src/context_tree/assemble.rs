@@ -192,6 +192,8 @@ pub fn instructions() -> &'static str {
      The last #tag of a record decides what is sent; its context goes there once\n\
      (id=#plan.md@v1 reads a version). Name stored data you use by its #tag.\n\
      Nothing is deleted by taking it out. Tight: pin=True goes last.\n\
+     ucl/N are the user's own checklists (listed in view; ○ = the user switched it off):\n\
+     respect them, never rename or delete them.\n\
      If a tool is needed, send ctx task (id T1-T7, ids, focus) in the same answer as your\n\
      first tool call; never call ctx task alone. No tool needed: answer directly.\n"
 }

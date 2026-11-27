@@ -856,7 +856,12 @@ pub fn before_request(
 
     // 4. What the request leaves out, read back from the store so that states
     //    the model set earlier (`ctx set … out`) count as much as this pass.
-    let after = store::load_nodes(&conn, session_key).unwrap_or(nodes);
+    //    The person's checklist switches (a list off, a token cap) apply here.
+    let after = store::gate_nodes(
+        &conn,
+        session_key,
+        store::load_nodes(&conn, session_key).unwrap_or(nodes),
+    );
     let drop_turns = dropped_turns(&after);
     let drop_calls = dropped_calls(&after);
     let (drop_chat_summary, drop_memory_summary) = dropped_summaries(&after);
@@ -1093,7 +1098,68 @@ pub fn snapshot_on(
         // Every model request per turn: how many, tokens full / sent / saved
         // and what the provider reported (request_log.rs).
         "requests": super::request_log::summary(conn, session_key),
+        // The person's checklists and the model's own (categories, task pick).
+        "checklists": checklists_json(conn, session_key, &nodes),
     })
+}
+
+/// `checklists` of the snapshot: `user` (made in the panel, `ucl/…`) and `ai`
+/// (the model's `cat/…` categories and its `ctx task` pick), each with its
+/// items, its switch and the tokens its items send.
+pub fn checklists_json(conn: &Connection, session_key: &str, nodes: &[Node]) -> serde_json::Value {
+    let tokens = |ids: &[String]| -> u64 {
+        ids.iter()
+            .filter_map(|id| nodes.iter().find(|n| !n.deleted && n.id.as_str() == id))
+            .map(|n| super::select::sent_tokens(n) as u64)
+            .sum()
+    };
+    let user: Vec<serde_json::Value> = store::load_user_checklists(conn, session_key)
+        .unwrap_or_default()
+        .iter()
+        .map(|c| {
+            let mut v = c.to_json();
+            v["tokens"] = serde_json::json!(tokens(&c.items));
+            v
+        })
+        .collect();
+    let off = store::ai_checklists_off(conn, session_key);
+    let mut ai: Vec<serde_json::Value> = Vec::new();
+    for c in store::load_categories(conn, session_key).unwrap_or_default() {
+        if c.deleted || c.owner != "ai" {
+            continue;
+        }
+        let items: Vec<String> = nodes
+            .iter()
+            .filter(|n| !n.deleted && (n.parent == c.id || n.tags.iter().any(|t| *t == c.id)))
+            .map(|n| n.id.as_str().to_string())
+            .collect();
+        let why: Option<String> = conn
+            .query_row(
+                "SELECT reason FROM ctx_action_log WHERE session_key = ?1 AND ops LIKE ?2 AND reason IS NOT NULL ORDER BY seq DESC LIMIT 1",
+                rusqlite::params![session_key, format!("%\"{}\"%", c.id)],
+                |r| r.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        ai.push(serde_json::json!({
+            "id": c.id, "title": c.title, "kind": "category", "parent": c.parent,
+            "cap": c.cap_tokens, "included": !off.contains(&c.id), "items": items,
+            "tokens": tokens(&items), "focus": why, "source": "ai",
+        }));
+    }
+    if let Ok(Some(p)) = crate::context_policy::store::get_pick(conn, session_key) {
+        if !p.ids.is_empty() {
+            ai.push(serde_json::json!({
+                "id": store::AI_TASK_CHECKLIST_ID,
+                "title": p.focus.clone().unwrap_or_else(|| "Task pick".into()),
+                "kind": "task", "policy": p.policy, "at": p.at,
+                "included": !off.contains(store::AI_TASK_CHECKLIST_ID),
+                "tokens": tokens(&p.ids), "items": p.ids.clone(), "focus": p.focus, "source": "ai",
+            }));
+        }
+    }
+    serde_json::json!({ "user": user, "ai": ai })
 }
 
 /// Single tool calls (`turn/tN/call/K`) whose node is not `in`, as

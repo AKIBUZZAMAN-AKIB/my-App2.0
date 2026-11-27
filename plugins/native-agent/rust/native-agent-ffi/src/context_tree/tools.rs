@@ -93,7 +93,7 @@ pub fn tool_definition() -> ToolDefinition {
         name: CTX_TOOL.into(),
         description: "See and steer what is in your context window: a checklist of every item with its token \
 cost and state. Nothing is lost (anything out is stored and recallable); locked rules and essentials \
-cannot be removed."
+cannot be removed. ucl/* are the user's checklists: read them, never delete them."
 .into(),
         input_schema: schema(),
         webview_only: false,

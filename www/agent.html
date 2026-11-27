@@ -4722,6 +4722,35 @@ p.cc-sel-note b { color: var(--foreground); }
 .cc-rq-req .cc-rq-tok { min-width: 0; }
 .cc-rq-meta { white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
 .cc-rq-meta::-webkit-scrollbar { display: none; }
+
+/* ---------- Checklists: mine (person) and the model's (spark) ---------- */
+.cc-cl-gico { flex: none; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; }
+.cc-cl-gico-user, .cc-cl-src-user { background: color-mix(in srgb, var(--cc-always, #0ea5e9) 14%, transparent); color: var(--cc-always, #0ea5e9); }
+.cc-cl-gico-spark, .cc-cl-src-ai { background: color-mix(in srgb, var(--cc-summary, #8b5cf6) 14%, transparent); color: var(--cc-summary, #8b5cf6); }
+.cc-cl-src { flex: none; width: 20px; height: 20px; min-height: 20px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 50%; }
+button.cc-cl-src { cursor: pointer; }
+.cc-cl-src-ai[aria-expanded="true"] { background: var(--cc-summary, #8b5cf6); color: #fff; }
+.cc-cl-row { flex-wrap: nowrap; }
+.cc-cl-check { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--cc-always, #0ea5e9); }
+.cc-cl-ai .cc-cl-check { accent-color: var(--cc-summary, #8b5cf6); }
+.cc-cl-off > .cc-cl-row .ct-title { opacity: .5; text-decoration: line-through; }
+.cc-cl-off > .cc-kids { opacity: .55; }
+.cc-cl-user > .cc-kids { border-left: 2px solid color-mix(in srgb, var(--cc-always, #0ea5e9) 35%, transparent); }
+.cc-cl-ai > .cc-kids { border-left: 2px solid color-mix(in srgb, var(--cc-summary, #8b5cf6) 35%, transparent); }
+.cc-iconbtn { flex: none; width: 26px; height: 26px; min-height: 26px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
+.cc-iconbtn:hover, .cc-iconbtn:focus-visible { background: var(--muted, rgba(127,127,127,.12)); color: var(--foreground); }
+.cc-iconbtn.ok { color: var(--cc-always, #0ea5e9); }
+.cc-cl-plus { margin-left: auto; width: 24px; height: 24px; min-height: 24px; border-radius: 50%; background: color-mix(in srgb, var(--cc-always, #0ea5e9) 12%, transparent); color: var(--cc-always, #0ea5e9); }
+.cc-cl-rm { width: 22px; height: 22px; min-height: 22px; }
+.cc-cl-empty { margin: 4px 0 6px 28px; display: inline-flex; align-items: center; gap: 4px; color: var(--muted-foreground); font-size: 0.7rem; background: none; border: 0; padding: 2px 0; }
+button.cc-cl-empty { cursor: pointer; color: var(--cc-always, #0ea5e9); }
+.cc-clform { display: flex; align-items: center; gap: 6px; margin: 4px 0 6px 18px; padding: 5px 6px 5px 8px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--cc-always, #0ea5e9) 40%, transparent); background: color-mix(in srgb, var(--cc-always, #0ea5e9) 6%, transparent); color: var(--cc-always, #0ea5e9); }
+.cc-clform input { min-width: 0; height: 26px; border: 0; background: transparent; color: var(--foreground); font: inherit; font-size: 0.8125rem; outline: none; }
+.cc-clform input[name=title] { flex: 1 1 auto; }
+.cc-clform-t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--foreground); font-size: 0.8125rem; }
+.cc-clform-cap { flex: none; display: inline-flex; align-items: center; gap: 2px; padding: 0 6px; border-radius: 7px; background: var(--background, #fff); color: var(--muted-foreground); }
+.cc-clform-cap input { width: 44px; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.cc-selbar-ico { padding: 0 8px; }
 /* @@END css:58-context-tree */
 /* @@BEGIN css:61-settings-shell */
 /* Appearance: the four choices, applied by attribute so nothing re-renders. */
@@ -28309,7 +28338,7 @@ const ContextTree = (() => {
   };
   const ACTOR_LABEL = { model: 'Model', policy: 'Engine policy', user: 'You', engine: 'Engine' };
 
-  let state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '', memory: null, requests: null };
+  let state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '', memory: null, requests: null, checklists: { user: [], ai: [] } };
   /** Memory rows waiting for the engine's answer: rid -> action. */
   const pendingMem = new Map();
   // null = the engine has not told us yet, so the panel shows the tree (the
@@ -28389,6 +28418,8 @@ const ContextTree = (() => {
         memory: p.memory && typeof p.memory === 'object' && Array.isArray(p.memory.groups) ? p.memory : state.memory,
         // Every model request per turn (request_log.rs): one turn is many requests.
         requests: p.requests && typeof p.requests === 'object' && Array.isArray(p.requests.turns) ? p.requests : state.requests,
+        // The person's checklists and the model's own (store.rs ucl/…, cat/…, task/pick).
+        checklists: p.checklists && typeof p.checklists === 'object' ? p.checklists : (state.checklists || { user: [], ai: [] }),
       };
       if (p.settings) applySettings(p.settings);
       else if (typeof p.enabled === 'boolean') settings = { enabled: true, thresholdPercent: settings ? settings.thresholdPercent : null };
@@ -28618,7 +28649,7 @@ const ContextTree = (() => {
         busy = null;
         const ok = !!(res && res.reset);
         if (ok) {
-          state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: state.model || '', memory: null, requests: null };
+          state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: state.model || '', memory: null, requests: null, checklists: { user: [], ai: [] } };
           lastReset = { at: Date.now(), removed: (res && res.removed) || {} };
         }
         paint();
@@ -28931,6 +28962,8 @@ const ContextTree = (() => {
   const policyOn = () => { try { const p = policyApi(); return !!(p && p.available()); } catch (e) { return false; } };
   const tabList = () => BASE_TABS.filter(([id]) => id !== 'policy' || policyOn());
   const INFO = {
+    mycl: 'Checklists you make. + makes one (a title, an optional token cap); Select rows, then the list icon, files them in one. Untick a list to leave all its items out; a cap sends its items in order until it is full. Deleting a list puts its items back where they were.',
+    aicl: 'Categories and task picks the model made with ctx. Untick one to leave its items out (a task pick off means the task runs with full context). Tap the spark to see why the model made it.',
     meter: 'Tokens the next request carries, by kind, against the model\u2019s window. Below, tick an item to include it and untick to leave it out; nothing is deleted. \u25cf in \u00b7 \u25cb out \u00b7 \u25d0 note only \u00b7 \u2726 replaced by a summary \u00b7 \u26bf locked.',
     turn: 'Every stored chat, newest first. Open one to see its turns, each tool call with its result, and its range summaries; tick a box to keep an item in that chat\'s context or leave it out. The arrow opens the chat or jumps to the turn. On a row: \u26a1 real requests, the wrench tool calls, \u03a3 and a violet bar a summarized turn, a struck-through title a left-out item; the number on the right is the tokens it sends. Long titles scroll sideways.',
     call: 'One tool call with its result. It can be left out on its own; the rest of the turn stays.',
@@ -29090,6 +29123,11 @@ const ContextTree = (() => {
     hide: '<path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c5 0 9 4.5 10 7-.4 1-1.3 2.4-2.6 3.7M6.4 6.4C4.3 7.8 2.7 10 2 12c1 2.5 5 7 10 7 1.6 0 3-.4 4.3-1"/>',
     eye: '<path d="M2 12c1-2.5 5-7 10-7s9 4.5 10 7c-1 2.5-5 7-10 7S3 14.5 2 12z"/><circle cx="12" cy="12" r="3"/>',
     archive: '<path d="M3 4h18v4H3zM5 8v12h14V8M10 12h4"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    list: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/>',
+    cap: '<path d="M5 20h14"/><path d="M7 16V9M12 16V5M17 16v-4"/>',
+    x: '<path d="M6 6l12 12M18 6L6 18"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   };
   const svgI = (k, sz = 12) => `<svg viewBox="0 0 24 24" width="${sz}" height="${sz}" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${MI[k] || ''}</svg>`;
   /** A small glyph, optionally with a number beside it; `title` says it in words. */
@@ -29137,8 +29175,9 @@ const ContextTree = (() => {
   /** One engine item as a leaf row. */
   function leafRow(it, extra = '') {
     const st = stateOf(it);
-    return `<div class="ct-item cc-row cc-g-${groupOf(it) || 'memory'} ct-state-${esc(st)}${kindOf(it) === 'summary' ? ' ct-kind-summary' : ''}" data-node="${esc(it.id)}">
-      ${noTwisty}${control(it)}<span class="ct-title" title="${esc(it.title || it.id)}">${esc(it.title || it.id)}</span>${extra}<span class="ct-cost" title="${esc(STATE_LABEL[st] || st)}">${esc(costText(it))}</span></div>`;
+    const ra = !RK && switchable(it) && !extra && !/^(sys|ess)\//.test(it.id || '') ? rowAct({ kind: 'item', node: it.id, label: it.title || it.id }) : null;
+    return `<div class="ct-item cc-row cc-g-${groupOf(it) || 'memory'} ct-state-${esc(st)}${kindOf(it) === 'summary' ? ' ct-kind-summary' : ''}${ra ? ' cc-actrow' : ''}" data-node="${esc(it.id)}"${ra ? ra.attrs : ''}>
+      ${ra ? selDot(ra.on) : ''}${noTwisty}${control(it)}<span class="ct-title" title="${esc(it.title || it.id)}">${esc(it.title || it.id)}</span>${extra}<span class="ct-cost" title="${esc(STATE_LABEL[st] || st)}">${esc(costText(it))}</span></div>`;
   }
 
   /** A collapsible group of plain items (rules, memory, anything else). */
@@ -29516,6 +29555,164 @@ const ContextTree = (() => {
 
   /** The checklist: the open chat's rules and memory, then every stored
    * conversation; the open one first and expanded. */
+
+  /* ---------- Checklists: the person's own (ucl/…) and the model's (cat/…, task/pick) ---------- */
+  let clForm = null; // { mode: 'new'|'rename'|'cap', id, items, title, cap }
+  const clData = () => state.checklists || { user: [], ai: [] };
+  function filedIds() {
+    const set = new Set();
+    for (const l of clData().user || []) for (const id of l.items || []) set.add(id);
+    return set;
+  }
+  const isFiled = (id, set) => set.has(id) || set.has(String(id).split('/call/')[0]);
+  /** The engine id a selected row files under, or '' when it cannot be filed. */
+  function clItemId(r) {
+    if (!r || (r.key && r.key !== activeKey())) return '';
+    if (r.kind === 'turn') return r.n ? `turn/t${r.n}` : '';
+    if (r.kind === 'sum' || r.kind === 'item') return r.node || '';
+    return '';
+  }
+  function clOp(op, extra) {
+    const send = ctxSend();
+    if (!send) { say('No engine in this build', 'error'); return Promise.resolve(null); }
+    // Optimistic: a switch flips at once.
+    if (op === 'include' || op === 'exclude') {
+      const d = clData();
+      for (const l of [...(d.user || []), ...(d.ai || [])]) if (l.id === extra.id) l.included = op === 'include';
+      paint(true);
+    }
+    return Promise.resolve(send('ctx.checklist', { op, ...extra }))
+      .then((r) => {
+        if (!r || r.ok === false) throw new Error((r && (r.error || r.text)) || 'The engine refused the change.');
+        if (r.checklists) state.checklists = r.checklists;
+        return r;
+      })
+      .catch((e) => { say(errText(e), 'error'); return null; })
+      .finally(() => { paint(true); refresh(); });
+  }
+  function openClForm(mode, id, items) {
+    const l = (clData().user || []).find((x) => x.id === id) || {};
+    clForm = { mode, id, items: items || [], title: l.title || '', cap: l.cap || '' };
+    panel.expanded.add('grp/mycl');
+    paint(true);
+    requestAnimationFrame(() => { const f = panel.body && panel.body.querySelector(mode === 'cap' ? '.cc-clform [name=cap]' : '.cc-clform [name=title]'); if (f) { f.focus(); if (f.select) f.select(); } });
+  }
+  function saveClForm() {
+    const f = clForm;
+    const root = panel.body && panel.body.querySelector('.cc-clform');
+    if (!f || !root) return;
+    const title = (root.querySelector('[name=title]') || {}).value || '';
+    const capRaw = (root.querySelector('[name=cap]') || {}).value || '';
+    const cap = capRaw ? Math.max(0, Math.round(Number(String(capRaw).replace(/k$/i, '')) * (/k$/i.test(capRaw) ? 1000 : 1))) || null : null;
+    clForm = null;
+    if (f.mode === 'new') clOp('create', { title: title.trim() || 'Checklist', cap, items: f.items }).then((r) => { if (r && r.id) panel.expanded.add('cl/' + r.id); });
+    else if (f.mode === 'rename') clOp('rename', { id: f.id, title });
+    else clOp('cap', { id: f.id, cap });
+    paint(true);
+  }
+  function clFormHtml() {
+    if (!clForm) return '';
+    const f = clForm;
+    const showTitle = f.mode !== 'cap', showCap = f.mode !== 'rename';
+    return `<div class="cc-clform" role="group" aria-label="${f.mode === 'new' ? 'New checklist' : 'Edit checklist'}">
+      ${svgI('user', 14)}
+      ${showTitle ? `<input name="title" type="text" maxlength="120" placeholder="Checklist title" value="${esc(f.title)}" aria-label="Title" enterkeyhint="done">` : `<span class="cc-clform-t">${esc(f.title)}</span>`}
+      ${showCap ? `<label class="cc-clform-cap" title="Token cap (optional)">${svgI('cap', 12)}<input name="cap" type="text" inputmode="numeric" placeholder="cap" value="${esc(f.cap || '')}" aria-label="Token cap (optional)"></label>` : ''}
+      ${f.items.length ? `<span class="cc-mi" title="${f.items.length} items to add">${svgI('list')}<b>${f.items.length}</b></span>` : ''}
+      <button class="cc-iconbtn ok" type="button" data-cl-save aria-label="Save">${svgI('check', 14)}</button>
+      <button class="cc-iconbtn" type="button" data-cl-cancel aria-label="Cancel">${svgI('x', 14)}</button>
+    </div>`;
+  }
+  /** An item filed in a checklist, by its engine id. */
+  function clItemRow(id, list, mine) {
+    const it = (state.items || []).find((x) => x.id === id);
+    const rm = mine ? `<button class="cc-iconbtn cc-cl-rm" type="button" data-cl-remove="${esc(id)}" data-cl-list="${esc(list.id)}" aria-label="Take out of the list" title="Back to where it was">${svgI('x', 12)}</button>` : '';
+    if (it) return leafRow(it, rm);
+    const t = /^turn\/t(\d+)$/.exec(id);
+    const title = t ? (threadTurn(threadTurns(), Number(t[1]), '') || {}).title || `Turn ${t[1]}` : id;
+    return `<div class="ct-item cc-row cc-g-memory" data-node="${esc(id)}">${noTwisty}<span class="ct-sym">\u00b7</span><span class="ct-title" title="${esc(title)}">${esc(title)}</span>${rm}<span class="ct-cost">\u2013</span></div>`;
+  }
+  function clRow(l, mine) {
+    const id = 'cl/' + l.id;
+    const open = panel.expanded.has(id);
+    const items = l.items || [];
+    const on = l.included !== false;
+    const tipKey = 'clwhy:' + l.id;
+    const kindIco = mine ? '' : l.kind === 'task' ? mi('focus', 'Task pick' + (l.policy ? ' \u00b7 ' + l.policy : '')) : '';
+    const src = mine
+      ? `<span class="cc-cl-src cc-cl-src-user" role="img" aria-label="Yours" title="Yours">${svgI('user')}</span>`
+      : `<button class="cc-cl-src cc-cl-src-ai" type="button" data-info="${esc(tipKey)}" aria-expanded="${panel.tips.has(tipKey)}" aria-label="Why the model made it" title="Why">${svgI('spark')}</button>`;
+    const why = !mine && panel.tips.has(tipKey) ? `<p class="cc-tip" role="note">${esc([l.kind === 'task' ? 'Task pick' + (l.policy ? ' ' + l.policy : '') : 'Category ' + l.id, l.focus ? 'Focus: ' + l.focus : 'No reason given', l.cap ? 'cap ' + short(l.cap) : ''].filter(Boolean).join(' \u2014 '))}</p>` : '';
+    const capI = l.cap ? mi('cap', `Token cap ${num(l.cap)}`, short(l.cap)) : '';
+    return `<div class="cc-node cc-cl ${mine ? 'cc-cl-user' : 'cc-cl-ai'}${on ? '' : ' cc-cl-off ct-state-out'}" data-cl="${esc(l.id)}">
+      <div class="cc-row cc-cl-row">${twisty(id, l.title)}<input class="cc-cl-check" type="checkbox" data-cl-id="${esc(l.id)}"${on ? ' checked' : ''} aria-label="${esc((on ? 'Leave out: ' : 'Include: ') + l.title)}">${src}<span class="ct-title" title="${esc(l.title)}">${esc(l.title)}</span><span class="cc-meta">${kindIco}${capI}${mi('list', `${items.length} items`, items.length)}</span><span class="ct-cost" title="Tokens its items send">${esc(on ? short(l.tokens || 0) : '\u2013')}</span>${mine ? `<button class="cc-kebab" type="button" data-cl-menu="${esc(l.id)}" aria-haspopup="menu" aria-label="${esc('More actions for ' + l.title)}">${MENU_ICON}</button>` : ''}</div>
+      ${why}
+      ${open ? `<div class="cc-kids">${items.length ? items.map((x) => clItemRow(x, l, mine)).join('') : `<p class="cc-cl-empty">${svgI('select')} Select rows, then ${svgI('list')}</p>`}</div>` : ''}
+    </div>`;
+  }
+  function clGroupHead(gid, label, icon, lists, extra) {
+    const on = lists.filter((l) => l.included !== false);
+    const tok = on.reduce((n, l) => n + (Number(l.tokens) || 0), 0);
+    return `<div class="cc-row cc-head">${twisty('grp/' + gid, label)}<span class="cc-cl-gico cc-cl-gico-${icon}">${svgI(icon)}</span><span class="ct-title cc-group-name">${esc(label)}</span>${extra || ''}<span class="ct-cost" title="${on.length} of ${lists.length} on \u00b7 tokens">${on.length}/${lists.length} \u00b7 ${esc(short(tok))}</span>${infoBtn(gid)}</div>${tip(gid)}`;
+  }
+  function clGroups() {
+    if (RK) return '';
+    const d = clData();
+    const user = d.user || [], ai = d.ai || [];
+    const plus = `<button class="cc-iconbtn cc-cl-plus" type="button" data-cl-new aria-label="New checklist" title="New checklist">${svgI('plus', 14)}</button>`;
+    const mine = `<div class="cc-node cc-group cc-g-mycl" data-group="mycl">${clGroupHead('mycl', 'My checklists', 'user', user, plus)}${panel.expanded.has('grp/mycl') ? `<div class="cc-kids">${clForm && clForm.mode === 'new' ? clFormHtml() : ''}${user.map((l) => (clForm && clForm.id === l.id ? clFormHtml() : '') + clRow(l, true)).join('')}${!user.length && !clForm ? `<button class="cc-cl-empty cc-link" type="button" data-cl-new>${svgI('plus')} New checklist</button>` : ''}</div>` : ''}</div>`;
+    const theirs = `<div class="cc-node cc-group cc-g-aicl" data-group="aicl">${clGroupHead('aicl', 'AI checklists', 'spark', ai, '')}${panel.expanded.has('grp/aicl') ? `<div class="cc-kids">${ai.length ? ai.map((l) => clRow(l, false)).join('') : `<p class="cc-cl-empty">${svgI('spark')} none yet</p>`}</div>` : ''}</div>`;
+    return mine + theirs;
+  }
+  /** A sheet of choices (the same look as a row's menu). */
+  function openSheet(title, sub, items, rows, opener) {
+    const host = ensureMenuHost();
+    if (!host) return;
+    closeMenu(false);
+    act.menu = { r: rows[0], rows, opener };
+    host.innerHTML = `<div class="cc-scrim" data-menu-close="1"></div>
+      <div class="cc-sheet" role="menu" aria-label="${esc(title)}">
+        <div class="cc-grab" aria-hidden="true"></div>
+        <div class="cc-sheet-head"><span class="cc-sheet-title">${esc(title)}</span></div>
+        ${sub ? `<p class="cc-sheet-sub">${esc(sub)}</p>` : ''}
+        <div class="cc-sheet-list">${items.map((it) => it.sep ? '<div class="cc-sheet-sep" role="separator"></div>' : `<button class="cc-sheet-item${it.danger ? ' danger' : ''}${it.tone ? ' tone-' + it.tone : ''}" type="button" role="menuitem" data-menu-act="${esc(it.k)}" tabindex="-1">${ico(it.icon)}<span class="cc-si-text"><span class="cc-si-label">${esc(it.label)}</span>${it.hint ? `<span class="cc-si-hint">${esc(it.hint)}</span>` : ''}</span></button>`).join('')}</div>
+        <button class="cc-sheet-cancel" type="button" data-menu-close="1">Cancel</button>
+      </div>`;
+    host.hidden = false;
+    host.dataset.open = '1';
+    const first = host.querySelector('.cc-sheet-item');
+    requestAnimationFrame(() => { host.dataset.shown = '1'; if (first) { try { first.focus({ preventScroll: true }); } catch (e) { first.focus(); } } });
+  }
+  function openClPicker(rows) {
+    const ok = rows.filter(clItemId);
+    if (!ok.length) { say('Only turns, summaries and notes of this chat can be filed'); return; }
+    const user = clData().user || [];
+    const items = [{ k: 'cl-new', icon: 'plus', label: 'New checklist', hint: `With ${ok.length} item${ok.length === 1 ? '' : 's'}`, tone: 'always' }];
+    if (user.length) items.push({ sep: true });
+    for (const l of user) items.push({ k: 'cl-to:' + l.id, icon: 'list', label: l.title, hint: `${(l.items || []).length} items${l.cap ? ' \u00b7 cap ' + short(l.cap) : ''}` });
+    openSheet('Add to checklist', `${ok.length} selected`, items, ok, null);
+  }
+  function openClMenu(id, opener) {
+    const l = (clData().user || []).find((x) => x.id === id);
+    if (!l) return;
+    const r = { id: 'cl:' + id, kind: 'cl', node: id, label: l.title };
+    openSheet(l.title, `${(l.items || []).length} items${l.cap ? ' \u00b7 cap ' + num(l.cap) : ''}`, [
+      { k: 'clm-add', icon: 'select', label: 'Add items', hint: 'Select rows, then the list icon' },
+      { k: 'clm-rename', icon: 'edit', label: 'Rename', hint: '' },
+      { k: 'clm-cap', icon: 'cap', label: l.cap ? 'Change token cap' : 'Set token cap', hint: 'Items go in order until it is full' },
+      { sep: true },
+      { k: 'clm-delete', icon: 'del', label: 'Delete checklist', hint: 'Its items go back where they were', danger: true },
+    ], [r], opener);
+  }
+  function clMenuAct(k, r) {
+    const id = r && r.node;
+    if (!id) return;
+    if (k === 'clm-add') { act.select = true; paint(true); say('Select rows, then the list icon'); return; }
+    if (k === 'clm-rename') { openClForm('rename', id, []); return; }
+    if (k === 'clm-cap') { openClForm('cap', id, []); return; }
+    if (k === 'clm-delete') { clOp('delete', { id }).then((x) => { if (x) say('Checklist deleted; its items are back'); }); }
+  }
+
   function tree() {
     const items = state.items || [];
     const cur = activeKey();
@@ -29524,7 +29721,8 @@ const ContextTree = (() => {
     const others = list.filter((t) => t.id !== cur);
     if (!items.length && !segs.length && !others.length) return '<p class="ct-empty">Empty until the first message.</p>';
     NS = ''; RK = '';
-    const q = convParts(items, threadTurns(), segs);
+    const filed = filedIds();
+    const q = convParts(filed.size ? items.filter((it) => !isFiled(it.id, filed)) : items, threadTurns(), segs);
     const all = panel.expanded.has('convs/all');
     const curRow = list.find((t) => t.id === cur);
     const shown = [...(curRow ? [curRow] : []), ...(all ? others : others.slice(0, CONV_PAGE))];
@@ -29532,7 +29730,7 @@ const ContextTree = (() => {
     const convo = shown.length
       ? `<div class="cc-node cc-group cc-g-turns" data-group="turns"><div class="cc-row cc-head">${twisty('grp/turns', 'conversations')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Conversations</span><span class="ct-cost">${list.length}</span>${infoBtn('turn')}</div>${tip('turn')}${panel.expanded.has('grp/turns') ? `<div class="cc-kids">${shown.map((t) => convNode(t, cur, q)).join('')}${more}</div>` : ''}</div>`
       : '';
-    return groupBlock('rules', 'Rules', q.plain.rules) + groupBlock('memory', 'Memory', q.plain.memory) + memoryTree() + convo;
+    return groupBlock('rules', 'Rules', q.plain.rules) + clGroups() + groupBlock('memory', 'Memory', q.plain.memory) + memoryTree() + convo;
   }
 
   // ── The chat memory as checklist groups (always on; memory_checklist.rs).
@@ -29703,12 +29901,17 @@ const ContextTree = (() => {
     show: '<path d="M2 12c1-2.5 5-7 10-7s9 4.5 10 7c-1 2.5-5 7-10 7S3 14.5 2 12z"/><circle cx="12" cy="12" r="3"/>',
     del: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
     go: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+    list: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
+    cap: '<path d="M5 20h14"/><path d="M7 16V9M12 16V5M17 16v-4"/>',
+    info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/>',
   };
   const ico = (k) => `<svg class="cc-act-ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[k] || ''}</svg>`;
 
   /** Attributes that make a row selectable and give it a menu. */
   function rowAct(d) {
-    const id = d.kind === 'seg' ? `seg:${d.key || ''}:${d.rid}` : d.kind === 'sum' ? `sum:${d.key || ''}:${d.node}` : `turn:${d.key || ''}:${d.n}`;
+    const id = d.kind === 'seg' ? `seg:${d.key || ''}:${d.rid}` : d.kind === 'sum' ? `sum:${d.key || ''}:${d.node}` : d.kind === 'item' ? `item:${d.key || ''}:${d.node}` : `turn:${d.key || ''}:${d.n}`;
     const on = act.sel.has(id);
     return { id, on, attrs: ` data-act-id="${esc(id)}" data-act-kind="${d.kind}" data-act-key="${esc(d.key || '')}" data-act-n="${esc(d.n || '')}" data-act-rid="${esc(d.rid || '')}" data-act-a="${esc(d.a || '')}" data-act-b="${esc(d.b || '')}" data-act-node="${esc(d.node || '')}" data-act-label="${esc(d.label || '')}"${d.list ? ` data-act-list="${esc(d.list.join(','))}"` : ''}${act.select ? ` aria-selected="${on}"` : ''}` };
   }
@@ -29729,6 +29932,12 @@ const ContextTree = (() => {
   function menuItems(r) {
     const items = [];
     items.push({ k: 'select', icon: 'select', label: act.select ? (act.sel.has(r.id) ? 'Unselect' : 'Select') : 'Select', hint: 'Pick several rows, then act on all of them' });
+    if (clItemId(r)) items.push({ k: 'cl-add', icon: 'list', label: 'Add to checklist', hint: 'File it in one of your checklists' });
+    if (r.kind === 'item') {
+      const it = rowItem(r);
+      if (it && switchable(it)) items.push(stateOf(it) === 'out' ? { k: 'turn-in', icon: 'always', label: 'Send again', hint: 'Back in the window', tone: 'always' } : { k: 'turn-out', icon: 'out', label: 'Leave out', hint: 'Not sent, stays stored', tone: 'out' });
+      return items;
+    }
     if (r.kind === 'seg') {
       const p = segPick(r.key, r.rid);
       items.push({ k: 'summarize', icon: 'summarize', label: 'Summarize this part again', hint: `One fresh summary of turns ${r.a}\u2013${r.b}` });
@@ -29788,7 +29997,7 @@ const ContextTree = (() => {
     const span = r.kind === 'sum' ? rowTurns(r) : [];
     const title = r.kind === 'seg' ? `Summary of turns ${r.a}\u2013${r.b}`
       : r.kind === 'sum' ? (span.length ? `Summary of turn${span.length === 1 ? '' : 's'} ${turnsText(span)}` : 'Chat summary')
-      : `Turn ${r.n}`;
+      : r.kind === 'item' ? (r.label || r.node) : `Turn ${r.n}`;
     const mark = r.kind === 'seg' ? segMark(r.key, r.rid, modeOf(rawOf(r.key), r.a, r.b)) : turnMark(r);
     host.innerHTML = `<div class="cc-scrim" data-menu-close="1"></div>
       <div class="cc-sheet${wide ? ' cc-pop' : ''}" role="menu" aria-label="${esc(title)}">
@@ -29840,9 +30049,10 @@ const ContextTree = (() => {
     const b = e.target.closest('[data-menu-act]');
     if (!b || b.disabled || !act.menu) return;
     const r = act.menu.r;
+    const rows = act.menu.rows || [r];
     const k = b.dataset.menuAct;
     closeMenu(k !== 'go');
-    runAction(k, [r]);
+    runAction(k, rows);
   }
 
   /* the actions, on one row or on the selection */
@@ -29856,6 +30066,10 @@ const ContextTree = (() => {
     }
     if (k === 'go') { const r = rows[0]; const n = r.kind === 'seg' ? r.a : r.kind === 'sum' ? (rowTurns(r)[0] || 0) : r.n; if (n) goToTurn(n, '', r.key && r.key !== activeKey() ? r.key : ''); return; }
     if (k === 'summarize') { summarizeRows(rows); return; }
+    if (k === 'cl-add') { openClPicker(rows); return; }
+    if (k === 'cl-new') { const ids = rows.map(clItemId).filter(Boolean); act.select = false; act.sel.clear(); openClForm('new', '', ids); return; }
+    if (k.startsWith('cl-to:')) { const ids = rows.map(clItemId).filter(Boolean); clOp('add', { id: k.slice(6), items: ids }).then((r) => { if (r) say(`${ids.length} added`); }); endSelect(); return; }
+    if (k.startsWith('clm-')) { clMenuAct(k, rows[0]); return; }
     if (/^pick-/.test(k)) {
       const action = { 'pick-in': 'include', 'pick-auto': 'auto', 'pick-out': 'exclude' }[k];
       for (const r of rows) if (r.kind === 'seg') segSet(r, action);
@@ -29997,6 +30211,7 @@ const ContextTree = (() => {
     return `<div class="cc-selbar" role="toolbar" aria-label="Selected rows">
       <button class="cc-selbar-x" type="button" data-sel-act="cancel" aria-label="Stop selecting"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
       <span class="cc-selbar-n" aria-live="polite">${n ? `${n} selected` : 'Tap rows to select'}</span>
+      <button class="cc-selbar-b cc-selbar-ico tone-always" type="button" data-sel-act="cl-add"${rows.some(clItemId) ? '' : ' disabled'} title="Add to checklist" aria-label="Add to checklist">${ico('list')}</button>
       <button class="cc-selbar-b tone-summarized" type="button" data-sel-act="summarize"${dis} title="Summarize the selected turns into one">${ico('summarize')}<span>Summarize</span></button>
       <button class="cc-selbar-b tone-out" type="button" data-sel-act="out"${dis} title="Leave the selected rows out">${ico('out')}<span>Leave out</span></button>
       <button class="cc-selbar-b tone-hidden" type="button" data-sel-act="${anyHidden ? 'unhide' : 'hide'}"${dis} title="${anyHidden ? 'Show in the checklist again' : 'Hide from the checklist'}">${ico(anyHidden ? 'show' : 'hide')}<span>${anyHidden ? 'Show' : 'Hide'}</span></button>
@@ -30261,6 +30476,10 @@ const ContextTree = (() => {
       const a = document.activeElement;
       if (a && panel.body.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) return;
     }
+    if (panel.body && !force && clForm) {
+      const a = document.activeElement;
+      if (a && panel.body.contains(a) && a.closest && a.closest('.cc-clform')) return;
+    }
     const html = (() => { try { return render(); } catch (e) { console.warn('context card paint', e); return null; } })();
     if (html == null) return;
     if (panel.body) {
@@ -30286,6 +30505,11 @@ const ContextTree = (() => {
     const t = ev.target && ev.target.closest ? ev.target.closest('button') : null;
     if (!t) return;
     if (t.dataset.cpOpen) { const cp = policyApi(); if (cp) cp.open(); return; }
+    if (t.dataset.clNew != null) { openClForm('new', '', []); return; }
+    if (t.dataset.clSave != null) { saveClForm(); return; }
+    if (t.dataset.clCancel != null) { clForm = null; paint(true); return; }
+    if (t.dataset.clRemove) { clOp('remove', { id: t.dataset.clList, items: [t.dataset.clRemove] }); return; }
+    if (t.dataset.clMenu) { openClMenu(t.dataset.clMenu, t); return; }
     if (t.dataset.info) { const k = t.dataset.info; if (panel.tips.has(k)) panel.tips.delete(k); else panel.tips.add(k); paint(true); return; }
     if (t.dataset.tw) {
       const k = t.dataset.tw;
@@ -30322,6 +30546,7 @@ const ContextTree = (() => {
       segPicks.set(`${k}|${rid}`, t.checked ? 'in' : 'out');
       setMemory(rid, t.checked ? 'include' : 'exclude', k);
     }
+    else if (t && t.classList && t.classList.contains('cc-cl-check')) clOp(t.checked ? 'include' : 'exclude', { id: t.dataset.clId });
     else if (t && t.classList && t.classList.contains('ct-check')) setItem(t.dataset.id, !!t.checked, t.dataset.key || '');
     else if (t && t.classList && t.classList.contains('cc-raw-check')) setRaw(t.dataset.key || activeKey(), { turn: Number(t.dataset.rawTurn), raw: !!t.checked });
   }
@@ -30759,7 +30984,7 @@ const ContextTree = (() => {
           return base(event);
         };
         if (typeof runtime.on === 'function') {
-          runtime.on('main', () => { state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '', memory: null, requests: null }; pendingSet = new Map(); convs.clear(); attachToggles(); refresh(); });
+          runtime.on('main', () => { state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '', memory: null, requests: null, checklists: { user: [], ai: [] } }; pendingSet = new Map(); convs.clear(); attachToggles(); refresh(); });
           // The composer can be rebuilt (a chat switch): keep the chip there.
           runtime.on('threads', () => attachToggles());
         }
