@@ -173,27 +173,24 @@ pub fn assemble(
 /// part of the system prompt that carries the memory rules. It is short on purpose:
 /// the per-action prose lives here, not in the tool schema (see `tools.rs`).
 pub fn instructions() -> &'static str {
-    "Your context window is listed in the block marked [native-agent-context-tree-v1].\n\
-     ● in the window  ○ out (still stored)  ◐ note only  ✦ replaced by a summary  ⚿ locked\n\
-     turn/tN is a turn; turn/tN/call/K is one of its tool calls with the result, in or out\n\
-     on its own.\n\
-     Change it with ctx: view (the list, or one item by path), set (up to 12 ops: include,\n\
+    "Your context window is listed in [native-agent-context-tree-v1].\n\
+     ● in  ○ out (still stored)  ◐ note only  ✦ summarized  ⚿ locked\n\
+     turn/tN is a turn; turn/tN/call/K is one tool call with its result, in or out alone.\n\
+     Change it with ctx: view (the list, or one item by path), set (≤12 ops: include,\n\
      exclude, note_only, pin, unpin, move, tag; expect_rev to be safe), category (your own\n\
      cat/*, max_tokens caps it), summarize (many items into one; sources stay stored),\n\
-     recall (bring an item back or ask; or from_turn/to_turn, result_id),\n\
-     note (your notebook), strategy (plan\n\
-     and next step), prompt (load or unload part of the system prompt;\n\
+     recall (bring an item back or ask; or from_turn/to_turn, result_id), note (your\n\
+     notebook), strategy (plan and next step), prompt (load/unload system prompt parts;\n\
      sys/core can never be unloaded), original (a summarized range: range=[a,b]\n\
-     mode=summary|raw|both, or turn=N raw=true|false; summary is the default),\n\
+     mode=summary|raw|both, or turn=N raw=true|false; summary by default),\n\
      memory (every group as versioned rows: goals, decisions, facts, files, tasks,\n\
-     ranges, long-term #lt:key of all chats; id=D12 for every version), remember\n\
+     ranges, long-term #lt:key of all chats; id=D12 for all versions), remember\n\
      (key, text), forget (key). mem/D12 in set: include, exclude, auto,\n\
      all_versions, latest; a #tag (#D12, #plan.md, #D12@v1): inactive, active, remove.\n\
      The last #tag of a record decides what is sent; its context goes there once\n\
      (id=#plan.md@v1 reads a version). Name stored data you use by its #tag.\n\
      Nothing is deleted by taking it out. Tight: pin=True goes last.\n\
-     ucl/N are the user's own checklists (listed in view; ○ = the user switched it off):\n\
-     respect them, never rename or delete them.\n\
+     ucl/N: the user's checklists (○ = off); never rename or delete them.\n\
      If a tool is needed, send ctx task (id T1-T7, ids, focus) in the same answer as your\n\
      first tool call; never call ctx task alone. No tool needed: answer directly.\n"
 }
