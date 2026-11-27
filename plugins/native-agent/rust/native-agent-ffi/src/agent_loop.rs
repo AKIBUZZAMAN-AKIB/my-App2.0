@@ -459,6 +459,17 @@ async fn run_agent_turn_inner(
     // here would only mean a caller bypassed that, so fail the turn loudly.
     let attachments = crate::types::parse_attachments(ctx.params.attachments_json.as_deref())?;
     if !ctx.params.prompt.trim().is_empty() || !attachments.is_empty() {
+        // The last run stopped before a final answer (step or time limit, an
+        // error): close its turn so this message opens a turn of its own
+        // instead of joining the unfinished one.
+        if messages
+            .iter()
+            .rev()
+            .find(|m| matches!(m.role, Role::User | Role::Assistant))
+            .is_some_and(|m| m.role == Role::User)
+        {
+            messages.push(Message::assistant_text("(Stopped before a final answer.)"));
+        }
         let attachment_count = attachments.len();
         let image_count = attachments
             .iter()
@@ -650,12 +661,13 @@ async fn run_agent_turn_inner(
             break;
         }
         ensure_not_aborted(&ctx.abort_flag).await?;
-        let before_steer = messages.len();
+        // A message that arrives mid-turn joins the open turn (see
+        // `turn_memory::split_turns`); count only turns it really opens.
+        let turns_before_steer = crate::turn_memory::split_turns(&messages).len();
         apply_steer_messages(&ctx.steer_rx, &mut messages).await;
-        tree_turns_total += messages[before_steer.min(messages.len())..]
-            .iter()
-            .filter(|m| m.is_user_prompt())
-            .count() as u32;
+        tree_turns_total += crate::turn_memory::split_turns(&messages)
+            .len()
+            .saturating_sub(turns_before_steer) as u32;
 
         let mut tools = merged_tool_definitions(
             &ctx.config.workspace_path,

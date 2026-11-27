@@ -1691,7 +1691,9 @@ async fn recall_answers_carry_citations_and_repair_proposals_separately() {
 
 #[tokio::test]
 async fn empty_turns_are_still_turns_and_must_be_covered() {
-    let turns: Vec<(u32, Vec<Message>)> = (1..=7).map(|n| (n, vec![Message::user("")])).collect();
+    let turns: Vec<(u32, Vec<Message>)> = (1..=7)
+        .map(|n| (n, vec![Message::user(""), Message::assistant_text("")]))
+        .collect();
     let msgs = flat(&turns);
     assert_eq!(split_turns(&msgs).len(), 7);
     let model = Script::new(|_, user| Ok(good_answer(user, vec![], vec![], &[])));
@@ -1968,4 +1970,45 @@ fn summarizing_marker_clears_when_its_guard_drops() {
     );
     drop(g2);
     assert_eq!(summarizing("chat-x"), None);
+}
+
+/// A sub-agent's turn is one incoming message and everything done for it:
+/// every model request, tool call and result, and the messages that arrive
+/// while it is still working, until its final answer.
+#[test]
+fn a_turn_is_one_message_until_its_final_answer_not_one_per_request() {
+    let call = |id: &str| {
+        Message::assistant_blocks(vec![ContentBlock::ToolUse {
+            id: id.into(),
+            name: "read".into(),
+            input: json!({}),
+            provider_metadata: None,
+        }])
+    };
+    let result = |id: &str| Message {
+        role: crate::types::Role::User,
+        content: crate::types::MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: id.into(),
+            content: "ok".into(),
+            is_error: false,
+        }]),
+    };
+    let msgs = vec![
+        Message::user("task"),
+        Message::user("note queued before the first step"),
+        call("a"),
+        result("a"),
+        Message::user("parent's follow-up while it works"),
+        call("b"),
+        result("b"),
+        Message::assistant_text("done"),
+        Message::user("next task"),
+        call("c"),
+        result("c"),
+        Message::assistant_text("done again"),
+    ];
+    let turns = split_turns(&msgs);
+    assert_eq!(turns.len(), 2);
+    assert_eq!((turns[0].start, turns[0].end), (0, 8));
+    assert_eq!((turns[1].no, turns[1].start, turns[1].end), (2, 8, 12));
 }

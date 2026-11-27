@@ -200,12 +200,31 @@ pub fn is_memory_message(m: &Message) -> bool {
         && matches!(&m.content, MessageContent::Text(t) if t.starts_with(MEMORY_MARKER))
 }
 
+/// Whether a prompt whose previous chat message (user or assistant, internal
+/// messages skipped) is `prev` opens a new turn.
+///
+/// One turn is one incoming message and everything done for it, every model
+/// request and tool call, until the final answer. A message that arrives
+/// while that work is still open (right after tool results or right after
+/// another prompt: a steer, a parent's follow-up or a peer's note delivered to
+/// a running sub-agent, notes queued before its first step) joins the open
+/// turn instead of starting one per message.
+fn opens_turn(prev: Option<&Message>) -> bool {
+    prev.map_or(true, |p| p.role == Role::Assistant)
+}
+
 /// Split a transcript into turns. Messages before the first user prompt (a
-/// legacy compaction note, a memory block) belong to no turn.
+/// legacy compaction note, a memory block) belong to no turn. See
+/// [`opens_turn`] for where one turn ends and the next begins.
 pub fn split_turns(messages: &[Message]) -> Vec<Turn> {
     let mut turns: Vec<Turn> = Vec::new();
+    let mut prev: Option<&Message> = None;
     for (i, m) in messages.iter().enumerate() {
-        if m.is_user_prompt() {
+        let starts = m.is_user_prompt() && (turns.is_empty() || opens_turn(prev));
+        if matches!(m.role, Role::User | Role::Assistant) {
+            prev = Some(m);
+        }
+        if starts {
             if let Some(last) = turns.last_mut() {
                 last.end = i;
             }

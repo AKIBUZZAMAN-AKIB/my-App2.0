@@ -737,14 +737,22 @@ const ContextTree = (() => {
     if (Array.isArray(list)) msgs = list;
     else try { msgs = (appRef && appRef.chat && appRef.chat.main && appRef.chat.main.messages) || []; } catch (e) { msgs = []; }
     const out = [];
+    // Same rule as the engine's turns: a message that arrives while the turn
+    // is still open (right after another message, or while the answer is
+    // still calling tools) joins that turn instead of opening a new one.
+    let open = false;
     for (const m of msgs) {
       if (!m) continue;
       const parts = Array.isArray(m.content) ? m.content : [];
       if (m.role === 'user') {
         const text = parts.filter((p) => p && p.type === 'text').map((p) => p.text || '').join(' ') || (typeof m.content === 'string' ? m.content : '');
-        out.push({ text: text.replace(/\s+/g, ' ').trim(), calls: [], index: out.length });
+        if (!text.trim() && parts.length && parts.every((p) => p && /tool[-_]?result/.test(p.type || ''))) continue;
+        if (!(open && out.length)) out.push({ text: text.replace(/\s+/g, ' ').trim(), calls: [], index: out.length });
+        open = true;
       } else if (m.role === 'assistant' && out.length) {
         for (const p of parts) if (p && p.type === 'tool-call') out[out.length - 1].calls.push(p);
+        const last = parts.filter((p) => p && p.type !== 'reasoning').pop();
+        open = !!(last && last.type === 'tool-call');
       }
     }
     return out;
