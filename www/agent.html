@@ -5588,6 +5588,23 @@ html:has(.mn-nav) .sa-group[data-fullscreen="true"] { padding-bottom: calc(var(-
 .cp-rule-foot .cp-prio { display: inline-flex; align-items: center; gap: 0.375rem; }
 .cp-rule-foot .cp-input-num { width: 4.25rem; min-height: 1.75rem; }
 /* @@END css:59-context-policy */
+/* @@BEGIN css:71-steer */
+/* Steer bubbles above the composer, and steer messages in the transcript. */
+.st-strip { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; }
+.st-bubble { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px 6px 10px; border-radius: 14px; font-size: .8125rem; line-height: 1.35; color: var(--foreground); background: color-mix(in srgb, var(--primary, #6366f1) 9%, var(--background, #fff)); border: 1px dashed color-mix(in srgb, var(--primary, #6366f1) 45%, transparent); }
+.st-bubble[data-status="applied"], .st-bubble[data-status="routed"], .st-bubble[data-status="answered"] { border-style: solid; }
+.st-bubble[data-status="unapplied"], .st-bubble[data-status="failed"] { border-color: color-mix(in srgb, #d97706 55%, transparent); background: color-mix(in srgb, #d97706 9%, var(--background, #fff)); }
+.st-bubble-icon { display: inline-flex; flex: none; color: var(--primary, #6366f1); }
+.st-bubble-icon .icon { width: 14px; height: 14px; }
+.st-bubble-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-bubble-status { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .6875rem; font-weight: 600; color: var(--muted-foreground, #6b7280); }
+.st-bubble[data-status="applied"] .st-bubble-status { color: var(--primary, #6366f1); }
+.st-bubble-btn { flex: none; display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--border, #e5e7eb); background: var(--background, #fff); color: inherit; font-size: .6875rem; font-weight: 600; cursor: pointer; }
+.st-bubble-x { width: 24px; padding: 0; justify-content: center; }
+.st-bubble-x .icon { width: 12px; height: 12px; }
+.aui-user-message-root[data-steer]::before { content: attr(data-steer-label); grid-column: 1 / -1; justify-self: end; height: 18px; margin-bottom: 3px; padding: 0 8px; border-radius: 999px; font-size: .6875rem; font-weight: 600; line-height: 18px; color: var(--primary, #6366f1); background: color-mix(in srgb, var(--primary, #6366f1) 12%, transparent); }
+.aui-user-message-root[data-steer] .aui-user-message-content { border: 1px dashed color-mix(in srgb, var(--primary, #6366f1) 50%, transparent); background: color-mix(in srgb, var(--primary, #6366f1) 8%, var(--muted, #f4f4f5)); }
+/* @@END css:71-steer */
 </style>
 </head>
 <body>
@@ -7955,7 +7972,19 @@ function convertEngineMessages(list) {
     // A stored user prompt starts with the hidden context it was sent with: keep it
     // out of the bubble (it goes to metadata, like a live message's).
     let carried = '';
-    if (m.role === 'user') [carried, text] = splitCarriedContext(text);
+    // A steer the user sent while a turn ran (engine steer::steer_message):
+    // shown as a steer bubble with the user's own words; the engine's patch
+    // notes ("[steer <id> patch]") are for the model only.
+    let steerId = '';
+    if (m.role === 'user' && typeof text === 'string' && text.startsWith('[steer ')) {
+      const sm = /^\[steer ([^\s\]]+)( patch)?\]/.exec(text);
+      if (sm) {
+        if (sm[2]) continue;
+        steerId = sm[1];
+        text = text.slice(sm[0].length).replace(/^[^\n]*\n\n/, '').replace(/\n\n\([^\n]*\)$/, '');
+      }
+    }
+    if (m.role === 'user' && !steerId) [carried, text] = splitCarriedContext(text);
     const thinking = contentThinking || (typeof m.thinking === 'string' ? m.thinking : '');
     const createdAt = Number(m.createdAt ?? m.timestamp) || Date.now();
     const content = [];
@@ -7993,7 +8022,7 @@ function convertEngineMessages(list) {
     const message = {
       id: uid(), role: m.role, createdAt, content,
       ...(m.role === 'user' ? { attachments: [] } : { status: { type: 'complete' } }),
-      metadata: { custom: { ...(m.model ? { model: m.model } : {}), ...(carried ? { context: carried } : {}) }, ...(m.usage ? { usage: m.usage } : {}) },
+      metadata: { custom: { ...(m.model ? { model: m.model } : {}), ...(carried ? { context: carried } : {}), ...(steerId ? { steer: steerId } : {}) }, ...(m.usage ? { usage: m.usage } : {}) },
     };
     out.push([parent, message]);
     parent = message.id;
@@ -10681,6 +10710,10 @@ class UserMessageView {
     const attachments = (message.attachments || []).map((a) => attachmentTile(a, { onPreview: (src, name) => this.thread.app.previewImage(src, name) }));
     this.el.className = 'aui-message aui-user-message-root';
     this.el.dataset.slot = 'aui_user-message-root';
+    // Steer messages (sent while a turn ran) read differently from prompts.
+    const steerId = message.metadata?.custom?.steer;
+    if (steerId) { this.el.dataset.steer = String(steerId); this.el.dataset.steerLabel = 'Steer'; }
+    else { delete this.el.dataset.steer; delete this.el.dataset.steerLabel; }
     setChildren(this.el,
       h('div', { class: 'aui-user-message-attachments' }, attachments),
       h('div', { class: 'aui-user-message-content-wrapper' },
@@ -33696,6 +33729,200 @@ const SubagentModelPicker = (() => {
   return { create, mainChoice };
 })();
 /* @@END js:14-model-picker */
+/* @@BEGIN js:71-steer */
+/* Steer and Update (docs/steer/PLAN.bn.md, step 0).
+
+   While a reply runs, two symbol buttons sit beside the composer's queue button:
+   - Steer (navigation arrow): the typed words go to the running turn now, through
+     NativeKit.agent.steer({ text, id, mode: 'steer' }). The engine delivers them at
+     the next safe point, inside the same turn.
+   - Update (pen): the same, with mode 'update' (the user wants the task changed).
+   Enter while a reply runs still queues, as before: steering is always a deliberate tap.
+
+   Each steer gets a bubble above the composer: pending (sent, waiting for a safe point)
+   -> applied (the model has it), or "not applied" with a Send as message button when
+   the turn ended first. After the turn the engine's transcript shows steer messages in
+   place, styled as steers (agent.html convertEngineMessages / UserMessageView).
+   On start the engine's steer inbox is read: steers that never reached the model (the
+   app closed in between) are shown so the user can send or dismiss them. */
+const SteerUI = (() => {
+  let appRef = null;
+  let installed = false;
+  let strip = null;
+  const items = new Map(); // id -> { id, text, mode, status, at }
+
+  Object.assign(ICONS, {
+    navigation: '<polygon points="3 11 22 2 13 21 11 13 3 11"/>',
+  });
+
+  const agentApi = () => nativeKit()?.agent;
+  const newId = () => `st-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`;
+
+  function composer() { return appRef?.thread?.composer || null; }
+
+  function mountStrip() {
+    const c = composer();
+    if (!c?.el) return false;
+    if (!strip) strip = h('div', { class: 'st-strip', 'data-slot': 'steer-strip', role: 'list', 'aria-label': 'Steers', 'aria-live': 'polite', hidden: true });
+    if (strip.parentElement !== c.el) c.el.insertBefore(strip, c.shell || c.el.firstChild);
+    return true;
+  }
+
+  const LABEL = { pending: 'Sending…', accepted: 'Waiting for a safe point', applied: 'Applied', unapplied: 'Not applied', failed: 'Failed', answered: 'Answered', routed: 'Sent to sub-agent' };
+
+  function render() {
+    if (!mountStrip()) return;
+    const list = [...items.values()];
+    strip.hidden = list.length === 0;
+    strip.replaceChildren(...list.map((it) => h('div', {
+      class: 'st-bubble', role: 'listitem', 'data-steer-id': it.id, 'data-status': it.status, 'data-mode': it.mode,
+    },
+    h('span', { class: 'st-bubble-icon', 'aria-hidden': 'true' }, icon(it.mode === 'update' ? 'square-pen' : 'navigation')),
+    h('span', { class: 'st-bubble-text', dir: 'auto' }, it.text),
+    h('span', { class: 'st-bubble-status', 'data-slot': 'steer-status' }, it.answer ? `${LABEL[it.status]}: ${it.answer}` : (LABEL[it.status] || it.status)),
+    it.status === 'unapplied' && h('button', { type: 'button', class: 'st-bubble-btn', 'data-action': 'steer-resend', onclick: () => resend(it) }, 'Send as message'),
+    (it.status === 'unapplied' || it.status === 'failed' || it.status === 'applied' || it.status === 'answered' || it.status === 'routed') && h('button', { type: 'button', class: 'st-bubble-btn st-bubble-x', 'aria-label': 'Dismiss', 'data-action': 'steer-dismiss', onclick: () => dismiss(it) }, icon('x')))));
+  }
+
+  function set(id, patch) {
+    const it = items.get(id);
+    if (!it) return;
+    // Never move back: applied is final unless the engine says otherwise explicitly.
+    if (it.status === 'applied' && patch.status === 'accepted') return;
+    Object.assign(it, patch);
+    render();
+  }
+
+  async function steer(mode) {
+    const c = composer();
+    if (!c) return;
+    const text = c.input.value.trim();
+    if (!text) return;
+    const api = agentApi();
+    if (!api?.steer) { toast('Steering needs the native engine.', { type: 'error' }); return; }
+    const id = newId();
+    items.set(id, { id, text, mode, status: 'pending', at: Date.now() });
+    c.input.value = '';
+    c.autosize?.();
+    try { Drafts.save(c.runtime.id, ''); } catch { /* no draft store */ }
+    c.sync();
+    render();
+    try {
+      await api.steer({ text, id, mode });
+    } catch (e) {
+      set(id, { status: 'failed' });
+      toast(e?.message || 'The steer could not be sent.', { type: 'error' });
+    }
+  }
+
+  function resend(it) {
+    items.delete(it.id);
+    render();
+    try { agentApi()?.subagents?.({ action: 'steer.dismiss', id: it.id }); } catch { /* best effort */ }
+    const c = composer();
+    if (!c) return;
+    c.input.value = it.text;
+    c.send();
+  }
+
+  function dismiss(it) {
+    items.delete(it.id);
+    render();
+    if (it.status === 'unapplied') { try { agentApi()?.subagents?.({ action: 'steer.dismiss', id: it.id }); } catch { /* best effort */ } }
+  }
+
+  function onEvent(type, n) {
+    const id = n.id ?? (Array.isArray(n.ids) ? n.ids[0] : undefined);
+    switch (type) {
+      case 'steer.accepted':
+        if (!items.has(id) && id) items.set(id, { id, text: n.text || '', mode: n.mode || 'steer', status: 'accepted', at: Date.now() });
+        set(id, { status: 'accepted' });
+        break;
+      case 'steer.applied': set(id, { status: 'applied' }); break;
+      case 'steer.unapplied':
+        if (!items.has(id) && id && n.text) items.set(id, { id, text: n.text, mode: 'steer', status: 'unapplied', at: Date.now() });
+        set(id, { status: 'unapplied' });
+        break;
+      case 'steer.answer': set(id, { status: 'answered', answer: n.text || '' }); break;
+      case 'steer.routed': if (n.ok) set(id, { status: 'routed' }); break;
+      default: break;
+    }
+  }
+
+  /** Applied bubbles leave once the turn is over (the transcript holds them now). */
+  function onTurnEnd() {
+    let changed = false;
+    for (const [k, it] of items) if (it.status === 'applied' || it.status === 'routed') { items.delete(k); changed = true; }
+    if (changed) render();
+  }
+
+  async function loadInbox() {
+    const api = agentApi();
+    if (!api?.subagents) return;
+    try {
+      const res = await api.subagents({ action: 'steer.inbox' });
+      const v = parseMaybeJSON(res?.json ?? res?.resultJson ?? res, {}) || {};
+      for (const r of v.steers || []) {
+        if (!items.has(r.id)) items.set(r.id, { id: r.id, text: r.text, mode: 'steer', status: 'unapplied', at: r.at });
+      }
+      render();
+    } catch { /* older engine without steer actions */ }
+  }
+
+  function addButtons() {
+    const c = composer();
+    if (!c || c.steerButton) return;
+    c.steerButton = h('button', {
+      type: 'button', class: 'aui-composer-round aui-composer-steer', 'data-tooltip': 'Steer now', 'aria-label': 'Steer: send to the running reply now', hidden: true,
+      onclick: () => steer('steer'),
+    }, icon('navigation'));
+    c.updateButton = h('button', {
+      type: 'button', class: 'aui-composer-round aui-composer-update', 'data-tooltip': 'Update the task', 'aria-label': 'Update: change the running task', hidden: true,
+      onclick: () => steer('update'),
+    }, icon('square-pen'));
+    c.queueButton.before(c.steerButton, c.updateButton);
+    const baseSync = c.sync.bind(c);
+    c.sync = () => {
+      baseSync();
+      const show = !!c.runtime?.isRunning && !!c.input.value.trim() && c.attachments.length === 0;
+      c.steerButton.hidden = !show;
+      c.updateButton.hidden = !show;
+      c.steerButton.disabled = c.busy > 0;
+      c.updateButton.disabled = c.busy > 0;
+    };
+    c.sync();
+  }
+
+  function install(app) {
+    appRef = app;
+    if (installed) return;
+    installed = true;
+    addButtons();
+    const runtime = app.chat;
+    if (runtime && typeof runtime._onEvent === 'function' && !runtime._steerWrapped) {
+      const base = runtime._onEvent.bind(runtime);
+      runtime._steerWrapped = true;
+      runtime._onEvent = (event) => {
+        const type = event?.eventType ?? event?.type ?? '';
+        if (typeof type === 'string' && type.startsWith('steer.')) {
+          const n = parseMaybeJSON(event?.payloadJson ?? event?.payload ?? event?.data, {}) || {};
+          try { eventLog.add(type, n); } catch { /* no log */ }
+          if (!n.sessionKey || n.sessionKey === runtime.main?.id) onEvent(type, n);
+          return undefined;
+        }
+        const r = base(event);
+        if (type === 'agent.completed' || type === 'agent.error' || type === 'agent.cancelled') { onTurnEnd(); composer()?.sync(); }
+        return r;
+      };
+    }
+    runtime?.on?.('main', () => { items.clear(); render(); composer()?.sync(); });
+    setTimeout(loadInbox, 600);
+    window.__steer = { items, steer, render };
+  }
+
+  return { install };
+})();
+/* @@END js:71-steer */
 const app = new App(doc.getElementById('app'));
 FilesManager.install(app);
 /* @@BEGIN js:installs */
@@ -33714,6 +33941,7 @@ ChatMemory.install(app);
 ContextTree.install(app);
 ContextPolicy.install(app);
 AgentsPill.install(app);
+SteerUI.install(app);
 if (typeof window !== 'undefined') window.__app = app;
 /* @@END js:installs */
 })();

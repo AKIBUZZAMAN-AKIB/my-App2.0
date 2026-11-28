@@ -93,7 +93,8 @@ pub fn tool_definition() -> ToolDefinition {
         name: CTX_TOOL.into(),
         description: "See and steer your context window: each item's token cost and state. Nothing \
 is lost (what is out stays recallable); locked rules and essentials cannot be removed. ucl/* are the \
-user's checklists: never delete them."
+user's checklists: never delete them. A [steer <id>] message is the user's own words sent while you \
+worked: part of this task, the newest one wins."
 .into(),
         input_schema: schema(),
         webview_only: false,
@@ -247,9 +248,11 @@ mod tests {
         // Measured on the spec's own schemas: 6,203 characters for eight tools.
         const SPEC_EIGHT_TOOLS_CHARS: usize = 6_203;
         let ours = schema_chars();
+        // The budget was raised for the steer note (docs/steer/PLAN.bn.md): one
+        // tool still costs well under 40% of the eight-tool design.
         assert!(
-            ours * 3 < SPEC_EIGHT_TOOLS_CHARS,
-            "expected a ≥3× reduction, got {ours} vs {SPEC_EIGHT_TOOLS_CHARS}"
+            ours * 5 < SPEC_EIGHT_TOOLS_CHARS * 2,
+            "expected a ≥2.5× reduction, got {ours} vs {SPEC_EIGHT_TOOLS_CHARS}"
         );
     }
 }

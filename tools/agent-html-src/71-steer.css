@@ -1,0 +1,15 @@
+/* Steer bubbles above the composer, and steer messages in the transcript. */
+.st-strip { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; }
+.st-bubble { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px 6px 10px; border-radius: 14px; font-size: .8125rem; line-height: 1.35; color: var(--foreground); background: color-mix(in srgb, var(--primary, #6366f1) 9%, var(--background, #fff)); border: 1px dashed color-mix(in srgb, var(--primary, #6366f1) 45%, transparent); }
+.st-bubble[data-status="applied"], .st-bubble[data-status="routed"], .st-bubble[data-status="answered"] { border-style: solid; }
+.st-bubble[data-status="unapplied"], .st-bubble[data-status="failed"] { border-color: color-mix(in srgb, #d97706 55%, transparent); background: color-mix(in srgb, #d97706 9%, var(--background, #fff)); }
+.st-bubble-icon { display: inline-flex; flex: none; color: var(--primary, #6366f1); }
+.st-bubble-icon .icon { width: 14px; height: 14px; }
+.st-bubble-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-bubble-status { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .6875rem; font-weight: 600; color: var(--muted-foreground, #6b7280); }
+.st-bubble[data-status="applied"] .st-bubble-status { color: var(--primary, #6366f1); }
+.st-bubble-btn { flex: none; display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--border, #e5e7eb); background: var(--background, #fff); color: inherit; font-size: .6875rem; font-weight: 600; cursor: pointer; }
+.st-bubble-x { width: 24px; padding: 0; justify-content: center; }
+.st-bubble-x .icon { width: 12px; height: 12px; }
+.aui-user-message-root[data-steer]::before { content: attr(data-steer-label); grid-column: 1 / -1; justify-self: end; height: 18px; margin-bottom: 3px; padding: 0 8px; border-radius: 999px; font-size: .6875rem; font-weight: 600; line-height: 18px; color: var(--primary, #6366f1); background: color-mix(in srgb, var(--primary, #6366f1) 12%, transparent); }
+.aui-user-message-root[data-steer] .aui-user-message-content { border: 1px dashed color-mix(in srgb, var(--primary, #6366f1) 50%, transparent); background: color-mix(in srgb, var(--primary, #6366f1) 8%, var(--muted, #f4f4f5)); }

@@ -191,6 +191,8 @@ pub fn instructions() -> &'static str {
      (id=#plan.md@v1 reads a version). Name stored data you use by its #tag.\n\
      Nothing is deleted by taking it out. Tight: pin=True goes last.\n\
      ucl/N: the user's checklists (○ = off); never rename or delete them.\n\
+     [steer <id>] = the user's words sent while you worked: same task, not a new one;\n\
+     the newest steer wins; a [steer <id> patch] says how the engine read it.\n\
      If a tool is needed, send ctx task (id T1-T7, ids, focus) in the same answer as your\n\
      first tool call; never call ctx task alone. No tool needed: answer directly.\n"
 }
@@ -414,9 +416,10 @@ mod tests {
         assert!(text.contains("No tool needed: answer directly"));
         assert!(text.contains("sys/core can never be unloaded"));
         assert!(text.contains("Nothing is deleted"));
+        assert!(text.contains("[steer <id>]"), "steer messages are explained");
         // It is paid on every request, so it must stay small.
         assert!(
-            super::super::render::estimate_tokens(text) <= 380,
+            super::super::render::estimate_tokens(text) <= 440,
             "instructions cost {} tokens",
             super::super::render::estimate_tokens(text)
         );
