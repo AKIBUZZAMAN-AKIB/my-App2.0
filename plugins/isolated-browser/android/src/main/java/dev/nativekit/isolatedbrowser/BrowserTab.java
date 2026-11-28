@@ -18,6 +18,7 @@ final class BrowserTab {
     String mobileUa;
     long lastActive = System.currentTimeMillis();
     boolean desktop;
+    boolean devtools;
     boolean loading;
     boolean revealed;
     Bitmap thumb;

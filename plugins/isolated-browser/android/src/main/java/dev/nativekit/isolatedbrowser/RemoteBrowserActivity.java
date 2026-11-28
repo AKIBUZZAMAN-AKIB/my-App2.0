@@ -29,9 +29,6 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.PopupMenu;
-import android.view.Menu;
-import android.view.MenuItem;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.widget.Toast;
@@ -363,6 +360,7 @@ public final class RemoteBrowserActivity extends Activity {
 
     /** Keeps the toolbar buttons honest: disabled when the action is impossible. */
     private void syncChrome() {
+        updateRecIndicator();
         WebView view = webView;
         if (backButton != null) backButton.setEnabled(view != null && view.canGoBack());
         if (forwardButton != null) forwardButton.setEnabled(view != null && view.canGoForward());
@@ -441,18 +439,7 @@ public final class RemoteBrowserActivity extends Activity {
     private static final int MENU_BOOKMARKS = 8;
     private static final int MENU_HISTORY = 9;
 
-    /** Extra entries at the top of the ⋮ menu (tabs and later features). */
-    private void addExtraMenuItems(Menu menu) {
-        menu.add(Menu.NONE, MENU_NEW_TAB, 1, "New tab");
-        menu.add(Menu.NONE, MENU_TABS, 2, "Tabs (" + tabs.size() + ")");
-        menu.add(Menu.NONE, MENU_INCOGNITO, 3, "New incognito tab");
-        menu.add(Menu.NONE, MENU_GROUPS, 4, "Tab groups");
-        menu.add(Menu.NONE, MENU_HOME, 5, "Home page");
-        menu.add(Menu.NONE, MENU_ZOOM, 29, "Zoom (" + (webView == null ? store.textZoom() : webView.getSettings().getTextZoom()) + "%)");
-        menu.add(Menu.NONE, MENU_SETTINGS, 90, "Browser settings");
-    }
-
-    /** Handles the extra entries; true when handled. */
+    /** Handles the shared menu ids; true when handled. */
     private boolean onExtraMenuItem(int id) {
         switch (id) {
             case MENU_NEW_TAB: openNewTab(false); return true;
@@ -466,47 +453,244 @@ public final class RemoteBrowserActivity extends Activity {
         }
     }
 
-    private void showOverflowMenu() {
-        if (menuButton == null) return;
-        PopupMenu popup = new PopupMenu(this, menuButton);
-        Menu menu = popup.getMenu();
-        addExtraMenuItems(menu);
-        menu.add(Menu.NONE, MENU_FIND, 20, "Find in page");
-        menu.add(Menu.NONE, MENU_TRANSLATE, 21, "Translate page");
-        menu.add(Menu.NONE, MENU_SHARE, 22, "Share");
-        menu.add(Menu.NONE, MENU_RELOAD, 23, "Reload");
-        menu.add(Menu.NONE, MENU_DESKTOP, 24, "Desktop site").setCheckable(true).setChecked(current != null && current.desktop);
-        menu.add(Menu.NONE, MENU_READER, 25, "Reader mode");
-        boolean marked = store != null && store.isBookmarked(lastUrl);
-        menu.add(Menu.NONE, MENU_BOOKMARK, 26, marked ? "Remove bookmark" : "Add bookmark");
-        menu.add(Menu.NONE, MENU_BOOKMARKS, 27, "Bookmarks");
-        menu.add(Menu.NONE, MENU_HISTORY, 28, "History");
-        menu.add(Menu.NONE, MENU_APPEARANCE, 29, "Appearance");
-        menu.add(Menu.NONE, MENU_CLOSE, 40, "Close browser");
-        popup.setOnMenuItemClickListener(this::onOverflowItem);
-        popup.show();
+    // ======================= ⋮ menu: themed bottom sheet =======================
+    // Replaces PopupMenu, which took the activity's DayNight theme (phone mode)
+    // instead of the browser's Appearance choice and stayed white in Dark.
+
+    private android.app.Dialog menuSheet;
+
+    private android.graphics.drawable.Drawable icon(int res, int tint) {
+        android.graphics.drawable.Drawable d = getDrawable(res);
+        if (d == null) return null;
+        d = d.mutate();
+        d.setTint(tint);
+        return d;
     }
 
-    private boolean onOverflowItem(MenuItem item) {
-        int id = item.getItemId();
-        if (onExtraMenuItem(id)) return true;
-        switch (id) {
-            case MENU_FIND: showFindBar(); return true;
-            case MENU_TRANSLATE: chooseTranslateLanguage(); return true;
-            case MENU_SHARE: sharePage(); return true;
-            case MENU_RELOAD: if (webView != null) webView.reload(); return true;
-            case MENU_DESKTOP: toggleDesktopMode(); return true;
-            case MENU_READER: toggleReaderMode(); return true;
-            case MENU_BOOKMARK: toggleBookmark(); return true;
-            case MENU_BOOKMARKS: showEntries("Bookmarks", true); return true;
-            case MENU_HISTORY: showEntries("History", false); return true;
-            case MENU_APPEARANCE: showAppearance(); return true;
-            case MENU_CLOSE: finish(); return true;
-            default: return false;
+    /** Bottom sheet frame: rounded top, grab handle, themed, scrolls when tall. */
+    private android.app.Dialog sheet(View body) {
+        final android.app.Dialog dialog = new android.app.Dialog(this, theme.dark
+            ? android.R.style.Theme_DeviceDefault_Dialog_NoActionBar
+            : android.R.style.Theme_DeviceDefault_Light_Dialog_NoActionBar);
+        LinearLayout frame = new LinearLayout(this);
+        frame.setOrientation(LinearLayout.VERTICAL);
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setColor(theme.chrome);
+        float r = dp(24);
+        bg.setCornerRadii(new float[] { r, r, r, r, 0, 0, 0, 0 });
+        frame.setBackground(bg);
+        frame.setPadding(dp(14), dp(8), dp(14), dp(14));
+        View handle = new View(this);
+        handle.setBackground(rounded(BrowserTheme.alpha(theme.muted, 90), dp(3), 0));
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(dp(36), dp(4));
+        hp.gravity = Gravity.CENTER_HORIZONTAL;
+        hp.setMargins(0, 0, 0, dp(10));
+        frame.addView(handle, hp);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        scroll.addView(body, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        frame.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        dialog.setContentView(frame);
+        dialog.setCanceledOnTouchOutside(true);
+        android.view.Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+            int screen = getResources().getDisplayMetrics().widthPixels;
+            window.setLayout(Math.min(screen, dp(560)), ViewGroup.LayoutParams.WRAP_CONTENT);
+            window.setGravity(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            window.setDimAmount(theme.dark ? 0.5f : 0.32f);
+            window.setWindowAnimations(android.R.style.Animation_InputMethod);
+            try { window.setNavigationBarColor(theme.chrome); } catch (Throwable ignored) {}
         }
+        // Cap the height so a long menu scrolls instead of covering the status bar.
+        final int max = Math.round(getResources().getDisplayMetrics().heightPixels * 0.86f);
+        scroll.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
+            if (scroll.getHeight() > max) {
+                ViewGroup.LayoutParams lp = scroll.getLayoutParams();
+                lp.height = max - dp(40);
+                scroll.setLayoutParams(lp);
+            }
+        });
+        return dialog;
     }
+
+    /** Rounded group of rows. */
+    private LinearLayout sheetSection(LinearLayout body) {
+        LinearLayout section = new LinearLayout(this);
+        section.setOrientation(LinearLayout.VERTICAL);
+        section.setBackground(rounded(theme.surface, dp(18), 0));
+        section.setClipToOutline(true);
+        section.setPadding(0, dp(4), 0, dp(4));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, dp(10), 0, 0);
+        body.addView(section, lp);
+        return section;
+    }
+
+    /** One row: icon, label, then a trailing value or a switch. */
+    private View sheetRow(LinearLayout section, final android.app.Dialog[] owner, int iconRes, String label,
+                          String trailing, Boolean toggle, int tint, final Runnable action) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), 0, dp(14), 0);
+        row.setBackground(pressable(0));
+        row.setMinimumHeight(dp(50));
+        android.widget.ImageView glyph = new android.widget.ImageView(this);
+        glyph.setImageDrawable(icon(iconRes, tint == 0 ? theme.muted : tint));
+        row.addView(glyph, new LinearLayout.LayoutParams(dp(21), dp(21)));
+        TextView text = new TextView(this);
+        text.setText(label);
+        text.setTextSize(15);
+        text.setTextColor(tint == 0 ? theme.text : tint);
+        text.setSingleLine(true);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        tp.setMargins(dp(16), 0, dp(8), 0);
+        row.addView(text, tp);
+        if (toggle != null) {
+            android.widget.Switch sw = new android.widget.Switch(this);
+            sw.setChecked(toggle);
+            sw.setClickable(false);
+            sw.setFocusable(false);
+            int[][] states = { { android.R.attr.state_checked }, {} };
+            sw.setThumbTintList(new android.content.res.ColorStateList(states, new int[] { theme.accent, theme.dark ? theme.muted : Color.WHITE }));
+            sw.setTrackTintList(new android.content.res.ColorStateList(states, new int[] { BrowserTheme.alpha(theme.accent, 110), BrowserTheme.alpha(theme.muted, 90) }));
+            row.addView(sw);
+        } else if (trailing != null) {
+            TextView value = new TextView(this);
+            value.setText(trailing);
+            value.setTextSize(13);
+            value.setTextColor(theme.muted);
+            row.addView(value);
+        }
+        row.setContentDescription(label);
+        row.setOnClickListener(v -> {
+            if (owner[0] != null) owner[0].dismiss();
+            if (action != null) handler.postDelayed(action, 120);
+        });
+        section.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
+        return row;
+    }
+
+    /** Icon-only quick action (circle + tiny caption). */
+    private void quickAction(LinearLayout bar, final android.app.Dialog[] owner, int iconRes, int tint, String label,
+                             boolean enabled, boolean keepOpen, final Runnable action) {
+        LinearLayout cell = new LinearLayout(this);
+        cell.setOrientation(LinearLayout.VERTICAL);
+        cell.setGravity(Gravity.CENTER_HORIZONTAL);
+        FrameLayout circle = new FrameLayout(this);
+        circle.setBackground(rounded(theme.surface, dp(24), 0));
+        circle.setForeground(pressable(dp(24)));
+        android.widget.ImageView glyph = new android.widget.ImageView(this);
+        glyph.setImageDrawable(icon(iconRes, tint == 0 ? theme.text : tint));
+        circle.addView(glyph, new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER));
+        cell.addView(circle, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        TextView caption = new TextView(this);
+        caption.setText(label);
+        caption.setTextSize(11);
+        caption.setTextColor(theme.muted);
+        caption.setGravity(Gravity.CENTER);
+        caption.setSingleLine(true);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cp.setMargins(0, dp(5), 0, 0);
+        cell.addView(caption, cp);
+        cell.setAlpha(enabled ? 1f : 0.35f);
+        cell.setEnabled(enabled);
+        circle.setContentDescription(label);
+        circle.setOnClickListener(v -> {
+            if (!enabled) return;
+            if (!keepOpen && owner[0] != null) owner[0].dismiss();
+            if (action != null) action.run();
+        });
+        bar.addView(cell, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+    }
+
+    private void showOverflowMenu() {
+        if (menuSheet != null && menuSheet.isShowing()) menuSheet.dismiss();
+        final android.app.Dialog[] owner = new android.app.Dialog[1];
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+
+        // Header: the page this menu acts on.
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(dp(6), 0, dp(6), dp(12));
+        TextView pageTitle = new TextView(this);
+        String t = current == null ? "" : current.label();
+        pageTitle.setText(t.isEmpty() ? "New tab" : t);
+        pageTitle.setTextSize(16);
+        pageTitle.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        pageTitle.setTextColor(theme.text);
+        pageTitle.setSingleLine(true);
+        pageTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        header.addView(pageTitle);
+        TextView pageHost = new TextView(this);
+        pageHost.setText((current != null && current.incognito ? "Incognito \u00b7 " : "") + (lastUrl == null ? "" : prettyUrl(lastUrl)));
+        pageHost.setTextSize(12);
+        pageHost.setTextColor(theme.muted);
+        pageHost.setSingleLine(true);
+        pageHost.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        header.addView(pageHost);
+        body.addView(header);
+
+        // Quick actions — a button is enough for these.
+        LinearLayout quick = new LinearLayout(this);
+        quick.setPadding(0, 0, 0, dp(4));
+        boolean canBack = webView != null && webView.canGoBack();
+        boolean canForward = webView != null && webView.canGoForward();
+        boolean marked = store != null && store.isBookmarked(lastUrl);
+        quickAction(quick, owner, R.drawable.nk_ic_arrow_back, 0, "Back", canBack, false, () -> { if (webView != null && webView.canGoBack()) { webView.goBack(); syncChrome(); } });
+        quickAction(quick, owner, R.drawable.nk_ic_arrow_forward, 0, "Forward", canForward, false, () -> { if (webView != null && webView.canGoForward()) webView.goForward(); });
+        quickAction(quick, owner, R.drawable.nk_ic_refresh, 0, "Reload", webView != null, false, () -> { if (webView != null) webView.reload(); });
+        quickAction(quick, owner, marked ? R.drawable.nk_ic_star_filled : R.drawable.nk_ic_star, marked ? theme.accent : 0,
+            marked ? "Saved" : "Bookmark", lastUrl != null, false, this::toggleBookmark);
+        quickAction(quick, owner, R.drawable.nk_ic_share, 0, "Share", lastUrl != null, false, this::sharePage);
+        body.addView(quick);
+
+        // Tabs
+        LinearLayout tabsSection = sheetSection(body);
+        sheetRow(tabsSection, owner, R.drawable.nk_ic_add_box, "New tab", null, null, 0, () -> openNewTab(false));
+        sheetRow(tabsSection, owner, R.drawable.nk_ic_incognito, "New incognito tab", null, null, 0, () -> openNewTab(true));
+        sheetRow(tabsSection, owner, R.drawable.nk_ic_tab, "Tabs", String.valueOf(tabs.size()), null, 0, this::showTabSwitcher);
+        sheetRow(tabsSection, owner, R.drawable.nk_ic_group_work, "Tab groups", null, null, 0, this::showGroupsDialog);
+
+        // Page tools
+        LinearLayout tools = sheetSection(body);
+        sheetRow(tools, owner, R.drawable.nk_ic_search, "Find in page", null, null, 0, this::showFindBar);
+        sheetRow(tools, owner, R.drawable.nk_ic_screenshot_monitor, "Take screenshot", null, null, 0, this::takeScreenshot);
+        boolean rec = ScreenRecordService.isRecording();
+        sheetRow(tools, owner, rec ? R.drawable.nk_ic_stop_circle : R.drawable.nk_ic_screen_record,
+            rec ? "Stop recording" : "Screen recording", rec ? recElapsed() : null, null, rec ? REC_RED : 0, this::toggleScreenRecording);
+        sheetRow(tools, owner, R.drawable.nk_ic_desktop_windows, "Desktop site", null, current != null && current.desktop, 0, this::toggleDesktopMode);
+        sheetRow(tools, owner, R.drawable.nk_ic_chrome_reader_mode, "Reader mode", null, null, 0, this::toggleReaderMode);
+        sheetRow(tools, owner, R.drawable.nk_ic_translate, "Translate page", null, null, 0, this::chooseTranslateLanguage);
+        sheetRow(tools, owner, R.drawable.nk_ic_zoom_in, "Zoom", (webView == null ? store.textZoom() : webView.getSettings().getTextZoom()) + "%", null, 0, this::showZoomDialog);
+        sheetRow(tools, owner, R.drawable.nk_ic_terminal, "Dev console", null, current != null && current.devtools, 0, this::toggleDevConsole);
+
+        // Library
+        LinearLayout library = sheetSection(body);
+        sheetRow(library, owner, R.drawable.nk_ic_bookmarks, "Bookmarks", null, null, 0, () -> showEntries("Bookmarks", true));
+        sheetRow(library, owner, R.drawable.nk_ic_history, "History", null, null, 0, () -> showEntries("History", false));
+        sheetRow(library, owner, R.drawable.nk_ic_home, "Home page", null, null, 0, this::goHome);
+
+        // Settings
+        LinearLayout prefs = sheetSection(body);
+        sheetRow(prefs, owner, R.drawable.nk_ic_palette, "Appearance", null, null, 0, this::showAppearance);
+        sheetRow(prefs, owner, R.drawable.nk_ic_settings, "Browser settings", null, null, 0, this::showSettings);
+
+        LinearLayout exit = sheetSection(body);
+        sheetRow(exit, owner, R.drawable.nk_ic_close, "Close browser", null, null, REC_RED, this::finish);
+
+        owner[0] = sheet(body);
+        menuSheet = owner[0];
+        owner[0].show();
+    }
+
+    private static final int REC_RED = Color.rgb(229, 57, 53);
 
     private void toast(String text) {
+
         try { Toast.makeText(this, text, Toast.LENGTH_SHORT).show(); } catch (Throwable ignored) {}
     }
 
@@ -537,6 +721,239 @@ public final class RemoteBrowserActivity extends Activity {
         allowedHosts.add(host + ":" + (port < 0 ? 443 : port));
         String site = registrableSite(host);
         if (site != null) { allowedHosts.add(site + ":443"); allowedHosts.add("*." + site + ":443"); }
+    }
+
+    // ======================= dev console (Eruda) =======================
+
+    private void toggleDevConsole() {
+        if (current == null || webView == null) { toast("Open a page first"); return; }
+        current.devtools = !current.devtools;
+        if (current.devtools) {
+            DevConsole.show(webView, this, theme.dark, true);
+            toast("Dev console on");
+        } else {
+            DevConsole.hide(webView);
+            toast("Dev console off");
+        }
+    }
+
+    // ======================= screenshot =======================
+
+    private void takeScreenshot() {
+        final WebView view = webView;
+        if (view == null || view.getWidth() <= 0 || view.getHeight() <= 0) { toast("Open a page first"); return; }
+        // Let the menu sheet finish closing so it is not in the shot.
+        handler.postDelayed(() -> captureVisible(view), 220);
+    }
+
+    private void captureVisible(final WebView view) {
+        if (view.getWidth() <= 0 || view.getHeight() <= 0) return;
+        final Bitmap bitmap = Bitmap.createBitmap(view.getWidth(), view.getHeight(), Bitmap.Config.ARGB_8888);
+        int[] at = new int[2];
+        view.getLocationInWindow(at);
+        android.graphics.Rect area = new android.graphics.Rect(at[0], at[1], at[0] + view.getWidth(), at[1] + view.getHeight());
+        try {
+            // PixelCopy reads the composited frame (GPU WebView content included).
+            android.view.PixelCopy.request(getWindow(), area, bitmap, result -> {
+                if (result == android.view.PixelCopy.SUCCESS) saveScreenshot(bitmap);
+                else saveScreenshot(drawFallback(view, bitmap));
+            }, handler);
+        } catch (Throwable error) {
+            saveScreenshot(drawFallback(view, bitmap));
+        }
+    }
+
+    private Bitmap drawFallback(WebView view, Bitmap bitmap) {
+        try {
+            android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+            canvas.drawColor(theme.ground);
+            canvas.translate(-view.getScrollX(), -view.getScrollY());
+            view.draw(canvas);
+        } catch (Throwable ignored) {}
+        return bitmap;
+    }
+
+    private void saveScreenshot(final Bitmap bitmap) {
+        final android.content.Context app = getApplicationContext();
+        THUMB_IO.execute(() -> {
+            final Uri uri = MediaSaver.saveImage(app, bitmap);
+            handler.post(() -> {
+                if (isFinishing()) return;
+                if (uri == null) toast("Could not save the screenshot");
+                else showShotPreview(bitmap, uri);
+            });
+        });
+    }
+
+    private View shotCard;
+
+    /** Small floating preview: thumbnail · "Screenshot saved" · Share · Edit. */
+    private void showShotPreview(Bitmap bitmap, final Uri uri) {
+        if (content == null) return;
+        if (shotCard != null && shotCard.getParent() instanceof ViewGroup) ((ViewGroup) shotCard.getParent()).removeView(shotCard);
+        LinearLayout card = new LinearLayout(this);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(10), dp(10), dp(8), dp(10));
+        card.setBackground(rounded(theme.chrome, dp(18), theme.border));
+        card.setElevation(dp(10));
+        android.widget.ImageView thumb = new android.widget.ImageView(this);
+        thumb.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+        thumb.setImageBitmap(bitmap);
+        thumb.setBackground(rounded(theme.surface, dp(8), 0));
+        thumb.setClipToOutline(true);
+        card.addView(thumb, new LinearLayout.LayoutParams(dp(40), dp(64)));
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        TextView t1 = new TextView(this);
+        t1.setText("Screenshot saved");
+        t1.setTextSize(14);
+        t1.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        t1.setTextColor(theme.text);
+        TextView t2 = new TextView(this);
+        t2.setText("Pictures/" + MediaSaver.folder(this));
+        t2.setTextSize(12);
+        t2.setTextColor(theme.muted);
+        t2.setSingleLine(true);
+        texts.addView(t1);
+        texts.addView(t2);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        tp.setMargins(dp(12), 0, dp(4), 0);
+        card.addView(texts, tp);
+        card.addView(cardAction("Share", () -> {
+            Intent send = new Intent(Intent.ACTION_SEND).setType("image/png").putExtra(Intent.EXTRA_STREAM, uri)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try { startActivity(Intent.createChooser(send, "Share screenshot")); } catch (Throwable e) { toast("No app can share this"); }
+        }));
+        card.addView(cardAction("Edit", () -> {
+            Intent edit = new Intent(Intent.ACTION_EDIT).setDataAndType(uri, "image/*")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            try { startActivity(Intent.createChooser(edit, "Edit screenshot")); } catch (Throwable e) { toast("No editor app found"); }
+        }));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+        lp.setMargins(dp(12), 0, dp(12), dp(14));
+        content.addView(card, lp);
+        card.setAlpha(0f);
+        card.setTranslationY(dp(24));
+        card.animate().alpha(1f).translationY(0).setDuration(180).start();
+        shotCard = card;
+        final View shown = card;
+        handler.postDelayed(() -> {
+            if (shown.getParent() == null) return;
+            shown.animate().alpha(0f).translationY(dp(24)).setDuration(180).withEndAction(() -> {
+                if (shown.getParent() instanceof ViewGroup) ((ViewGroup) shown.getParent()).removeView(shown);
+            }).start();
+        }, 6000);
+    }
+
+    private TextView cardAction(String label, final Runnable action) {
+        TextView button = new TextView(this);
+        button.setText(label);
+        button.setTextSize(14);
+        button.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        button.setTextColor(theme.accent);
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(dp(12), dp(8), dp(12), dp(8));
+        button.setBackground(pressable(dp(16)));
+        button.setOnClickListener(v -> action.run());
+        return button;
+    }
+
+    // ======================= screen recording =======================
+
+    private static final int REQ_PROJECTION = 7301;
+    private static final int REQ_NOTIFICATIONS = 7302;
+    private TextView recPill;
+    private final Runnable recTick = new Runnable() {
+        @Override public void run() {
+            if (recPill != null && ScreenRecordService.isRecording()) {
+                recPill.setText("\u25cf  REC " + recElapsed() + "   Stop");
+                handler.postDelayed(this, 1000);
+            }
+        }
+    };
+
+    private String recElapsed() {
+        long s = Math.max(0, (System.currentTimeMillis() - ScreenRecordService.startedAt()) / 1000);
+        return String.format(Locale.US, "%d:%02d", s / 60, s % 60);
+    }
+
+    private void toggleScreenRecording() {
+        if (ScreenRecordService.isRecording()) {
+            startService(new Intent(this, ScreenRecordService.class).setAction(ScreenRecordService.ACTION_STOP));
+            return;
+        }
+        // Android 13+: the Stop notification needs the notification permission.
+        if (Build.VERSION.SDK_INT >= 33
+            && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] { android.Manifest.permission.POST_NOTIFICATIONS }, REQ_NOTIFICATIONS);
+            return;
+        }
+        requestProjection();
+    }
+
+    private void requestProjection() {
+        try {
+            android.media.projection.MediaProjectionManager manager =
+                (android.media.projection.MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+            // A fresh consent every time (Android 14+ tokens are single-use).
+            startActivityForResult(manager.createScreenCaptureIntent(), REQ_PROJECTION);
+        } catch (Throwable error) {
+            toast("Screen recording is not supported on this device");
+        }
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        // Recording still works without the notification; only the shade Stop is missing.
+        if (requestCode == REQ_NOTIFICATIONS) requestProjection();
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_PROJECTION) return;
+        if (resultCode != RESULT_OK || data == null) { toast("Screen recording cancelled"); return; }
+        android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getRealMetrics(metrics);
+        Intent start = new Intent(this, ScreenRecordService.class)
+            .setAction(ScreenRecordService.ACTION_START)
+            .putExtra(ScreenRecordService.EXTRA_CODE, resultCode)
+            .putExtra(ScreenRecordService.EXTRA_DATA, data)
+            .putExtra(ScreenRecordService.EXTRA_WIDTH, metrics.widthPixels)
+            .putExtra(ScreenRecordService.EXTRA_HEIGHT, metrics.heightPixels)
+            .putExtra(ScreenRecordService.EXTRA_DPI, metrics.densityDpi);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(start); else startService(start);
+        } catch (Throwable error) {
+            toast("Could not start screen recording");
+        }
+    }
+
+    /** Red REC pill over the page while recording; tap to stop. */
+    private void updateRecIndicator() {
+        if (content == null) return;
+        boolean on = ScreenRecordService.isRecording();
+        if (!on) {
+            if (recPill != null && recPill.getParent() instanceof ViewGroup) ((ViewGroup) recPill.getParent()).removeView(recPill);
+            recPill = null;
+            handler.removeCallbacks(recTick);
+            return;
+        }
+        if (recPill != null && recPill.getParent() == content) { recPill.bringToFront(); return; }
+        if (recPill != null && recPill.getParent() instanceof ViewGroup) ((ViewGroup) recPill.getParent()).removeView(recPill);
+        recPill = new TextView(this);
+        recPill.setTextColor(Color.WHITE);
+        recPill.setTextSize(12);
+        recPill.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        recPill.setPadding(dp(14), dp(7), dp(14), dp(7));
+        recPill.setBackground(rounded(REC_RED, dp(18), 0));
+        recPill.setElevation(dp(8));
+        recPill.setContentDescription("Recording. Tap to stop");
+        recPill.setOnClickListener(v -> toggleScreenRecording());
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        lp.setMargins(0, dp(10), 0, 0);
+        content.addView(recPill, lp);
+        handler.removeCallbacks(recTick);
+        recTick.run();
     }
 
     // ======================= tabs =======================
@@ -737,21 +1154,19 @@ public final class RemoteBrowserActivity extends Activity {
         paintSegment.run();
         header.addView(segment, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         Button more = chromeButton("\u22ee", "Tab options", v -> {
-            PopupMenu popup = new PopupMenu(this, v);
-            popup.getMenu().add(0, 1, 0, "Tab groups");
-            popup.getMenu().add(0, 2, 1, "New incognito tab");
-            if (groupFilter != null) popup.getMenu().add(0, 3, 2, "Show all tabs");
-            popup.getMenu().add(0, 4, 3, "Close all tabs");
-            popup.setOnMenuItemClickListener(item -> {
-                switch (item.getItemId()) {
-                    case 1: dialog.dismiss(); showGroupsDialog(); return true;
-                    case 2: dialog.dismiss(); openNewTab(true); return true;
-                    case 3: groupFilter = null; fillTabRows(list, dialog, title); return true;
-                    case 4: dialog.dismiss(); confirmCloseAll(); return true;
-                    default: return false;
-                }
-            });
-            popup.show();
+            final android.app.Dialog[] owner = new android.app.Dialog[1];
+            LinearLayout body = new LinearLayout(this);
+            body.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout section = sheetSection(body);
+            ((LinearLayout.LayoutParams) section.getLayoutParams()).setMargins(0, 0, 0, 0);
+            sheetRow(section, owner, R.drawable.nk_ic_add_box, "New tab", null, null, 0, () -> { dialog.dismiss(); openNewTab(false); });
+            sheetRow(section, owner, R.drawable.nk_ic_incognito, "New incognito tab", null, null, 0, () -> { dialog.dismiss(); openNewTab(true); });
+            sheetRow(section, owner, R.drawable.nk_ic_group_work, "Tab groups", null, null, 0, () -> { dialog.dismiss(); showGroupsDialog(); });
+            if (groupFilter != null) sheetRow(section, owner, R.drawable.nk_ic_select_all, "Show all tabs", null, null, 0, () -> { groupFilter = null; fillTabRows(list, dialog, title); });
+            LinearLayout danger = sheetSection(body);
+            sheetRow(danger, owner, R.drawable.nk_ic_delete, "Close all tabs", null, null, REC_RED, () -> { dialog.dismiss(); confirmCloseAll(); });
+            owner[0] = sheet(body);
+            owner[0].show();
         });
         more.setTextSize(20);
         LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(dp(40), dp(40));
@@ -1913,6 +2328,7 @@ public final class RemoteBrowserActivity extends Activity {
                 String pageTitle = view.getTitle();
                 if (pageTitle != null) tab.title = pageTitle;
                 if (store != null && !tab.incognito) store.addHistory(url, pageTitle);
+                if (tab.devtools) DevConsole.show(view, RemoteBrowserActivity.this, theme.dark, false);
                 if (tab != current) return;
                 lastUrl = url;
                 cancelLoadTimeout();
@@ -2277,6 +2693,8 @@ public final class RemoteBrowserActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        ScreenRecordService.listener = this::updateRecIndicator;
+        updateRecIndicator();
         if (!tabs.isEmpty()) runAutoDelete();
     }
 
@@ -2287,6 +2705,8 @@ public final class RemoteBrowserActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        ScreenRecordService.listener = null;
+        handler.removeCallbacks(recTick);
         report("closed", "browser-only URL session closed");
         saveSession();
         if (isFinishing() && store != null && store.clearOnExit()) {
