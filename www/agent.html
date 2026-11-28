@@ -6074,7 +6074,7 @@ const Markdown = (() => {
   }
 
   /** Parses `[label](dest "title")` starting at the `[`. Returns null, a link, or `{ incomplete, label }`. */
-  function parseLinkAt(src, start) {
+  function parseLinkAt(src, start, streaming) {
     const n = src.length;
     let depth = 0;
     let j = start;
@@ -6091,6 +6091,10 @@ const Markdown = (() => {
       if (ch === '[') depth++;
       else if (ch === ']') { depth--; if (depth === 0) break; }
     }
+    // Still streaming and the link may not have arrived yet ("[the course p" or "[the course page]"
+    // at the end): show its label without the brackets, as the finished link will. Showing the raw
+    // brackets made the line wrap and then shrink back once "](" arrived (the reply jumped up).
+    if (streaming && (j >= n || j === n - 1)) return { incomplete: true, label: src.slice(start + 1, Math.min(j, n)) };
     if (j >= n) return null;
     const label = src.slice(start + 1, j);
     if (src[j + 1] !== '(') return null;
@@ -6199,7 +6203,7 @@ const Markdown = (() => {
 
       if (c === '[' || (c === '!' && src[i + 1] === '[')) {
         const image = c === '!';
-        const link = o.noLinks && !image ? null : parseLinkAt(src, image ? i + 1 : i);
+        const link = o.noLinks && !image ? null : parseLinkAt(src, image ? i + 1 : i, !!o.streaming);
         if (link && link.incomplete) {
           if (o.streaming) {
             flush();
@@ -6237,6 +6241,14 @@ const Markdown = (() => {
             flush();
             nodes.push({ t: 'math', v: src.slice(i + 1, close), display: false });
             i = close + 1;
+            continue;
+          }
+          // Streaming, and a formula has started at the end but its closing $ has not arrived: its raw
+          // TeX is much wider than the drawn formula, so it wrapped and then shrank back (the reply
+          // jumped up). Hold it back until it closes. A price ("$5") has no TeX in it and still shows.
+          if (o.streaming && close < 0 && /[\\^_{}]/.test(src.slice(i + 1))) {
+            flush();
+            i = n;
             continue;
           }
         }
@@ -6314,6 +6326,10 @@ const Markdown = (() => {
   const delimText = (d) => (d.t === 'delim' ? { t: 'text', v: d.ch.repeat(d.n) } : d);
 
   function processEmphasis(nodes, streaming) {
+    // Streaming: a marker run at the very end may be half of one ("**bold*" before the second "*").
+    // Closing with it would draw <em><em> for a moment and then <strong>, so the line changed width
+    // and the reply jumped. Hold it back; the open marker before it styles the tail below.
+    if (streaming && nodes[nodes.length - 1]?.t === 'delim') nodes.pop();
     let i = 0;
     while (i < nodes.length) {
       const closer = nodes[i];
@@ -6577,6 +6593,9 @@ const Markdown = (() => {
     while (i < n) {
       const line = lines[i];
       if (isBlank(line)) { i++; continue; }
+      // Streaming: a lone "*", "-" or "+" as the last line is not a list item yet; it is as often the
+      // start of "**bold**" or "---". Drawing an empty bullet and then taking it away made the reply jump.
+      if (openTail && i === n - 1 && /^[ \t]*[*+-]$/.test(line)) { i++; continue; }
       const s = i;
       let block;
       let m;
@@ -6618,7 +6637,7 @@ const Markdown = (() => {
           else break;
           i++;
         }
-        block = { type: 'blockquote', blocks: parseBlocks(inner) };
+        block = { type: 'blockquote', blocks: parseBlocks(inner, openTail && i === n) };
       } else if (isListStart(line)) {
         [block, i] = parseList(lines, i);
       } else if (isTableStart(lines, i)) {
