@@ -44,8 +44,6 @@ import android.widget.TextView;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -91,7 +89,6 @@ public final class RemoteBrowserActivity extends Activity {
     private LinearLayout findBar;
     private EditText findInput;
     private TextView findCount;
-    private String readerScript;
     // PageAgent host (null when disabled/unsupported): injects the vendored
     // in-page agent and relays its LLM calls through the free route.
     private PageAgentHost pageAgent;
@@ -1137,21 +1134,7 @@ public final class RemoteBrowserActivity extends Activity {
     // ---------- reader mode ----------
     private void toggleReaderMode() {
         if (webView == null) return;
-        if (readerScript == null) readerScript = readAsset("browser/reader.js");
-        if (readerScript == null) { toast("Reader mode is unavailable"); return; }
-        webView.evaluateJavascript(readerScript, null);
-    }
-
-    private String readAsset(String name) {
-        try (InputStream in = getAssets().open(name)) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
-            return new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
-        } catch (Exception error) {
-            return null;
-        }
+        if (!ReaderMode.toggle(webView, this)) toast("Reader mode is unavailable");
     }
 
     // ---------- bookmarks & history ----------
