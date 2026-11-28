@@ -446,6 +446,8 @@ pub fn fast_path(env: &SteerEnvelope, base: &PatchBase) -> Option<SteerPatch> {
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct AgentSnapshot {
     pub session_key: String,
+    /// The running turn (the handle's run id); empty when idle.
+    pub turn_id: String,
     pub running: bool,
     pub step: u32,
     /// "model" | "tools" | "approval" | "idle"
@@ -454,9 +456,15 @@ pub struct AgentSnapshot {
     pub plan: String,
     pub ctx_rev: i64,
     pub strategy_version: i64,
+    /// The context checklist of this request (item ids the model sees).
+    pub temp_checklist: Vec<String>,
     pub recent_tools: Vec<String>,
     pub files_touched: Vec<String>,
+    /// Running sub-agents of this chat: `id (name): task`.
     pub subagents: Vec<String>,
+    /// What the steer process may read of earlier memory: the session's
+    /// recent turns, one short line each, oldest first.
+    pub memory: Vec<String>,
 }
 
 impl AgentSnapshot {
@@ -520,19 +528,80 @@ pub fn parse_patch(text: &str, ids: &[String], base: &PatchBase) -> Option<Steer
     Some(p)
 }
 
-pub fn interpreter_prompt(snapshot: &AgentSnapshot, batch: &[SteerEnvelope], earlier: Option<&str>) -> String {
+/// The interpreter's own context window, in characters. The steer process
+/// manages it like the main agent manages its window: when the prompt would
+/// not fit, the oldest memory goes first, then the saved earlier reading and
+/// the earlier messages are cut down; the newest message is kept whole as long
+/// as it fits on its own.
+pub const INTERPRETER_PROMPT_BUDGET: usize = 12_000;
+
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let keep: String = text.chars().take(max.saturating_sub(1)).collect();
+    format!("{keep}\u{2026}")
+}
+
+/// The tail of `text` (the newest part), cut to `max` characters.
+fn cut_tail(text: &str, max: usize) -> String {
+    let n = text.chars().count();
+    if n <= max {
+        return text.to_string();
+    }
+    let keep: String = text.chars().skip(n - max.saturating_sub(1)).collect();
+    format!("\u{2026}{keep}")
+}
+
+fn compact_snapshot(snapshot: &AgentSnapshot, level: usize) -> AgentSnapshot {
+    // level 0 = as is (fields already capped); higher levels shrink further.
+    let (text_max, list_max, mem_max) = match level {
+        0 => (2_000, 24, 12),
+        1 => (1_000, 12, 6),
+        2 => (500, 8, 3),
+        _ => (240, 4, 0),
+    };
+    let tail = |v: &[String], n: usize| -> Vec<String> {
+        v.iter().skip(v.len().saturating_sub(n)).map(|s| cut(s, 240)).collect()
+    };
+    AgentSnapshot {
+        session_key: snapshot.session_key.clone(),
+        turn_id: snapshot.turn_id.clone(),
+        running: snapshot.running,
+        step: snapshot.step,
+        phase: snapshot.phase.clone(),
+        goal: cut(&snapshot.goal, text_max),
+        plan: cut(&snapshot.plan, text_max),
+        ctx_rev: snapshot.ctx_rev,
+        strategy_version: snapshot.strategy_version,
+        temp_checklist: tail(&snapshot.temp_checklist, list_max),
+        recent_tools: tail(&snapshot.recent_tools, list_max),
+        files_touched: tail(&snapshot.files_touched, list_max),
+        subagents: tail(&snapshot.subagents, list_max),
+        memory: tail(&snapshot.memory, mem_max),
+    }
+}
+
+fn render_prompt(snapshot: &AgentSnapshot, batch: &[SteerEnvelope], earlier: Option<&str>, level: usize) -> String {
     let mut out = String::new();
     out.push_str("Agent snapshot:\n");
-    out.push_str(&serde_json::to_string_pretty(snapshot).unwrap_or_default());
+    out.push_str(&serde_json::to_string_pretty(&compact_snapshot(snapshot, level)).unwrap_or_default());
     out.push_str("\n\n");
     if let Some(e) = earlier.filter(|e| !e.is_empty()) {
+        let max = match level {
+            0 => usize::MAX,
+            1 => 3_000,
+            2 => 1_200,
+            _ => 400,
+        };
         out.push_str("Work saved from the interrupted earlier reading (re-check it against the newest message):\n");
-        out.push_str(e);
+        out.push_str(&cut_tail(e, max));
         out.push_str("\n\n");
     }
     let n = batch.len();
     for (i, env) in batch.iter().enumerate() {
-        let label = if i + 1 == n && n > 1 {
+        let newest = i + 1 == n;
+        let label = if newest && n > 1 {
             "Newest message (wins on conflict)".to_string()
         } else if n > 1 {
             format!("Earlier message {}", i + 1)
@@ -540,7 +609,30 @@ pub fn interpreter_prompt(snapshot: &AgentSnapshot, batch: &[SteerEnvelope], ear
             "Message".to_string()
         };
         let mode = if env.is_update() { " [sent with Update: the user wants the task changed]" } else { "" };
-        out.push_str(&format!("{label}{mode}:\n{}\n\n", env.text));
+        let text = if newest {
+            cut(&env.text, if level >= 3 { INTERPRETER_PROMPT_BUDGET / 2 } else { usize::MAX })
+        } else {
+            match level {
+                0 => env.text.clone(),
+                1 => cut(&env.text, 1_200),
+                2 => cut(&env.text, 400),
+                _ => cut(&env.text, 160),
+            }
+        };
+        out.push_str(&format!("{label}{mode}:\n{text}\n\n"));
+    }
+    out
+}
+
+/// The interpreter's user prompt: snapshot, saved earlier reading and the
+/// batch of steers, fitted into [`INTERPRETER_PROMPT_BUDGET`].
+pub fn interpreter_prompt(snapshot: &AgentSnapshot, batch: &[SteerEnvelope], earlier: Option<&str>) -> String {
+    let mut out = String::new();
+    for level in 0..=3 {
+        out = render_prompt(snapshot, batch, earlier, level);
+        if out.chars().count() <= INTERPRETER_PROMPT_BUDGET {
+            break;
+        }
     }
     out
 }
@@ -710,6 +802,7 @@ impl SteerHub {
         drop(s);
         self.update_snapshot(|snap| {
             snap.session_key = session_key.to_string();
+            snap.turn_id = format!("turn-{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
             snap.running = true;
             snap.step = 0;
             snap.phase = "model".into();
@@ -721,6 +814,7 @@ impl SteerHub {
     pub fn end_turn(&self) {
         self.update_snapshot(|snap| {
             snap.running = false;
+            snap.turn_id.clear();
             snap.phase = "idle".into();
         });
     }
@@ -1226,6 +1320,8 @@ pub struct ApplyOutcome {
     pub ctx_dropped: bool,
     pub strategy_version: Option<i64>,
     pub refused_locked: usize,
+    /// The goal edit landed as a revision on the running task's TaskGoal.
+    pub goal_revised: bool,
     pub note: Option<String>,
 }
 
@@ -1326,6 +1422,21 @@ fn apply_inner(conn: &Connection, session_key: &str, p: &SteerPatch) -> Result<A
         }
         let v = store::put_strategy(conn, session_key, &text, None, now).map_err(|e| e.to_string())?;
         out.strategy_version = Some(v);
+    }
+    // Goal edit: a revision on the running task's TaskGoal, deduped by steer id.
+    if let Some(goal_text) = &p.goal_edit {
+        use crate::context_policy::store as policy_store;
+        let id = p.steer_ids.last().cloned().unwrap_or_default();
+        // No policy table yet (a chat that never ran a task) is no error.
+        if let Ok(Some(mut task)) = policy_store::active_task(conn, session_key) {
+            if let Ok(mut goal) = serde_json::from_value::<crate::context_policy::TaskGoal>(task.goal_json.clone()) {
+                if goal.add_revision(&id, goal_text, now) {
+                    task.goal_json = serde_json::to_value(&goal).map_err(|e| e.to_string())?;
+                    policy_store::update_task(conn, &task).map_err(|e| e.to_string())?;
+                    out.goal_revised = true;
+                }
+            }
+        }
     }
     ensure_schema(conn).map_err(|e| e.to_string())?;
     for id in &p.steer_ids {

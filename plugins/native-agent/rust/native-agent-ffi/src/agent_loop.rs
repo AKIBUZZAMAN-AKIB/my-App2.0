@@ -709,6 +709,7 @@ async fn run_agent_turn_inner(
                     s.phase = "model".into();
                 });
             }
+            refresh_steer_snapshot(&ctx, &messages);
         }
         tree_turns_total += crate::turn_memory::split_turns(&messages)
             .len()
@@ -2166,6 +2167,15 @@ async fn run_agent_turn_inner(
             hub.update_snapshot(|s| {
                 s.phase = "tools".into();
                 s.recent_tools = response.tool_calls.iter().map(|t| t.name.clone()).collect();
+                // Every file this turn writes, not only steer-driven ones: the
+                // steer process reads what the agent is doing right now.
+                for call in response.tool_calls.iter().filter(|c| crate::steer::is_file_write_tool(&c.name)) {
+                    for p in crate::steer::paths_of(&call.input) {
+                        if !s.files_touched.contains(&p) {
+                            s.files_touched.push(p);
+                        }
+                    }
+                }
             });
         }
         for (call_index, original_tool_call) in response.tool_calls.iter().enumerate() {
@@ -3910,6 +3920,82 @@ fn steer_checkpoint_edits(
             "sessionKey": ctx.session_key,
         }),
     );
+}
+
+/// Publish what the steer process may read (docs/steer plan, "Read-only
+/// snapshot"): the running task's goal (its newest steer revision first), the
+/// plan (`ctx_strategy`), the context checklist and revision the next patch is
+/// based on, the running sub-agents (for auto-routing) and a short memory of
+/// the session's recent turns. Read-only for the loop's state: it only copies.
+fn refresh_steer_snapshot(ctx: &AgentLoopContext<'_>, messages: &[Message]) {
+    let Some(hub) = &ctx.steer_hub else { return };
+    let cap = |t: &str, n: usize| -> String {
+        let t = t.trim();
+        if t.chars().count() <= n {
+            t.to_string()
+        } else {
+            format!("{}\u{2026}", t.chars().take(n).collect::<String>())
+        }
+    };
+    let mut goal = String::new();
+    let mut temp_checklist: Vec<String> = Vec::new();
+    let mut plan = String::new();
+    let mut strategy_version = 0;
+    let mut ctx_rev = 0;
+    if let Ok(conn) = crate::db::open_db(&ctx.config.db_path) {
+        if let Ok(Some(task)) = crate::context_policy::store::active_task(&conn, &ctx.session_key) {
+            if let Ok(g) = serde_json::from_value::<crate::context_policy::TaskGoal>(task.goal_json.clone()) {
+                goal = g
+                    .latest_revision()
+                    .map(|r| r.text.clone())
+                    .or_else(|| g.required_outcome.clone())
+                    .unwrap_or_else(|| g.user_request.clone());
+            }
+            temp_checklist = task
+                .checklist_json
+                .get("item_ids")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+        }
+        if let Ok(Some((v, text, _))) = crate::context_tree::store::latest_strategy(&conn, &ctx.session_key) {
+            plan = text;
+            strategy_version = v;
+        }
+        ctx_rev = crate::context_tree::store::rev(&conn, &ctx.session_key).unwrap_or(0);
+    }
+    if goal.is_empty() {
+        goal = ctx.params.prompt.clone();
+    }
+    let subagents = ctx
+        .subagents
+        .as_ref()
+        .map(|s| s.manager.steer_targets(&ctx.session_key))
+        .unwrap_or_default();
+    let memory: Vec<String> = messages
+        .iter()
+        .filter(|m| !matches!(m.role, crate::types::Role::System | crate::types::Role::Context))
+        .map(|m| (m, m.text()))
+        .filter(|(_, t)| !t.trim().is_empty())
+        .map(|(m, t)| {
+            let who = if m.role == crate::types::Role::User { "user" } else { "agent" };
+            format!("{who}: {}", cap(&t, 200))
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .take(12)
+        .rev()
+        .collect();
+    hub.update_snapshot(|s| {
+        s.goal = cap(&goal, 2_000);
+        s.plan = cap(&plan, 2_000);
+        s.strategy_version = strategy_version;
+        s.ctx_rev = ctx_rev;
+        s.temp_checklist = temp_checklist;
+        s.subagents = subagents;
+        s.memory = memory;
+    });
 }
 
 /// Whether the steer channel is empty (no hub: SP3 reads it directly).

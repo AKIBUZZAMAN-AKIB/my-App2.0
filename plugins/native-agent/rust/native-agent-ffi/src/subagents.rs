@@ -2328,6 +2328,24 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         });
     }
 
+    /// The running sub-agents of `parent_session_key`, one line each
+    /// (`id (name): task`), for the steer interpreter's snapshot so it can pick
+    /// a `target_agent` (steer plan step 5, auto-routing).
+    pub fn steer_targets(&self, parent_session_key: &str) -> Vec<String> {
+        let live: std::collections::HashSet<String> = self.live.lock().unwrap().keys().cloned().collect();
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.parent_session_key == parent_session_key)
+            .filter(|r| r.status == "running" || live.contains(&r.id))
+            .map(|r| {
+                let task: String = r.task.chars().take(160).collect();
+                format!("{} ({}): {}", r.id, r.name, task)
+            })
+            .collect()
+    }
+
     /// Step 5 of the steer plan: hand a steer to one of `parent_session_key`'s
     /// sub-agents by id, name or title (the `subagents.message` path). A
     /// running one gets it as a steer; for one that is not running this fails

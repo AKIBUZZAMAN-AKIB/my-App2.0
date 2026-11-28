@@ -236,3 +236,72 @@ fn goal_revisions_dedupe_by_steer_id_not_text() {
     assert!(g.add_steer_with_id("st-2", "only the errors please"), "same words, new steer");
     assert_eq!(g.steer_messages.len(), 2);
 }
+
+#[test]
+fn a_goal_edit_lands_as_a_task_goal_revision_in_the_same_transaction() {
+    use crate::context_policy::store as policy_store;
+    use crate::context_policy::{PolicyId, Source, TaskGoal, TaskStatus};
+    let path = std::env::temp_dir().join(format!("steer-goal-{}.sqlite", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let db = path.to_str().unwrap();
+    let conn = Connection::open(db).unwrap();
+    crate::db::ensure_schema(&conn).unwrap();
+    policy_store::ensure_tables(&conn).unwrap();
+    let goal = TaskGoal::new("build the app", &[], None, 1);
+    policy_store::insert_task(
+        &conn,
+        &policy_store::TaskRow {
+            task_id: "t1".into(),
+            session_key: "s".into(),
+            goal_json: serde_json::to_value(&goal).unwrap(),
+            checklist_json: json!({}),
+            policy_id: PolicyId::T1,
+            params: Default::default(),
+            source: Source::Ai,
+            status: TaskStatus::Active,
+            retries: 0,
+            escalations: 0,
+            started_at: 1,
+            ended_at: None,
+        },
+    )
+    .unwrap();
+    let p = parse_patch(
+        r#"{"intent":"Amend","goal_edit":"build the app with yarn"}"#,
+        &["st-g".to_string()],
+        &PatchBase::default(),
+    )
+    .unwrap();
+    let out = apply_patch_tx(db, "s", &p).unwrap();
+    assert!(out.goal_revised);
+    // The same patch again changes nothing (deduped by steer id).
+    assert!(!apply_patch_tx(db, "s", &p).unwrap().goal_revised);
+    let task = policy_store::active_task(&conn, "s").unwrap().unwrap();
+    let g: TaskGoal = serde_json::from_value(task.goal_json).unwrap();
+    assert_eq!(g.revisions.len(), 1);
+    assert_eq!(g.latest_revision().unwrap().steer_id, "st-g");
+    assert_eq!(g.latest_revision().unwrap().text, "build the app with yarn");
+    assert_eq!(g.user_request, "build the app");
+}
+
+#[test]
+fn the_interpreter_prompt_manages_its_own_window() {
+    let mut snap = AgentSnapshot::default();
+    snap.goal = "g".repeat(5_000);
+    snap.plan = "p".repeat(5_000);
+    snap.memory = (0..40).map(|i| format!("user: turn {i} {}", "m".repeat(300))).collect();
+    let old: Vec<SteerEnvelope> = (0..6).map(|i| SteerEnvelope::new(format!("earlier {i} {}", "e".repeat(3_000)))).collect();
+    let mut batch = old;
+    batch.push(SteerEnvelope::new("NEWEST: switch to yarn workspaces"));
+    let earlier = "w".repeat(20_000);
+    let prompt = interpreter_prompt(&snap, &batch, Some(&earlier));
+    assert!(prompt.chars().count() <= INTERPRETER_PROMPT_BUDGET, "{} chars", prompt.chars().count());
+    assert!(prompt.contains("NEWEST: switch to yarn workspaces"), "the newest steer is kept whole");
+    assert!(prompt.contains("Newest message (wins on conflict)"));
+    // A small prompt is left as it is.
+    let mut small = AgentSnapshot::default();
+    small.memory = vec!["user: build the app".into()];
+    small.subagents = vec!["sa_1 (tester): run the tests".into()];
+    let p = interpreter_prompt(&small, &[SteerEnvelope::new("tell the tester to skip e2e")], None);
+    assert!(p.contains("user: build the app") && p.contains("sa_1 (tester)"));
+}
