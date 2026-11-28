@@ -127,7 +127,7 @@ const SubagentExplorer = (() => {
   // The Explorer and the Diagram tab keep their own choices (direction, edges, filters).
   const PREF_KEY = { explorer: 'agent.subagents.explorer.v1', diagram: 'agent.subagents.diagram.v1' };
   const loadPrefs = (key, base) => {
-    try { const p = JSON.parse(localStorage.getItem(key) || 'null'); if (p && typeof p === 'object') { if (p.orient === 'tb' || p.orient === 'lr') base.orient = p.orient; if (p.view === 'timeline') base.view = 'timeline'; if (p.edges) Object.assign(base.edges, p.edges); } } catch { /* first run */ }
+    try { const p = JSON.parse(localStorage.getItem(key) || 'null'); if (p && typeof p === 'object') { if (p.orient === 'tb' || p.orient === 'lr') base.orient = p.orient; if (p.view === 'timeline' || p.view === 'workflow') base.view = p.view; if (p.edges) Object.assign(base.edges, p.edges); } } catch { /* first run */ }
     return base;
   };
   const allPrefs = {
@@ -608,9 +608,19 @@ const SubagentExplorer = (() => {
     // Graph or waterfall: the waterfall is the trace view (LangSmith, OpenAI traces): who ran when, for how long, and what it cost.
     const viewBtn = (v, label, ic) => h('button', { type: 'button', role: 'radio', class: 'sa-x-viewbtn', 'data-slot': `explorer-view-${v}`, 'aria-checked': String(prefs.view === v),
       onclick: () => setView(v) }, icon(ic), h('span', null, label));
+    // Workflow: the saved workflow graphs (editor, live run, replay) from 21-agent-workflows.js, when the engine has them.
+    const hasWorkflows = !isDiagram && typeof ctx.mountWorkflows === 'function';
+    const VIEWS = hasWorkflows ? ['graph', 'timeline', 'workflow'] : ['graph', 'timeline'];
+    if (!VIEWS.includes(prefs.view)) prefs.view = 'graph';
     const viewSwitch = h('div', { class: 'sa-x-viewswitch', role: 'radiogroup', 'aria-label': 'View', 'data-slot': 'explorer-view',
-      onkeydown: (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setView(prefs.view === 'graph' ? 'timeline' : 'graph'); viewSwitch.querySelector('[aria-checked=true]')?.focus(); } } },
-      viewBtn('graph', 'Graph', 'network'), viewBtn('timeline', 'Timeline', 'gantt'));
+      onkeydown: (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); const i = VIEWS.indexOf(prefs.view); setView(VIEWS[(i + (e.key === 'ArrowRight' ? 1 : VIEWS.length - 1)) % VIEWS.length]); viewSwitch.querySelector('[aria-checked=true]')?.focus(); } } },
+      viewBtn('graph', 'Graph', 'network'), viewBtn('timeline', 'Timeline', 'gantt'), hasWorkflows ? viewBtn('workflow', 'Workflow', 'workflow') : null);
+    const wfHost = h('div', { class: 'sa-x-wfhost', 'data-slot': 'explorer-workflow' });
+    let wfView = null;
+    function paintWorkflowView() {
+      if (!hasWorkflows) return;
+      if (!wfView) { wfView = ctx.mountWorkflows(); setChildren(wfHost, wfView.root); } else wfView.refresh?.();
+    }
     // The swarm's four layers live in one menu, so the chip row stays one line on a phone.
     const ALL_LAYERS = [['handoff', 'Handoffs', 'Work handed from one agent to another'], ['rule', 'Rules', 'Your allow and deny rules'], ['topic', 'Topics', 'Topics and who is subscribed'], ['topology', 'Can talk', 'Who may message whom under the topology and groups'], ['group', 'Groups', 'Each topology group\u2019s links, in its colour']];
     // The Groups layer is offered only while the chat has topology groups.
@@ -725,7 +735,7 @@ const SubagentExplorer = (() => {
     // The wrapper is a size container, so the two-column layout follows the panel's width, not the window's.
     const root = isDiagram
       ? h('div', { class: 'sa-explorer', 'data-slot': 'diagram-graph', 'data-variant': 'diagram', 'data-view': 'graph' }, h('div', { class: 'sa-x-grid' }, toolbar, canvasWrap))
-      : h('div', { class: 'sa-explorer', 'data-slot': 'subagent-explorer', 'data-view': prefs.view }, h('div', { class: 'sa-x-grid' }, toolbar, canvasWrap, timeline, inspector));
+      : h('div', { class: 'sa-explorer', 'data-slot': 'subagent-explorer', 'data-view': prefs.view }, h('div', { class: 'sa-x-grid' }, toolbar, wfHost, canvasWrap, timeline, inspector));
 
     /* ----- view transform ----- */
     const applyView = () => {
@@ -1051,7 +1061,8 @@ const SubagentExplorer = (() => {
 
     /* ----- view switch ----- */
     function setView(v) {
-      prefs.view = v === 'timeline' ? 'timeline' : 'graph'; savePrefs();
+      prefs.view = VIEWS.includes(v) ? v : 'graph'; savePrefs();
+      if (prefs.view === 'workflow') paintWorkflowView();
       root.dataset.view = prefs.view;
       for (const b of viewSwitch.querySelectorAll('[role=radio]')) { const on = b.dataset.slot === `explorer-view-${prefs.view}`; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; }
       if (prefs.view === 'graph') requestAnimationFrame(() => { if (view.fitted !== false) fit(); else applyView(); });
@@ -1845,6 +1856,7 @@ const SubagentExplorer = (() => {
       if (next.orient !== lay.orient || force) { lay = next; syncOrientBtn(); paintGraph(); }
     }
     function ready() {
+      if (prefs.view === 'workflow') paintWorkflowView();
       lastSig = '';
       graphSig = JSON.stringify([...model.nodes.values()].map((n) => [n.id, n.rawStatus]));
       applyView();
@@ -1863,8 +1875,8 @@ const SubagentExplorer = (() => {
       }
       refreshGraph(true);
     }
-    function destroy() { destroyed = true; stopPlay(); clearTimeout(graphTimer); resizeObs?.disconnect(); }
-    const api = { root, update, ready, destroy, select, fit, setReplay, get view() { return { ...view }; }, get selected() { return selected; }, get model() { return model; } };
+    function destroy() { wfView?.destroy?.(); wfView = null; destroyed = true; stopPlay(); clearTimeout(graphTimer); resizeObs?.disconnect(); }
+    const api = { root, update, ready, destroy, select, fit, setView, setReplay, get view() { return { ...view }; }, get selected() { return selected; }, get model() { return model; } };
     if (typeof window !== 'undefined') window[isDiagram ? '__diagramGraph' : '__explorer'] = api;
     return api;
   }

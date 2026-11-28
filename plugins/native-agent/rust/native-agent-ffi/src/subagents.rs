@@ -37,6 +37,7 @@ pub const TOOL_SPAWN: &str = "spawn_subagent";
 pub const TOOL_LIST: &str = "list_subagents";
 pub const TOOL_MESSAGE: &str = "message_subagent";
 pub const TOOL_STOP: &str = "stop_subagent";
+pub use workflows::TOOL_WORKFLOW;
 pub const TOOL_NAMES: [&str; 4] = [TOOL_SPAWN, TOOL_LIST, TOOL_MESSAGE, TOOL_STOP];
 /// Agent id used for sub-agent sessions, so `list_sessions("main")` hides them.
 pub const SESSION_AGENT_ID: &str = "subagent";
@@ -74,6 +75,8 @@ mod groups;
 mod lifetime;
 mod swarm;
 mod team;
+mod workflows;
+pub use workflows::{WfEdge, WfNode, Workflow, WorkflowRun};
 pub use channels::{CommsConfig, COMMS_TOOL_NAMES, PATTERNS};
 pub use cross_session::{
     is_session_tool, AskRecord, ChatInfo, SESSION_TOOL_NAMES, TOOL_ASK_SESSION, TOOL_LIST_SESSIONS,
@@ -83,7 +86,7 @@ pub use lifetime::{parse_lifetime, LifetimePolicy};
 pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
 
 pub fn is_subagent_tool(name: &str) -> bool {
-    TOOL_NAMES.contains(&name)
+    TOOL_NAMES.contains(&name) || name == TOOL_WORKFLOW
 }
 
 /// Separates a sub-agent's own instructions from the app's base prompt, so a
@@ -1783,6 +1786,12 @@ impl SubagentManager {
         ]
     }
 
+    /// The `workflow` tool, offered beside the sub-agent tools (kept out of
+    /// `tool_definitions` so their schema budget stays as it is).
+    pub fn workflow_tool_definitions() -> Vec<ToolDefinition> {
+        vec![Self::workflow_tool_definition()]
+    }
+
     /// System-prompt section added for an agent that may delegate.
     pub fn delegation_prompt(&self) -> String {
         let s = self.settings();
@@ -1795,6 +1804,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 - Give it only the tools it needs. For parallel work, spawn with wait=false, then call list_subagents with wait=true.\n\
 - Check important claims in a report before relying on them, and tell the user the results in your own words.\n\
 - Sub-agents persist across turns and app restarts unless you set `lifetime`: temp (deleted once you have its report) or standby (deleted after it has been idle for `ttl_secs`). Reuse one (message_subagent with its id or name, or spawn_subagent with reuse) when the new work continues its earlier task or needs what it already read or remembers: a follow-up, a fix to its own change, more of the same research. Spawn a new one for unrelated work, when a fresh unbiased view matters (a review of its own work), or when its history was long or went wrong. Use list_subagents (name, query, recent) to find past ones.\n\
+- For multi-stage work where one sub-agent's result must feed another (research -> write -> review, triage -> specialist, parallel analysts -> merge, draft <-> critic loops), or when the user asks for an automation, flow or pipeline, build a workflow with the `workflow` tool instead of relaying reports by hand: its edges pass each result on automatically (with conditions, parallel branches, joins and loops), and the user sees it as a live graph.\n\
 - Limits: {} running at once; by default {}, {} steps and {} seconds each.",
             s.max_parallel,
             if s.default_token_budget == 0 {
@@ -3389,6 +3399,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     (format!("Stopped: {}.", stopped.join(", ")), false)
                 }
             }
+            TOOL_WORKFLOW => self.workflow_tool(parent_depth, input, env).await,
             _ => (format!("Unknown sub-agent tool {}", tool), true),
         }
     }
@@ -3642,6 +3653,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     ) -> Result<Value, String> {
         let action = req.get("action").and_then(Value::as_str).unwrap_or("list");
         if let Some(out) = self.team_app_request(action, req) {
+            return out;
+        }
+        if let Some(out) = self.workflow_app_request(action, req, env) {
             return out;
         }
         if let Some(out) = self.channels_app_request(action, req, env) {
@@ -4531,6 +4545,14 @@ mod tests {
                         first
                     );
                 }
+                // Workflow steps carry extra text after their task: `wfsleep`
+                // and `wffail` work anywhere in the prompt.
+                if prompt.contains("wffail") {
+                    return Err(NativeAgentError::Agent { msg: "scripted failure".into() });
+                }
+                if prompt.contains("wfsleep") {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
                 if let Some(ms) = prompt.strip_prefix("sleep:") {
                     let ms: u64 = ms.trim().parse().unwrap_or(0);
                     let end = Instant::now() + Duration::from_millis(ms);
@@ -4688,6 +4710,7 @@ mod tests {
     }
 
     mod swarm_tests;
+    mod workflow_tests;
 
     struct Dec<'a>(&'a AtomicUsize);
     impl Drop for Dec<'_> {

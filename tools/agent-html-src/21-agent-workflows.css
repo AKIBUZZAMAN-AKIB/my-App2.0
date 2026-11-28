@@ -1,0 +1,98 @@
+/* Workflows (Agents ▸ Workflows): list, graph canvas, inspector. Status colours follow the delegation graph. */
+.wf { --wf-run: #2563eb; --wf-ok: #16a34a; --wf-bad: var(--destructive); --wf-off: #64748b; --wf-wait: #d97706; --wf-sel: var(--ring);
+  display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.dark .wf { --wf-run: #60a5fa; --wf-ok: #4ade80; --wf-off: #94a3b8; --wf-wait: #fbbf24; }
+.wf-head { display: flex; align-items: flex-start; gap: 10px; }
+.wf-head-text { flex: 1; min-width: 0; }
+.wf-head-text p { margin: 2px 0 0; }
+.wf-head-actions { display: flex; gap: 6px; flex: none; }
+.wf-list { display: flex; flex-direction: column; gap: 6px; }
+.wf-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--background); color: var(--foreground); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.wf-row:hover { background: var(--accent); }
+.wf-row > .icon { width: 16px; height: 16px; color: var(--muted-foreground); flex: none; }
+.wf-row-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; background: color-mix(in oklab, var(--wf-run) 12%, transparent); color: var(--wf-run); flex: none; }
+.wf-row-icon .icon { width: 17px; height: 17px; }
+.wf-row-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.wf-row-name { font-weight: 600; font-size: 14px; }
+.wf-row-sub { font-size: 12px; color: var(--muted-foreground); }
+.wf-empty p { margin: 0 0 8px; color: var(--muted-foreground); }
+.wf-templates { display: flex; flex-wrap: wrap; gap: 6px; }
+.wf-more summary { cursor: pointer; font-size: 13px; color: var(--muted-foreground); margin-bottom: 6px; }
+.wf-badge { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; flex: none;
+  background: color-mix(in oklab, var(--wf-off) 14%, transparent); color: var(--wf-off); }
+.wf-badge .icon { width: 12px; height: 12px; }
+.wf-badge[data-status="running"] { background: color-mix(in oklab, var(--wf-run) 14%, transparent); color: var(--wf-run); }
+.wf-badge[data-status="finished"] { background: color-mix(in oklab, var(--wf-ok) 14%, transparent); color: var(--wf-ok); }
+.wf-badge[data-status="error"] { background: color-mix(in oklab, var(--wf-bad) 14%, transparent); color: var(--wf-bad); }
+.wf-badge[data-status="interrupted"], .wf-badge[data-status="cancelled"] { color: var(--wf-wait); background: color-mix(in oklab, var(--wf-wait) 14%, transparent); }
+
+.wf-edhead { display: flex; flex-direction: column; gap: 8px; }
+.wf-edrow { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.wf-name { flex: 1; min-width: 0; font-weight: 600; }
+.wf-add { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.wf-add .btn { flex: none; }
+.wf-runbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.wf-input { flex: 1 1 180px; min-width: 0; }
+.wf-runpick { max-width: 220px; }
+.wf-issues { margin: 0; font-size: 12.5px; color: var(--wf-bad); }
+.wf-issues[hidden] { display: none; }
+
+.wf-canvas { position: relative; height: clamp(360px, 58vh, 720px); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; outline: none; touch-action: none;
+  background-color: color-mix(in oklab, var(--muted) 45%, var(--background));
+  background-image: radial-gradient(color-mix(in oklab, var(--muted-foreground) 28%, transparent) 1px, transparent 1px); background-size: 20px 20px; }
+.wf-canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); }
+.wf-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; user-select: none; -webkit-user-select: none; touch-action: none; cursor: grab; }
+.wf-zoom { position: absolute; right: 8px; bottom: 8px; display: flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
+.wf-zoomlabel { min-width: 42px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+
+.wf-node { cursor: pointer; }
+.wf-node-box { fill: var(--background); stroke: var(--border); stroke-width: 1.5; }
+.wf-node:hover .wf-node-box { stroke: color-mix(in oklab, var(--foreground) 35%, var(--border)); }
+.wf-node[data-selected="true"] .wf-node-box { stroke: var(--wf-sel); stroke-width: 2.5; }
+.wf-node-stripe { fill: var(--wf-run); }
+.wf-node[data-kind="router"] .wf-node-stripe { fill: #9333ea; }
+.wf-node[data-kind="merge"] .wf-node-stripe { fill: #0891b2; }
+.wf-node[data-kind="transform"] .wf-node-stripe { fill: #ca8a04; }
+.wf-node[data-kind="output"] .wf-node-stripe { fill: var(--wf-ok); }
+.wf-node-kind { font-size: 9.5px; font-weight: 700; letter-spacing: .06em; fill: var(--muted-foreground); }
+.wf-node-title { font-size: 13.5px; font-weight: 600; fill: var(--foreground); }
+.wf-node-sub { font-size: 11px; fill: var(--muted-foreground); }
+.wf-node[data-status="running"] .wf-node-box { stroke: var(--wf-run); stroke-width: 2.5; }
+.wf-node[data-status="finished"] .wf-node-box { stroke: var(--wf-ok); fill: color-mix(in oklab, var(--wf-ok) 7%, var(--background)); }
+.wf-node[data-status="error"] .wf-node-box { stroke: var(--wf-bad); fill: color-mix(in oklab, var(--wf-bad) 7%, var(--background)); }
+.wf-node[data-status="skipped"], .wf-node[data-status="cancelled"] { opacity: .5; }
+.wf-node[data-status="skipped"] .wf-node-box { stroke-dasharray: 5 4; }
+.wf-node-pulse { fill: var(--wf-run); animation: wf-pulse 1.1s ease-in-out infinite; }
+@keyframes wf-pulse { 50% { opacity: .25; } }
+.wf-port-in { fill: var(--background); stroke: var(--muted-foreground); stroke-width: 1.5; }
+.wf-port-out { fill: var(--background); stroke: var(--wf-run); stroke-width: 2; cursor: crosshair; }
+.wf-port-out:hover { fill: var(--wf-run); }
+
+.wf-edge { cursor: pointer; }
+.wf-edge-hit { fill: none; stroke: transparent; stroke-width: 16; }
+.wf-edge-line { fill: none; stroke: color-mix(in oklab, var(--muted-foreground) 70%, transparent); stroke-width: 2; }
+.wf-edge[data-loop="true"] .wf-edge-line { stroke-dasharray: 6 5; }
+.wf-edge[data-cond="failed"] .wf-edge-line { stroke: color-mix(in oklab, var(--wf-bad) 60%, transparent); }
+.wf-edge[data-status="live"] .wf-edge-line { stroke: var(--wf-ok); stroke-width: 2.5; }
+.wf-edge[data-status="dead"] .wf-edge-line { opacity: .35; }
+.wf-edge[data-selected="true"] .wf-edge-line { stroke: var(--wf-sel); stroke-width: 3; }
+.wf-edge-label rect { fill: var(--background); stroke: var(--border); }
+.wf-edge-label text { font-size: 11px; fill: var(--foreground); }
+.wf-edge-count { font-size: 10.5px; font-weight: 600; fill: var(--wf-ok); }
+.wf-arrowhead { fill: color-mix(in oklab, var(--muted-foreground) 70%, transparent); }
+.wf-arrowhead-live { fill: var(--wf-ok); }
+.wf-arrowhead-dead { opacity: .35; }
+.wf-arrowhead-sel { fill: var(--wf-sel); }
+.wf-ghost { fill: none; stroke: var(--wf-run); stroke-width: 2; stroke-dasharray: 5 4; pointer-events: none; }
+
+.wf-inspector { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--background); }
+.wf-inspector > .field-hint { margin: 0; }
+.wf-insp-head { display: flex; align-items: center; gap: 4px; }
+.wf-insp-head strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wf-field-label { font-size: 12.5px; font-weight: 600; }
+.wf-field textarea { resize: vertical; min-height: 64px; font: inherit; }
+.wf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.wf-check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.wf-output { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wf-output pre { flex-basis: 100%; margin: 0; max-height: 240px; overflow: auto; padding: 10px; border-radius: 10px; background: var(--muted); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
