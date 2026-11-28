@@ -96,8 +96,9 @@ const ContextTree = (() => {
     } else if (type === 'context.tree_action') {
       state.log = [p, ...state.log].slice(0, 50);
       paint();
-    } else if (type === 'context.tree_changed') {
-      // The model changed the tree mid-turn: read the new state from the engine.
+    } else if (type === 'context.tree_changed' || type === 'context.tree_gc') {
+      // The model changed the tree mid-turn, or the GC / a rewind cleaned it up:
+      // read the new state from the engine.
       refresh();
     }
   }

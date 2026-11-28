@@ -13685,12 +13685,24 @@ const Subagents = (() => {
     return g;
   }
 
+  /** Agents the engine deleted on its own (lifetime temp/standby, stage 7): their spawn cards still show how they ended. */
+  const retired = new Map();
   /** One `subagent.*` event from the engine. */
   function onEvent(type, payload) {
     const p = payload && typeof payload === 'object' ? payload : {};
     if (!p.id && typeof AgentTeam !== 'undefined') AgentTeam.noteEvent(String(type).replace(/^subagent\./, ''));
     if (!p.id) return;
     const kind = String(type).replace(/^subagent\./, '');
+    // Deleted by the engine's lifetime GC: off the list, but its card keeps the answer.
+    if (kind === 'deleted') {
+      const id = String(p.id);
+      const old = records.get(id);
+      if (old && (p.reason === 'temp_done' || p.reason === 'standby_expired')) { retired.set(id, { ...old, deletedReason: p.reason }); if (retired.size > 200) retired.delete(retired.keys().next().value); }
+      records.delete(id); live.delete(id);
+      if (typeof PendingApprovals !== 'undefined') PendingApprovals.dropFor(id);
+      notify();
+      return;
+    }
     if (typeof AgentTeam !== 'undefined') AgentTeam.noteEvent(kind);
     const statusFor = { started: 'running', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'waiting_approval' };
     const patch = { ...p };
@@ -13708,6 +13720,9 @@ const Subagents = (() => {
     if (kind === 'tool_call' && p.tool) { l.toolLog.push({ tool: String(p.tool), id: p.toolCallId || '', state: 'running' }); if (l.toolLog.length > 40) l.toolLog.shift(); }
     if (kind === 'tool_result') { const t = [...l.toolLog].reverse().find((x) => x.id === p.toolCallId || (!p.toolCallId && x.state === 'running')); if (t) t.state = p.isError ? 'error' : 'done'; }
     if ((kind === 'finished' || kind === 'error') && typeof p.result === 'string') rec.result = p.result;
+    // render_in_chat: the whole answer is shown to the user as a message from this agent.
+    if (kind === 'finished' && p.renderInChat && typeof p.report === 'string' && p.report.trim()) { rec.renderInChat = true; rec.result = p.report; }
+    if (p.lifetime) rec.lifetime = String(p.lifetime);
     if (kind === 'error' && typeof p.error === 'string') rec.error = p.error;
     live.set(rec.id, l);
     if (GRAPH_KINDS[kind] && kind !== 'message' && kind !== 'queued') pushLog({ kind, id: rec.id, name: rec.name, parentId: parentOf(rec), chat: chatOf(rec), depth: rec.depth, to: p.to ? String(p.to) : '', toName: p.toName ? String(p.toName) : '', text: kind === 'started' ? (rec.task || '') : kind === 'error' ? (rec.error || '') : String(p.text || p.question || p.answer || '') });
@@ -13878,6 +13893,8 @@ const Subagents = (() => {
   function matchRecord(part) {
     // The engine records which tool call started the agent: exact match first.
     if (part.toolCallId) { for (const r of records.values()) if (r.spawnToolCallId && r.spawnToolCallId === String(part.toolCallId)) return r; }
+    // A temp or standby agent the engine deleted (stage 7) keeps its card's last state.
+    if (part.toolCallId) { for (const r of retired.values()) if (r.spawnToolCallId && r.spawnToolCallId === String(part.toolCallId)) return r; }
     const res = parseMaybeJSON(part.result, null);
     const rid = res && typeof res === 'object' ? (res.id || res.subagent?.id) : null;
     if (rid && records.has(String(rid))) return records.get(String(rid));
@@ -13919,7 +13936,7 @@ const Subagents = (() => {
       const status = r?.status || (part.result !== undefined ? (part.isError ? 'error' : 'finished') : 'running');
       const l = r ? live.get(r.id) : null;
       const kidSig = r ? descendants(r.id).map((k) => [k.r.id, k.r.status, k.r.title]) : [];
-      const sig = JSON.stringify([kidSig, r?.title, name, status, r?.queuePosition, r?.steps, r?.toolCalls, r?.totalTokens, l?.preview, l?.toolLog?.length, l?.toolLog?.map((t) => t.state).join(), r?.result, r?.error]);
+      const sig = JSON.stringify([kidSig, r?.title, name, status, r?.queuePosition, r?.steps, r?.toolCalls, r?.totalTokens, l?.preview, l?.toolLog?.length, l?.toolLog?.map((t) => t.state).join(), r?.result, r?.error, r?.renderInChat, r?.deletedReason]);
       if (sig === lastSig) return;
       lastSig = sig;
       const busy = isRunning({ status });
@@ -13942,7 +13959,10 @@ const Subagents = (() => {
         r && r.status === 'queued' ? h('p', { class: 'sa-queue-line', 'data-slot': 'subagent-queue' }, icon('clock'), queueText(r), r.priority ? ` \u00b7 priority ${r.priority > 0 ? '+' : ''}${r.priority}` : '') : null,
         tools.length ? h('ul', { class: 'sa-card-tools' }, ...tools.map((t) => h('li', { 'data-state': t.state }, icon(t.state === 'running' ? 'loader-circle' : t.state === 'error' ? 'circle-exclamation-point' : 'check', t.state === 'running' ? 'spin' : ''), h('code', { class: 'truncate' }, t.tool)))) : null,
         busy && l?.preview ? h('p', { class: 'sa-card-preview' }, truncate(l.preview, 240)) : null,
-        !busy && (r?.error || r?.result) ? h('p', { class: 'sa-card-preview', 'data-type': r?.error ? 'error' : 'ok' }, truncate(r?.error || r?.result || '', 400)) : null,
+        !busy && r?.renderInChat && !r?.error && r?.result
+          ? h('div', { class: 'sa-chat-answer', 'data-slot': 'subagent-chat-answer', role: 'article', 'aria-label': `Message from ${name}` }, h('p', { class: 'sa-chat-answer-from' }, icon('bot'), `From ${name}`), h('div', { class: 'sa-chat-answer-body', style: 'white-space: pre-wrap' }, String(r.result)))
+          : !busy && (r?.error || r?.result) ? h('p', { class: 'sa-card-preview', 'data-type': r?.error ? 'error' : 'ok' }, truncate(r?.error || r?.result || '', 400)) : null,
+        r?.deletedReason ? h('p', { class: 'field-hint', 'data-slot': 'subagent-retired' }, r.deletedReason === 'temp_done' ? 'Temporary agent: removed once its answer was back.' : 'Standby agent: removed after it was not used for a while.') : null,
         r ? miniGraph(r) : null,
         h('div', { class: 'sa-card-actions' }, treeBtn, h('span', { class: 'sa-spacer' }), openBtn, stopBtn));
     };
@@ -24780,8 +24800,9 @@ const ContextTree = (() => {
     } else if (type === 'context.tree_action') {
       state.log = [p, ...state.log].slice(0, 50);
       paint();
-    } else if (type === 'context.tree_changed') {
-      // The model changed the tree mid-turn: read the new state from the engine.
+    } else if (type === 'context.tree_changed' || type === 'context.tree_gc') {
+      // The model changed the tree mid-turn, or the GC / a rewind cleaned it up:
+      // read the new state from the engine.
       refresh();
     }
   }
