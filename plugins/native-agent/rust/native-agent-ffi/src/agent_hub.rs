@@ -430,6 +430,7 @@ pub fn parity(main_tools: &[String]) -> Parity {
                 | "list_subagents"
                 | "message_subagent"
                 | "stop_subagent"
+                | "workflow"
                 | "team__spawn"
                 | "ask_session"
         ) {

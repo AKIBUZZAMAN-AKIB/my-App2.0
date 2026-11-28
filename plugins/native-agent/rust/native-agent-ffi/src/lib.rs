@@ -1046,6 +1046,7 @@ impl NativeAgentHandle {
                 "turnMemory",
                 "contextTree",
                 "subagentGraph",
+                "subagentWorkflows",
                 "subagentChatAllow",
                 "subagentTeam",
                 "subagentAdvanced",

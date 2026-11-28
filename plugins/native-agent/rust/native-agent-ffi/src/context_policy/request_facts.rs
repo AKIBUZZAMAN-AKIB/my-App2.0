@@ -39,6 +39,7 @@ pub fn tool_group(name: &str) -> &'static str {
             | "list_subagents"
             | "message_subagent"
             | "stop_subagent"
+            | "workflow"
             | "list_sessions"
             | "ask_session"
     ) {

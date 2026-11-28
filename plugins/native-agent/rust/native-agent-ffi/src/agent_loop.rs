@@ -741,6 +741,7 @@ async fn run_agent_turn_inner(
             tools.extend(
                 crate::subagents::SubagentManager::tool_definitions()
                     .into_iter()
+                    .chain(crate::subagents::SubagentManager::workflow_tool_definitions())
                     .filter(|tool| subagent_tool_enabled(&tool.name)),
             );
         }
