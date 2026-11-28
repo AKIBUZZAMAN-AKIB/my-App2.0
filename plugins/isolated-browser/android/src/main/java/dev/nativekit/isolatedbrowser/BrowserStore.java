@@ -70,6 +70,9 @@ final class BrowserStore {
     void setBlockPopups(boolean on) { prefs.edit().putBoolean("blockPopups", on).apply(); }
     boolean darkPages() { return prefs.getBoolean("darkPages", true); }
     void setDarkPages(boolean on) { prefs.edit().putBoolean("darkPages", on).apply(); }
+    /** Home page for new tabs and the home action; empty = ask for an address. */
+    String homePage() { return prefs.getString("homePage", ""); }
+    void setHomePage(String url) { prefs.edit().putString("homePage", url == null ? "" : url).apply(); }
     int textZoom() { return prefs.getInt("textZoom", 100); }
     void setTextZoom(int percent) { prefs.edit().putInt("textZoom", percent).apply(); }
     String translateLanguage() {

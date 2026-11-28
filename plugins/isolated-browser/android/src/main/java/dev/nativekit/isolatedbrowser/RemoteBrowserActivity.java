@@ -228,7 +228,7 @@ public final class RemoteBrowserActivity extends Activity {
         tabsButton = chromeButton("1", "Tabs", view -> showTabSwitcher());
         tabsButton.setTextSize(13);
         tabsButton.setBackground(rounded(Color.rgb(17, 30, 49), dp(9), Color.rgb(148, 163, 184)));
-        tabsButton.setOnLongClickListener(view -> { promptForAddress(true, false); return true; });
+        tabsButton.setOnLongClickListener(view -> { openNewTab(false); return true; });
         LinearLayout.LayoutParams tabsParams = new LinearLayout.LayoutParams(dp(34), dp(34));
         tabsParams.setMargins(dp(4), 0, dp(2), 0);
         toolbar.addView(tabsButton, tabsParams);
@@ -372,14 +372,20 @@ public final class RemoteBrowserActivity extends Activity {
     private void addExtraMenuItems(Menu menu) {
         menu.add(Menu.NONE, MENU_NEW_TAB, 1, "New tab");
         menu.add(Menu.NONE, MENU_TABS, 2, "Tabs (" + tabs.size() + ")");
-        menu.add(Menu.NONE, MENU_GROUPS, 3, "Tab groups");
+        menu.add(Menu.NONE, MENU_INCOGNITO, 3, "New incognito tab");
+        menu.add(Menu.NONE, MENU_GROUPS, 4, "Tab groups");
+        menu.add(Menu.NONE, MENU_HOME, 5, "Home page");
+        menu.add(Menu.NONE, MENU_ZOOM, 29, "Zoom (" + (webView == null ? store.textZoom() : webView.getSettings().getTextZoom()) + "%)");
         menu.add(Menu.NONE, MENU_SETTINGS, 90, "Browser settings");
     }
 
     /** Handles the extra entries; true when handled. */
     private boolean onExtraMenuItem(int id) {
         switch (id) {
-            case MENU_NEW_TAB: promptForAddress(true, false); return true;
+            case MENU_NEW_TAB: openNewTab(false); return true;
+            case MENU_INCOGNITO: openNewTab(true); return true;
+            case MENU_HOME: goHome(); return true;
+            case MENU_ZOOM: showZoomDialog(); return true;
             case MENU_TABS: showTabSwitcher(); return true;
             case MENU_GROUPS: showGroupsDialog(); return true;
             case MENU_SETTINGS: showSettings(); return true;
@@ -606,7 +612,7 @@ public final class RemoteBrowserActivity extends Activity {
         android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this)
             .setTitle(tabsTitle())
             .setView(scroll)
-            .setPositiveButton("New tab", (d, w) -> promptForAddress(true, false))
+            .setPositiveButton("New tab", (d, w) -> openNewTab(false))
             .setNegativeButton("Done", null);
         customizeSwitcher(builder);
         android.app.AlertDialog dialog = builder.create();
@@ -704,6 +710,9 @@ public final class RemoteBrowserActivity extends Activity {
 
     private static final int MENU_GROUPS = 12;
     private static final int MENU_SETTINGS = 13;
+    private static final int MENU_INCOGNITO = 14;
+    private static final int MENU_ZOOM = 15;
+    private static final int MENU_HOME = 16;
     /** Switcher filter: null shows every tab, else only that group's tabs. */
     private String groupFilter;
     private final Set<String> collapsedGroups = new HashSet<>();
@@ -866,6 +875,8 @@ public final class RemoteBrowserActivity extends Activity {
             "Clear history on exit: " + (store.clearOnExit() ? "On" : "Off"),
             "Restore tabs on start: " + (store.restoreTabs() ? "On" : "Off"),
             "Search engine: " + engineName,
+            "Home page: " + (store.homePage().isEmpty() ? "Not set" : BrowserLogic.displayHost(store.homePage())),
+            "Default text size: " + store.textZoom() + "%",
         };
         android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this)
             .setTitle("Browser settings")
@@ -887,6 +898,8 @@ public final class RemoteBrowserActivity extends Activity {
             case 2: store.setClearOnExit(!store.clearOnExit()); showSettings(); break;
             case 3: store.setRestoreTabs(!store.restoreTabs()); showSettings(); break;
             case 4: pickSearchEngine(); break;
+            case 5: promptHomePage(); break;
+            case 6: showZoomDialog(); break;
             default: break;
         }
     }
@@ -914,6 +927,74 @@ public final class RemoteBrowserActivity extends Activity {
         new android.app.AlertDialog.Builder(this)
             .setTitle("Search engine")
             .setSingleChoiceItems(labels, checked, (d, which) -> { d.dismiss(); store.setSearchEngine(engines[which][0]); showSettings(); })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+
+    // ======================= extras: incognito, home page, zoom =======================
+
+    /** New tab: opens the home page when one is set, else asks for an address. */
+    private void openNewTab(boolean incognito) {
+        String home = store.homePage();
+        if (home.isEmpty()) { promptForAddress(true, incognito); return; }
+        Uri target;
+        try { target = validatedHttps(home); }
+        catch (Exception error) { promptForAddress(true, incognito); return; }
+        allowSite(target.getHost(), target.getPort());
+        openTab(target.toString(), incognito);
+        if (incognito) toast("Incognito tab: no history, cookies cleared when closed");
+    }
+
+    private void goHome() {
+        String home = store.homePage();
+        if (home.isEmpty()) { promptHomePage(); return; }
+        allowAndLoad(home);
+    }
+
+    private void promptHomePage() {
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setHint("https://example.com");
+        String home = store.homePage();
+        input.setText(home.isEmpty() ? (lastUrl == null ? "" : lastUrl) : home);
+        FrameLayout wrapper = new FrameLayout(this);
+        wrapper.setPadding(dp(20), dp(8), dp(20), 0);
+        wrapper.addView(input, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        new android.app.AlertDialog.Builder(this)
+            .setTitle("Home page")
+            .setView(wrapper)
+            .setNeutralButton("Clear", (d, w) -> { store.setHomePage(""); toast("Home page cleared"); })
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", (d, w) -> {
+                String typed = input.getText() == null ? "" : input.getText().toString().trim();
+                String url = BrowserLogic.resolveInput(typed, store.searchEngine());
+                if (url == null) { toast("Enter a web address"); return; }
+                try { store.setHomePage(validatedHttps(url).toString()); toast("Home page saved"); }
+                catch (Exception error) { toast(error.getMessage()); }
+            })
+            .show();
+    }
+
+    private static final int[] ZOOM_STEPS = { 75, 90, 100, 110, 125, 150, 175, 200 };
+
+    private void showZoomDialog() {
+        final String[] labels = new String[ZOOM_STEPS.length];
+        int now = webView == null ? store.textZoom() : webView.getSettings().getTextZoom();
+        int checked = 2;
+        for (int i = 0; i < ZOOM_STEPS.length; i++) {
+            labels[i] = ZOOM_STEPS[i] + "%";
+            if (ZOOM_STEPS[i] == now) checked = i;
+        }
+        new android.app.AlertDialog.Builder(this)
+            .setTitle("Zoom (text size)")
+            .setSingleChoiceItems(labels, checked, (d, which) -> {
+                d.dismiss();
+                int zoom = ZOOM_STEPS[which];
+                store.setTextZoom(zoom);
+                for (BrowserTab tab : tabs) if (tab.view != null) tab.view.getSettings().setTextZoom(zoom);
+                toast("Zoom " + zoom + "%");
+            })
             .setNegativeButton("Cancel", null)
             .show();
     }
