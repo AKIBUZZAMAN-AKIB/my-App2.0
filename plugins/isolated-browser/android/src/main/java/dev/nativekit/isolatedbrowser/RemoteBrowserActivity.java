@@ -28,6 +28,12 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.PopupMenu;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.widget.Toast;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -37,7 +43,11 @@ import android.widget.TextView;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Locale;
@@ -63,6 +73,17 @@ public final class RemoteBrowserActivity extends Activity {
     private Button backButton;
     private Button forwardButton;
     private boolean agentEnabled = true;
+    private Button agentButton;
+    private Button menuButton;
+    // Browser features: bookmarks / history / settings (isolated-process prefs).
+    private BrowserStore store;
+    private String mobileUa;
+    private boolean desktopMode;
+    // Find-in-page bar (shown under the toolbar while searching).
+    private LinearLayout findBar;
+    private EditText findInput;
+    private TextView findCount;
+    private String readerScript;
     // PageAgent host (null when disabled/unsupported): injects the vendored
     // in-page agent and relays its LLM calls through the free route.
     private PageAgentHost pageAgent;
@@ -94,6 +115,7 @@ public final class RemoteBrowserActivity extends Activity {
         // A real session is taking over this process: hand the warm-up WebView's
         // memory back immediately (the expensive provider init already happened).
         IsolatedBrowserWarmupService.releaseForSession();
+        store = new BrowserStore(this);
         initialize(getIntent());
     }
 
@@ -175,8 +197,6 @@ public final class RemoteBrowserActivity extends Activity {
         toolbar.addView(backButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
         forwardButton = chromeButton("\u203a", "Forward", view -> { if (webView != null && webView.canGoForward()) webView.goForward(); });
         toolbar.addView(forwardButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
-        Button reload = chromeButton("\u21bb", "Reload", view -> { if (webView != null) webView.reload(); });
-        toolbar.addView(reload, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
         address = new TextView(this);
         address.setText(title);
@@ -192,14 +212,27 @@ public final class RemoteBrowserActivity extends Activity {
         addressParams.setMargins(dp(2), 0, dp(2), 0);
         toolbar.addView(address, addressParams);
 
+        // AI agent: one-way native -> page toggle of the docked agent panel. The
+        // floating bubble inside the page stays visible as well.
+        agentButton = chromeButton("\u2728", "AI page agent", view -> toggleAgent());
+        toolbar.addView(agentButton, new LinearLayout.LayoutParams(dp(38), dp(40)));
+        menuButton = chromeButton("\u22ee", "More options", view -> showOverflowMenu());
+        LinearLayout.LayoutParams menuParams = new LinearLayout.LayoutParams(dp(34), dp(40));
+        menuParams.setMargins(dp(2), 0, 0, 0);
+        toolbar.addView(menuButton, menuParams);
         Button close = chromeButton("\u2715", "Close browser", view -> finish());
-        toolbar.addView(close, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(dp(34), dp(40));
+        closeParams.setMargins(dp(2), 0, 0, 0);
+        toolbar.addView(close, closeParams);
 
         root.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
         progress.setProgress(0);
         root.addView(progress, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
+        findBar = buildFindBar();
+        findBar.setVisibility(View.GONE);
+        root.addView(findBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         content = new FrameLayout(this);
         content.setBackgroundColor(SHELL_GROUND);
         root.addView(content, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
@@ -276,7 +309,7 @@ public final class RemoteBrowserActivity extends Activity {
         input.setText(lastUrl == null ? "" : lastUrl);
         input.setSelection(input.getText().length());
         input.setInputType(android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        input.setHint("https://example.com");
+        input.setHint("Search or type a web address");
         FrameLayout wrapper = new FrameLayout(this);
         wrapper.setPadding(dp(20), dp(8), dp(20), 0);
         wrapper.addView(input, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -285,9 +318,11 @@ public final class RemoteBrowserActivity extends Activity {
             .setView(wrapper)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Open", (dialog, which) -> {
-                String raw = input.getText() == null ? "" : input.getText().toString().trim();
-                if (raw.isEmpty()) return;
-                if (!raw.contains("://")) raw = "https://" + raw;
+                String typed = input.getText() == null ? "" : input.getText().toString().trim();
+                if (typed.isEmpty()) return;
+                // Omnibox: an address opens directly, anything else is a search.
+                String raw = BrowserLogic.resolveInput(typed, store.searchEngine());
+                if (raw == null) return;
                 Uri target;
                 try { target = validatedHttps(raw); }
                 catch (Exception error) { Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show(); return; }
@@ -301,6 +336,287 @@ public final class RemoteBrowserActivity extends Activity {
                 if (webView != null) webView.loadUrl(target.toString());
             })
             .show();
+    }
+
+    // ======================= browser features (overflow menu) =======================
+
+    private static final int MENU_FIND = 1;
+    private static final int MENU_TRANSLATE = 2;
+    private static final int MENU_SHARE = 3;
+    private static final int MENU_RELOAD = 4;
+    private static final int MENU_DESKTOP = 5;
+    private static final int MENU_READER = 6;
+    private static final int MENU_BOOKMARK = 7;
+    private static final int MENU_BOOKMARKS = 8;
+    private static final int MENU_HISTORY = 9;
+
+    /** Hook for later stages: extra entries at the top of the ⋮ menu. */
+    private void addExtraMenuItems(Menu menu) { }
+
+    /** Hook for later stages: handles the extra entries; true when handled. */
+    private boolean onExtraMenuItem(int id) { return false; }
+
+    private void showOverflowMenu() {
+        if (menuButton == null) return;
+        PopupMenu popup = new PopupMenu(this, menuButton);
+        Menu menu = popup.getMenu();
+        addExtraMenuItems(menu);
+        menu.add(Menu.NONE, MENU_FIND, 20, "Find in page");
+        menu.add(Menu.NONE, MENU_TRANSLATE, 21, "Translate page");
+        menu.add(Menu.NONE, MENU_SHARE, 22, "Share");
+        menu.add(Menu.NONE, MENU_RELOAD, 23, "Reload");
+        menu.add(Menu.NONE, MENU_DESKTOP, 24, "Desktop site").setCheckable(true).setChecked(desktopMode);
+        menu.add(Menu.NONE, MENU_READER, 25, "Reader mode");
+        boolean marked = store != null && store.isBookmarked(lastUrl);
+        menu.add(Menu.NONE, MENU_BOOKMARK, 26, marked ? "Remove bookmark" : "Add bookmark");
+        menu.add(Menu.NONE, MENU_BOOKMARKS, 27, "Bookmarks");
+        menu.add(Menu.NONE, MENU_HISTORY, 28, "History");
+        popup.setOnMenuItemClickListener(this::onOverflowItem);
+        popup.show();
+    }
+
+    private boolean onOverflowItem(MenuItem item) {
+        int id = item.getItemId();
+        if (onExtraMenuItem(id)) return true;
+        switch (id) {
+            case MENU_FIND: showFindBar(); return true;
+            case MENU_TRANSLATE: chooseTranslateLanguage(); return true;
+            case MENU_SHARE: sharePage(); return true;
+            case MENU_RELOAD: if (webView != null) webView.reload(); return true;
+            case MENU_DESKTOP: toggleDesktopMode(); return true;
+            case MENU_READER: toggleReaderMode(); return true;
+            case MENU_BOOKMARK: toggleBookmark(); return true;
+            case MENU_BOOKMARKS: showEntries("Bookmarks", true); return true;
+            case MENU_HISTORY: showEntries("History", false); return true;
+            default: return false;
+        }
+    }
+
+    private void toast(String text) {
+        try { Toast.makeText(this, text, Toast.LENGTH_SHORT).show(); } catch (Throwable ignored) {}
+    }
+
+    private String currentUrl() {
+        if (webView != null && webView.getUrl() != null && webView.getUrl().startsWith("https://")) return webView.getUrl();
+        return lastUrl;
+    }
+
+    private void toggleAgent() {
+        if (webView == null) return;
+        if (pageAgent == null) { toast("The page agent is turned off for this page"); return; }
+        PageAgentHost.togglePanel(webView);
+    }
+
+    /** Explicit user navigation (address bar, bookmark, history, translate): the
+     *  target site joins the boundary exactly like an approved cross-site hop. */
+    private void allowAndLoad(String url) {
+        Uri target;
+        try { target = validatedHttps(url); }
+        catch (Exception error) { toast(error.getMessage()); return; }
+        allowSite(target.getHost(), target.getPort());
+        if (webView != null) webView.loadUrl(target.toString());
+    }
+
+    private void allowSite(String rawHost, int port) {
+        if (rawHost == null) return;
+        String host = rawHost.toLowerCase(Locale.ROOT);
+        allowedHosts.add(host + ":" + (port < 0 ? 443 : port));
+        String site = registrableSite(host);
+        if (site != null) { allowedHosts.add(site + ":443"); allowedHosts.add("*." + site + ":443"); }
+    }
+
+    // ---------- find in page ----------
+    private LinearLayout buildFindBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setBackgroundColor(SHELL_CHROME);
+        bar.setPadding(dp(8), dp(4), dp(6), dp(6));
+        findInput = new EditText(this);
+        findInput.setSingleLine(true);
+        findInput.setHint("Find in page");
+        findInput.setTextColor(Color.rgb(226, 232, 240));
+        findInput.setHintTextColor(Color.rgb(100, 116, 139));
+        findInput.setTextSize(14);
+        findInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
+        findInput.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+        findInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable s) {
+                if (webView == null) return;
+                String query = s == null ? "" : s.toString();
+                if (query.isEmpty()) { webView.clearMatches(); if (findCount != null) findCount.setText(""); }
+                else webView.findAllAsync(query);
+            }
+        });
+        findInput.setOnEditorActionListener((view, actionId, event) -> {
+            if (webView != null) webView.findNext(true);
+            return true;
+        });
+        bar.addView(findInput, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        findCount = new TextView(this);
+        findCount.setTextColor(Color.rgb(148, 163, 184));
+        findCount.setTextSize(12);
+        findCount.setPadding(dp(6), 0, dp(6), 0);
+        bar.addView(findCount, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        bar.addView(chromeButton("\u25b2", "Previous match", view -> { if (webView != null) webView.findNext(false); }),
+            new LinearLayout.LayoutParams(dp(36), dp(36)));
+        LinearLayout.LayoutParams next = new LinearLayout.LayoutParams(dp(36), dp(36));
+        next.setMargins(dp(4), 0, dp(4), 0);
+        bar.addView(chromeButton("\u25bc", "Next match", view -> { if (webView != null) webView.findNext(true); }), next);
+        bar.addView(chromeButton("\u2715", "Close find bar", view -> hideFindBar()), new LinearLayout.LayoutParams(dp(36), dp(36)));
+        return bar;
+    }
+
+    private void showFindBar() {
+        if (findBar == null || findInput == null) return;
+        findBar.setVisibility(View.VISIBLE);
+        findInput.requestFocus();
+        try {
+            android.view.inputmethod.InputMethodManager imm =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(findInput, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+        } catch (Throwable ignored) {}
+        String query = findInput.getText() == null ? "" : findInput.getText().toString();
+        if (!query.isEmpty() && webView != null) webView.findAllAsync(query);
+    }
+
+    private void hideFindBar() {
+        if (findBar == null) return;
+        findBar.setVisibility(View.GONE);
+        if (webView != null) webView.clearMatches();
+        if (findCount != null) findCount.setText("");
+        try {
+            android.view.inputmethod.InputMethodManager imm =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null && findInput != null) imm.hideSoftInputFromWindow(findInput.getWindowToken(), 0);
+        } catch (Throwable ignored) {}
+    }
+
+    // ---------- translate ----------
+    private void chooseTranslateLanguage() {
+        final String page = currentUrl();
+        if (page == null) { toast("Open a page first"); return; }
+        if (BrowserLogic.isTranslatedHost(BrowserLogic.host(page))) { toast("This page is already translated"); return; }
+        final String[][] languages = BrowserLogic.TRANSLATE_LANGUAGES;
+        String[] labels = new String[languages.length];
+        int checked = 0;
+        String saved = store.translateLanguage();
+        for (int i = 0; i < languages.length; i++) {
+            labels[i] = languages[i][1];
+            if (languages[i][0].equalsIgnoreCase(saved)) checked = i;
+        }
+        new android.app.AlertDialog.Builder(this)
+            .setTitle("Translate page to")
+            .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                dialog.dismiss();
+                String lang = languages[which][0];
+                store.setTranslateLanguage(lang);
+                translatePage(page, lang);
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void translatePage(String page, String lang) {
+        // Google's translate proxy serves the page from <site>.translate.goog —
+        // an explicit user choice, so those hosts join the boundary.
+        allowedHosts.add("translate.google.com:443");
+        allowedHosts.add("*.translate.goog:443");
+        allowedHosts.add("translate.goog:443");
+        allowedHosts.add("*.google.com:443");
+        allowedHosts.add("google.com:443");
+        if (webView != null) webView.loadUrl(BrowserLogic.translateUrl(page, lang));
+    }
+
+    // ---------- share ----------
+    private void sharePage() {
+        String page = currentUrl();
+        if (page == null) { toast("Nothing to share yet"); return; }
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/plain");
+        String title = webView == null ? null : webView.getTitle();
+        if (title != null && !title.isEmpty()) send.putExtra(Intent.EXTRA_SUBJECT, title);
+        send.putExtra(Intent.EXTRA_TEXT, page);
+        try { startActivity(Intent.createChooser(send, "Share page")); }
+        catch (Throwable error) { toast("No app can share this page"); }
+    }
+
+    // ---------- desktop site ----------
+    private void applyDesktopMode(WebView view, boolean desktop) {
+        if (view == null) return;
+        WebSettings settings = view.getSettings();
+        settings.setUserAgentString(desktop ? BrowserLogic.desktopUserAgent(mobileUa) : mobileUa);
+        settings.setUseWideViewPort(desktop);
+        settings.setLoadWithOverviewMode(desktop);
+    }
+
+    private void toggleDesktopMode() {
+        desktopMode = !desktopMode;
+        applyDesktopMode(webView, desktopMode);
+        if (webView != null) webView.reload();
+        toast(desktopMode ? "Desktop site on" : "Desktop site off");
+    }
+
+    // ---------- reader mode ----------
+    private void toggleReaderMode() {
+        if (webView == null) return;
+        if (readerScript == null) readerScript = readAsset("browser/reader.js");
+        if (readerScript == null) { toast("Reader mode is unavailable"); return; }
+        webView.evaluateJavascript(readerScript, null);
+    }
+
+    private String readAsset(String name) {
+        try (InputStream in = getAssets().open(name)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
+            return new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception error) {
+            return null;
+        }
+    }
+
+    // ---------- bookmarks & history ----------
+    private void toggleBookmark() {
+        String page = currentUrl();
+        if (page == null) { toast("Open a page first"); return; }
+        String title = webView == null ? "" : webView.getTitle();
+        boolean added = store.toggleBookmark(page, title);
+        toast(added ? "Bookmark added" : "Bookmark removed");
+    }
+
+    private void showEntries(String title, boolean bookmarks) {
+        final List<BrowserStore.Entry> entries = bookmarks ? store.bookmarks() : store.history();
+        if (entries.isEmpty()) { toast(bookmarks ? "No bookmarks yet" : "History is empty"); return; }
+        String[] rows = new String[entries.size()];
+        java.text.DateFormat format = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT);
+        for (int i = 0; i < entries.size(); i++) {
+            BrowserStore.Entry entry = entries.get(i);
+            String name = entry.title.isEmpty() ? BrowserLogic.prettyUrl(entry.url) : entry.title;
+            String sub = BrowserLogic.displayHost(entry.url) + (bookmarks ? "" : " \u00b7 " + format.format(new java.util.Date(entry.time)));
+            rows[i] = name + "\n" + sub;
+        }
+        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setItems(rows, (dialog, which) -> allowAndLoad(entries.get(which).url))
+            .setNegativeButton("Close", null);
+        if (!bookmarks) builder.setNeutralButton("Clear history", (dialog, which) -> { store.clearHistory(); toast("History cleared"); });
+        android.app.AlertDialog dialog = builder.create();
+        dialog.setOnShowListener(shown -> {
+            android.widget.ListView list = dialog.getListView();
+            if (list == null) return;
+            list.setOnItemLongClickListener((parent, view, position, id) -> {
+                BrowserStore.Entry entry = entries.get(position);
+                if (bookmarks) store.removeBookmark(entry.url); else store.removeHistory(entry.url);
+                toast(bookmarks ? "Bookmark removed" : "Removed from history");
+                dialog.dismiss();
+                return true;
+            });
+        });
+        dialog.show();
     }
 
     // Dark branded loading cover layered ON TOP of the WebView until its first
@@ -377,6 +693,14 @@ public final class RemoteBrowserActivity extends Activity {
         if (defaultUa != null && defaultUa.contains("; wv")) {
             settings.setUserAgentString(defaultUa.replace("; wv", ""));
         }
+        mobileUa = settings.getUserAgentString();
+        applyDesktopMode(webView, desktopMode);
+        settings.setSupportZoom(true);
+        settings.setBuiltInZoomControls(true);
+        settings.setDisplayZoomControls(false);
+        webView.setFindListener((activeMatch, matches, done) -> {
+            if (findCount != null) findCount.setText(matches == 0 ? "0/0" : (activeMatch + 1) + "/" + matches);
+        });
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
         settings.setAllowFileAccess(false);
@@ -401,6 +725,9 @@ public final class RemoteBrowserActivity extends Activity {
             @Override public void onPermissionRequest(PermissionRequest request) { request.deny(); }
             @Override public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) { callback.invoke(origin, false, false); }
             @Override public boolean onShowFileChooser(WebView view, android.webkit.ValueCallback<Uri[]> callback, FileChooserParams params) { callback.onReceiveValue(null); return true; }
+            @Override public void onReceivedTitle(WebView view, String title) {
+                if (store != null) store.updateHistoryTitle(view.getUrl(), title);
+            }
             @Override public void onProgressChanged(WebView view, int newProgress) {
                 ProgressBar bar = progress;
                 if (bar == null) return;
@@ -457,6 +784,7 @@ public final class RemoteBrowserActivity extends Activity {
             @Override public void onPageFinished(WebView view, String url) {
                 // Fallback: never leave the user stuck on the loading cover.
                 lastUrl = url;
+                if (store != null) store.addHistory(url, view.getTitle());
                 cancelLoadTimeout();
                 syncChrome();
                 reveal();
