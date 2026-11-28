@@ -116,6 +116,8 @@ export interface DeviceToolDeps {
     listAlarms(): Promise<{ alarms: unknown }>;
     cancelAlarm(options: { id: string }): Promise<void>;
     stopRinging(options?: { id?: string }): Promise<void>;
+    /** Android: opens Settings → Alarms & reminders for this app (no-op when already allowed). */
+    requestExactAlarmAccess?(): Promise<void>;
   };
   filesystem: {
     mkdir(options: any): Promise<void>;
@@ -666,6 +668,62 @@ const FLOAT_SHOW_LIMIT = { max: 3, windowMs: 60_000 };
 // shows one overlay at a time), so every show updates the same Store entry
 // instead of piling up duplicates the user has to clean by hand.
 const FLOATING_UI_ARTIFACT_ID = 'agent-overlay';
+
+/** The device's IANA time zone (e.g. "Asia/Dhaka"), or '' when unknown. */
+function deviceTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * A moment on the device's own clock, e.g. "2026-11-29 07:00:00 (UTC+06:00, Asia/Dhaka)".
+ * Tool results used to give only a UTC ISO string, which the model then read
+ * back to the user as a local time six hours off.
+ */
+function describeDeviceTime(epochMs: number): string {
+  const date = new Date(epochMs);
+  const pad = (value: number) => String(Math.trunc(Math.abs(value))).padStart(2, '0');
+  const offset = -date.getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  const zone = deviceTimeZone();
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())} ` +
+    `(UTC${sign}${pad(offset / 60)}:${pad(offset % 60)}${zone ? `, ${zone}` : ''})`
+  );
+}
+
+/**
+ * Prelude for agent HTML shown through the floating-ui artifact. The native
+ * overlay pushes the artifact's source marker ({nativeKitArtifact:true,...})
+ * into window.__nativeKitFloatingApply on load, and it never delivers the
+ * agent's own `data`. This wraps whatever handler the page installs so the
+ * marker is dropped and the agent's initial data arrives once the DOM is ready.
+ */
+export function floatingDataPrelude(html: string, initialData: unknown): string {
+  const init = initialData === undefined
+    ? 'undefined'
+    : JSON.stringify(typeof initialData === 'string' ? initialData : JSON.stringify(initialData)).replace(/</g, '\\u003c');
+  const script =
+    '<script data-nativekit-floating-prelude>(function(){var init=' + init + ';var user=null;' +
+    'function wrapped(raw){try{var v=typeof raw==="string"?JSON.parse(raw):raw;if(v&&v.nativeKitArtifact===true)return;}catch(e){}' +
+    'if(user)return user(raw);}' +
+    'try{Object.defineProperty(window,"__nativeKitFloatingApply",{configurable:true,get:function(){return user?wrapped:undefined;},' +
+    'set:function(f){user=typeof f==="function"?f:null;}});}catch(e){}' +
+    'if(init!==undefined){var fire=function(){var f=window.__nativeKitFloatingApply;if(typeof f==="function")f(init);};' +
+    'if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",fire);else setTimeout(fire,0);}' +
+    '})();</script>';
+  const head = /<head[^>]*>/i.exec(html);
+  if (head) return html.slice(0, head.index + head[0].length) + script + html.slice(head.index + head[0].length);
+  const root = /<html[^>]*>/i.exec(html);
+  if (root) return html.slice(0, root.index + root[0].length) + script + html.slice(root.index + root[0].length);
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(html);
+  if (doctype) return doctype[0] + script + html.slice(doctype[0].length);
+  return script + html;
+}
 const FLOAT_UPDATE_LIMIT = { max: 10, windowMs: 60_000 };
 const WIDGET_SET_LIMIT = { max: 4, windowMs: 60_000 };
 const SPEAK_LIMIT = { max: 6, windowMs: 60_000 };
@@ -912,7 +970,9 @@ const TOOL_SPECS: DeviceToolSpec[] = [
     name: 'schedule_alarm',
     description:
       'Schedule an exact alarm on the device (survives reboots; may ring full-screen). Use for commitments the user must not miss. ' +
-      'Give either atEpochMs (milliseconds since epoch) or inSeconds (from now), not both.',
+      'Give either atEpochMs (milliseconds since epoch) or inSeconds (from now), not both. For a clock time ("7 AM tomorrow"), ' +
+      "call app_info first: it returns the device's current local time, epoch ms and time zone, so atEpochMs is computed from the real device clock. " +
+      'The result says whether Android armed it as exact; if it did not, tell the user to allow "Alarms & reminders" for the app.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -954,18 +1014,36 @@ const TOOL_SPECS: DeviceToolSpec[] = [
       }
       const fullScreen = args.fullScreen === true;
       const body = optionalString(args, 'body', 400) ?? '';
-      await deps.alarms.scheduleAlarm({
+      const scheduled = (await deps.alarms.scheduleAlarm({
         id,
         title,
         body,
         at: Math.round(at),
         fullScreen,
         repeatIntervalMinutes: repeatIntervalMinutes ?? 0,
-      });
-      const when = new Date(at).toISOString();
+      })) as { exact?: unknown } | undefined;
+      // Android 13+ hides the alarm's notification (its Stop button and the
+      // full-screen screen) until notifications are allowed; ask once, never fatal.
+      await deps.notifications.requestPermissions().catch(() => undefined);
+      const when = describeDeviceTime(at);
+      const repeatText = repeatIntervalMinutes ? `, repeating every ${repeatIntervalMinutes} min` : '';
+      const structured = { id, atEpochMs: Math.round(at), atLocal: when, fullScreen, repeatIntervalMinutes: repeatIntervalMinutes ?? 0 };
+      // The native scheduler reports exact=false when Android 12+ has not
+      // granted "Alarms & reminders" (SCHEDULE_EXACT_ALARM; off by default on
+      // Android 14+). Then the alarm is only an inexact one that can ring many
+      // minutes late. Saying "scheduled" without that would be untrue.
+      if (scheduled?.exact === false) {
+        await deps.alarms.requestExactAlarmAccess?.().catch(() => undefined);
+        return textResult(
+          `Alarm '${id}' was saved for ${when}${repeatText}, but Android has NOT allowed exact alarms for this app, so it may ring late. ` +
+            'The "Alarms & reminders" settings screen for this app has been opened: tell the user to switch it on. ' +
+            'Once it is on, the app re-arms this alarm as exact by itself; no need to schedule it again.',
+          { ...structured, exact: false },
+        );
+      }
       return textResult(
-        `Alarm '${id}' scheduled for ${when}${repeatIntervalMinutes ? `, repeating every ${repeatIntervalMinutes} min` : ''}.`,
-        { id, atEpochMs: Math.round(at), fullScreen, repeatIntervalMinutes: repeatIntervalMinutes ?? 0 },
+        `Alarm '${id}' scheduled for ${when}${repeatText}.`,
+        { ...structured, ...(scheduled?.exact === true ? { exact: true } : {}) },
       );
     },
   },
@@ -1428,12 +1506,18 @@ const TOOL_SPECS: DeviceToolSpec[] = [
   },
   {
     name: 'app_info',
-    description: "Report this app's name, version, platform and language — useful for diagnostics and version-specific behaviour.",
+    description: "Report the device's current local date/time, epoch ms and time zone, plus this app's name, version and language. " +
+      'Call it before scheduling anything at a clock time. (No app can change the phone\'s system clock; this only reads it.)',
     inputSchema: { type: 'object', properties: {} },
     run: async (_args, deps) => {
       const info = await deps.appInfo.getInfo().catch(() => undefined);
       const language = typeof navigator !== 'undefined' ? navigator.language : '';
+      const nowMs = deps.now();
+      const timeZone = deviceTimeZone();
       const parts = [
+        `deviceTime=${describeDeviceTime(nowMs)}`,
+        `epochMs=${nowMs}`,
+        timeZone ? `timeZone=${timeZone}` : '',
         info?.name ? `app=${info.name}` : '',
         info?.version ? `version=${info.version}` : '',
         info?.build ? `build=${info.build}` : '',
@@ -1443,6 +1527,9 @@ const TOOL_SPECS: DeviceToolSpec[] = [
       return textResult(`Device app info: ${parts.join(', ')}.`, {
         ...(info ?? {}),
         ...(language ? { language } : {}),
+        deviceTime: describeDeviceTime(nowMs),
+        epochMs: nowMs,
+        ...(timeZone ? { timeZone } : {}),
       });
     },
   },
@@ -1465,18 +1552,21 @@ const TOOL_SPECS: DeviceToolSpec[] = [
     description:
       'Show a floating overlay window over other apps with HTML you author (a small dashboard, a card, a calculator...). ' +
       'The overlay is draggable, can be resized or fullscreen, and survives while the app runs. Requires the overlay ' +
-      'permission; the user approves this call and the system permission once. Keep the HTML small and self-contained.',
+      'permission; the user approves this call and the system permission once. Keep the HTML small and self-contained ' +
+      '(no network, no localStorage inside the overlay). To receive `data` (here and from update_floating_ui) the page must define ' +
+      'window.__nativeKitFloatingApply = function (text) { ... }: it gets the data as a string (JSON text for objects and numbers, ' +
+      'the raw text for a string), so JSON.parse it when you sent an object.',
     inputSchema: {
       type: 'object',
       properties: {
         html: { type: 'string', description: 'Self-contained HTML for the overlay (max 100 KB).' },
-        width: { type: 'number', description: 'Bubble width in dp (120–720).' },
-        height: { type: 'number', description: 'Bubble height in dp (120–1280).' },
+        width: { type: 'number', description: 'Bubble width in dp (120–600).' },
+        height: { type: 'number', description: 'Bubble height in dp (120–900).' },
         fullscreen: { type: 'boolean', description: 'Fill the whole screen instead of a bubble (default false).' },
         focusable: { type: 'boolean', description: 'Allow typing inside the overlay (default false).' },
         collapsed: { type: 'boolean', description: 'Start collapsed to a small bubble (default false).' },
         title: { type: 'string', description: 'Header title shown in the bubble bar.' },
-        data: { description: 'Initial data posted into the page.' },
+        data: { description: 'Initial data handed to window.__nativeKitFloatingApply once the page has loaded.' },
       },
       required: ['html'],
     },
@@ -1489,8 +1579,10 @@ const TOOL_SPECS: DeviceToolSpec[] = [
       if (html.length > 100_000) return errorResult("'html' exceeds the 100 KB limit; keep the overlay small.");
       const width = optionalNumber(args, 'width');
       const height = optionalNumber(args, 'height');
-      if (width !== undefined && (width < 120 || width > 720)) return errorResult("'width' must be between 120 and 720 dp.");
-      if (height !== undefined && (height < 120 || height > 1280)) return errorResult("'height' must be between 120 and 1280 dp.");
+      // The floating-ui artifact surface clamps to 80–600 x 80–900 dp; larger
+      // values used to be accepted here and then silently shrunk.
+      if (width !== undefined && (width < 120 || width > 600)) return errorResult("'width' must be between 120 and 600 dp.");
+      if (height !== undefined && (height < 120 || height > 900)) return errorResult("'height' must be between 120 and 900 dp.");
       try {
         const permission = await deps.widget.checkOverlayPermission();
         if (!permission?.granted) {
@@ -1512,7 +1604,7 @@ const TOOL_SPECS: DeviceToolSpec[] = [
             id: FLOATING_UI_ARTIFACT_ID,
             title: title ?? 'Floating UI',
             description: 'Floating overlay created by the agent. Re-show or hide it from More → Store → Floating UI.',
-            html,
+            html: floatingDataPrelude(html, args.data),
             config: {
               ...(width !== undefined ? { width } : {}),
               ...(height !== undefined ? { height } : {}),
@@ -1522,7 +1614,16 @@ const TOOL_SPECS: DeviceToolSpec[] = [
               ...(args.data !== undefined ? { initialData: args.data } : {}),
             },
           });
-          const shown = await deps.artifacts.showFloatingUI({ artifactId: record.id });
+          let shown: unknown;
+          try {
+            shown = await deps.artifacts.showFloatingUI({ artifactId: record.id });
+          } catch (error) {
+            // The app's own floating widget (More → Floating widget) holds the
+            // overlay: close it and show the agent's overlay in its place.
+            if (!/host currently owns/i.test(String((error as Error)?.message ?? error))) throw error;
+            await deps.widget.hideFloating();
+            shown = await deps.artifacts.showFloatingUI({ artifactId: record.id });
+          }
           if ((shown as any)?.shown === false) {
             return errorResult(`Floating UI could not be shown: ${String((shown as any)?.error ?? 'the device refused')}`);
           }
@@ -1550,7 +1651,7 @@ const TOOL_SPECS: DeviceToolSpec[] = [
   {
     name: 'update_floating_ui',
     description:
-      'Update the floating overlay: push fresh data into the page (your HTML listens for it) and/or move/resize the bubble. ' +
+      'Update the floating overlay: push fresh data into the page (it arrives in window.__nativeKitFloatingApply(text), see show_floating_ui) and/or resize the bubble. ' +
       'Cheaper than re-showing the whole HTML.',
     inputSchema: {
       type: 'object',
@@ -1578,7 +1679,10 @@ const TOOL_SPECS: DeviceToolSpec[] = [
           });
         }
         if (args.data !== undefined) {
-          await deps.widget.sendToFloating({ data: args.data });
+          const sent = (await deps.widget.sendToFloating({ data: args.data })) as { delivered?: unknown } | undefined;
+          if (sent?.delivered === false) {
+            return errorResult('No floating UI is showing, so the data went nowhere. Call show_floating_ui first (it accepts initial data too).');
+          }
         }
         return textResult('Floating UI updated.');
       } catch (error) {

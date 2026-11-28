@@ -79,14 +79,19 @@ public class AlarmService extends Service {
     }
 
     private void createChannel() {
+        ensureChannel(this);
+    }
+
+    /** Creates the alarm channel; also used by AlarmReceiver's fallback notification. */
+    static void ensureChannel(Context context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-        NotificationChannel channel = new NotificationChannel(NativeConfig.alarmChannel(this), getString(R.string.nativekit_alarm_channel_name), NotificationManager.IMPORTANCE_HIGH);
+        NotificationChannel channel = new NotificationChannel(NativeConfig.alarmChannel(context), context.getString(R.string.nativekit_alarm_channel_name), NotificationManager.IMPORTANCE_HIGH);
         channel.setDescription("User scheduled alarms");
         channel.enableVibration(true);
         channel.setVibrationPattern(new long[]{0, 700, 350, 700});
         channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
         channel.setSound(null, null); // MediaPlayer owns looping alarm audio.
-        getSystemService(NotificationManager.class).createNotificationChannel(channel);
+        context.getSystemService(NotificationManager.class).createNotificationChannel(channel);
     }
 
     private void beginRinging() {

@@ -630,6 +630,26 @@ describe('alarms', () => {
     expect((await callTool(deps, 'schedule_alarm', { id: 'bad id!', title: 't', inSeconds: 60 })).isError).toBe(true);
   });
 
+  it('tells the truth when Android armed the alarm as inexact and reports device-local time', async () => {
+    const { deps, calls } = fakeDeps();
+    (deps as any).alarms.scheduleAlarm = async (options: any) => { calls.push({ method: 'scheduleAlarm', args: options }); return { exact: false }; };
+    (deps as any).alarms.requestExactAlarmAccess = async () => { calls.push({ method: 'requestExactAlarmAccess', args: {} }); };
+    const result = await callTool(deps, 'schedule_alarm', { id: 'late', title: 'T', inSeconds: 60 });
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toMatch(/NOT allowed exact alarms/);
+    expect(calls.find((entry) => entry.method === 'requestExactAlarmAccess')).toBeTruthy();
+    expect(calls.find((entry) => entry.method === 'notifications.requestPermissions')).toBeTruthy();
+    expect((result.structuredContent as any).exact).toBe(false);
+    expect(String((result.structuredContent as any).atLocal)).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \(UTC[+-]\d{2}:\d{2}/);
+  });
+
+  it('app_info reports the device clock and time zone', async () => {
+    const { deps } = fakeDeps();
+    const result = await callTool(deps, 'app_info', {});
+    expect(textOf(result)).toMatch(/deviceTime=/);
+    expect((result.structuredContent as any).epochMs).toBe(deps.now());
+  });
+
   it('lists and cancels alarms', async () => {
     const { deps, calls } = fakeDeps();
     const list = await callTool(deps, 'list_alarms', {});
@@ -928,11 +948,57 @@ describe('floating ui', () => {
     const result = await callTool(deps, 'show_floating_ui', { html: '<b>hi</b>', width: 300, height: 200, title: 'Live' });
     expect(result.isError).toBeFalsy();
     expect(published[0].kind).toBe('floating-ui');
-    expect(published[0].input).toMatchObject({ html: '<b>hi</b>', title: 'Live', config: { width: 300, height: 200 } });
+    expect(published[0].input).toMatchObject({ title: 'Live', config: { width: 300, height: 200 } });
+    expect(published[0].input.html).toContain('<b>hi</b>');
+    expect(published[0].input.html).toContain('data-nativekit-floating-prelude');
     expect(activated[0]).toEqual({ artifactId: expect.any(String) });
     // The raw plugin call must NOT be the path taken any more.
     expect(calls.find((entry) => entry.method === 'showFloating')).toBeFalsy();
     expect(textOf(result)).toContain('Store');
+  });
+
+  it('delivers initial data through the prelude, drops the artifact marker, and takes over a host-owned overlay', async () => {
+    const { deps, calls } = fakeDeps();
+    const published: any[] = [];
+    let attempts = 0;
+    (deps as any).artifacts = {
+      publish: async (_kind: string, input: any) => { published.push(input); return { id: 'agent-overlay' }; },
+      showFloatingUI: async () => { attempts += 1; if (attempts === 1) throw new Error('The host currently owns the floating UI.'); return { shown: true }; },
+      hideFloatingUI: async () => ({ hidden: true }),
+    };
+    const result = await callTool(deps, 'show_floating_ui', { html: '<html><head><title>x</title></head><body>hi</body></html>', data: { n: 7 } });
+    expect(result.isError).toBeFalsy();
+    expect(attempts).toBe(2);
+    expect(calls.find((entry) => entry.method === 'hideFloating')).toBeTruthy();
+    const html: string = published[0].html;
+    expect(html.indexOf('data-nativekit-floating-prelude')).toBeGreaterThan(html.indexOf('<head>'));
+
+    // Run the prelude in a tiny fake window and check what the page handler sees.
+    const seen: string[] = [];
+    const listeners: Array<() => void> = [];
+    const win: any = {};
+    const doc: any = { readyState: 'loading', addEventListener: (_: string, fn: () => void) => listeners.push(fn) };
+    const body = /<script data-nativekit-floating-prelude>([\s\S]*?)<\/script>/.exec(html)![1];
+    new Function('window', 'document', body)(win, doc);
+    win.__nativeKitFloatingApply = (text: string) => { seen.push(text); };
+    win.__nativeKitFloatingApply && win.__nativeKitFloatingApply(JSON.stringify({ nativeKitArtifact: true, id: 'agent-overlay' }));
+    listeners.forEach((fn) => fn());
+    win.__nativeKitFloatingApply('{"n":8}');
+    expect(seen).toEqual(['{"n":7}', '{"n":8}']);
+  });
+
+  it('rejects sizes the overlay would silently shrink', async () => {
+    const { deps } = fakeDeps();
+    expect((await callTool(deps, 'show_floating_ui', { html: '<b>x</b>', width: 700 })).isError).toBe(true);
+    expect((await callTool(deps, 'show_floating_ui', { html: '<b>x</b>', height: 1000 })).isError).toBe(true);
+  });
+
+  it('says so when update_floating_ui has no overlay to reach', async () => {
+    const { deps } = fakeDeps();
+    (deps as any).widget.sendToFloating = async () => ({ delivered: false });
+    const result = await callTool(deps, 'update_floating_ui', { data: { v: 1 } });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/show_floating_ui/);
   });
 
   it('fails closed when the overlay permission is not granted', async () => {
