@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Default card for the native home-screen widget: rounded like Android 12+ launcher widgets
+     (system radius ~ 24dp) with a soft top-to-bottom tone. A runtime backgroundColor replaces it. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <corners android:radius="24dp" />
+    <gradient
+        android:angle="270"
+        android:startColor="#1A2233"
+        android:endColor="#0F172A"
+        android:type="linear" />
+</shape>

@@ -37,6 +37,21 @@
  */
 
 import {
+  addWidget as addHomeWidget,
+  describeCatalog as describeHomeCatalog,
+  describeLayout as describeHomeLayout,
+  defaultHomeLayout,
+  HOME_WIDGET_TYPE_IDS,
+  localHomeStore,
+  moveWidget as moveHomeWidget,
+  parseHomeLayout,
+  removeWidget as removeHomeWidget,
+  replaceWidgets as replaceHomeWidgets,
+  updateWidget as updateHomeWidget,
+  type HomeLayout,
+  type HomeStore,
+} from './home-layout';
+import {
   Camera,
   CameraResultType,
   CameraSource,
@@ -96,6 +111,8 @@ export type DeviceToolFeature =
  * assignment never fights optional vendor overloads.
  */
 export interface DeviceToolDeps {
+  /** In-app Home layout store (www/home.html). Defaults to the shared localStorage key. */
+  home?: HomeStore;
   camera: { getPhoto(options: any): Promise<{ base64String?: string; format?: string }> };
   geolocation: {
     requestPermissions(): Promise<Record<string, string>>;
@@ -280,6 +297,29 @@ interface DeviceToolSpec {
 }
 
 // ── Small helpers ────────────────────────────────────────────────────────────
+
+// ── Home layout helpers ──────────────────────────────────────────────────────
+
+function homeStoreOf(deps: DeviceToolDeps): HomeStore {
+  return deps.home ?? localHomeStore();
+}
+
+function readHome(deps: DeviceToolDeps): HomeLayout {
+  return parseHomeLayout(homeStoreOf(deps).read());
+}
+
+function editHome(
+  deps: DeviceToolDeps,
+  change: (layout: HomeLayout) => { layout: HomeLayout; message: string; data?: Record<string, unknown> },
+): Promise<DeviceOutcome> {
+  try {
+    const { layout, message, data } = change(readHome(deps));
+    homeStoreOf(deps).write(JSON.stringify(layout));
+    return Promise.resolve(textResult(`${message} The user sees it the next time they open Home.`, data));
+  } catch (error) {
+    return Promise.resolve(errorResult(String((error as Error)?.message ?? error)));
+  }
+}
 
 function textResult(text: string, structured?: Record<string, unknown>): DeviceOutcome {
   const safeText = text.length > 1000 ? wrapUntrusted('tool_output', text) : text;
@@ -1710,8 +1750,10 @@ const TOOL_SPECS: DeviceToolSpec[] = [
   {
     name: 'set_widget',
     description:
-      'Create or update a home-screen widget. Two styles: a native card (value/title/subtitle/progress/colors/icon) or an ' +
-      "HTML snapshot (render:'html' with your own HTML). Re-updating refreshes the widget; the user pins it from the " +
+      "Create or update the phone launcher's home-screen widget (outside the app; for the app's own Home use home_* tools). " +
+      'Two styles: a native card (value/title/subtitle/progress/colors/icon) or an ' +
+      "HTML snapshot (render:'html' with your own HTML, drawn at the widget's real size). By default the native card picks its " +
+      "layout from the size the user gives the widget (layout 'auto'); force one with layout small|medium|large. Re-updating refreshes the widget; the user pins it from the " +
       'launcher or with the pin_widget tool.',
     inputSchema: {
       type: 'object',
@@ -1724,6 +1766,11 @@ const TOOL_SPECS: DeviceToolSpec[] = [
         html: { type: 'string', description: 'HTML snapshot style: self-contained HTML (max 100 KB).' },
         backgroundColor: { type: 'string', description: 'Hex background color, e.g. #0F172A.' },
         accentColor: { type: 'string', description: 'Hex accent (value) color.' },
+        titleColor: { type: 'string', description: 'Native style: hex title color (default white).' },
+        subtitleColor: { type: 'string', description: 'Native style: hex subtitle color.' },
+        icon: { type: 'string', description: 'Native style: one emoji or short symbol shown above the value.' },
+        layout: { type: 'string', enum: ['auto', 'small', 'medium', 'large'], description: "Native style: card layout; 'auto' (default) follows the widget's size on the launcher." },
+        align: { type: 'string', enum: ['start', 'center', 'end'], description: 'Native style: content alignment (default center).' },
       },
       required: ['kind'],
     },
@@ -1746,7 +1793,7 @@ const TOOL_SPECS: DeviceToolSpec[] = [
       if (progress !== undefined && (progress < 0 || progress > 1_000_000)) {
         return errorResult("'progress' must be between 0 and 1000000.");
       }
-      for (const colorKey of ['backgroundColor', 'accentColor'] as const) {
+      for (const colorKey of ['backgroundColor', 'accentColor', 'titleColor', 'subtitleColor'] as const) {
         const color = optionalString(args, colorKey, 9);
         if (color && !/^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/.test(color)) {
           return errorResult(`'${colorKey}' must be a hex color like #0F172A.`);
@@ -1763,6 +1810,20 @@ const TOOL_SPECS: DeviceToolSpec[] = [
         if (progress !== undefined) { config.progress = progress; config.progressMax = 100; }
         if (optionalString(args, 'backgroundColor', 9)) config.backgroundColor = optionalString(args, 'backgroundColor', 9);
         if (optionalString(args, 'accentColor', 9)) config.accentColor = optionalString(args, 'accentColor', 9);
+        if (optionalString(args, 'titleColor', 9)) config.titleColor = optionalString(args, 'titleColor', 9);
+        if (optionalString(args, 'subtitleColor', 9)) config.subtitleColor = optionalString(args, 'subtitleColor', 9);
+        const icon = optionalString(args, 'icon', 8);
+        if (icon) config.icon = icon;
+        const layout = optionalString(args, 'layout', 10);
+        if (layout) {
+          if (!['auto', 'small', 'medium', 'large'].includes(layout)) return errorResult("'layout' must be auto, small, medium or large.");
+          config.layout = layout;
+        }
+        const align = optionalString(args, 'align', 10);
+        if (align) {
+          if (!['start', 'center', 'end'].includes(align)) return errorResult("'align' must be start, center or end.");
+          config.align = align;
+        }
       }
       try {
         // Bounded so a stuck native call returns a clear error to the model
@@ -1809,6 +1870,115 @@ const TOOL_SPECS: DeviceToolSpec[] = [
         return errorResult(`Pin request failed: ${String((error as Error)?.message ?? error)}`);
       }
     },
+  },
+
+  // ── In-app Home screen (www/home.html) ───────────────────────────────────
+  // The agent arranges the app's own Home screen. The layout is saved in the
+  // shared Home store; Home re-renders it as soon as the user opens it.
+
+  {
+    name: 'home_get_layout',
+    description:
+      "Read the app's in-app Home screen: every widget in order with its id, type, size (s/m/l), title and config, plus the " +
+      'catalogue of widget types with the config keys each one reads. Call this before changing Home so you use real ids. ' +
+      '(This is the Home screen inside the app; the phone launcher widget is set_widget.)',
+    inputSchema: { type: 'object', properties: {} },
+    run: async (_args, deps) => {
+      const layout = readHome(deps);
+      return textResult(JSON.stringify({ ...describeHomeLayout(layout), catalog: describeHomeCatalog() }), { layout: describeHomeLayout(layout) });
+    },
+  },
+  {
+    name: 'home_add_widget',
+    description:
+      "Add a widget to the app's Home screen. Types: " + HOME_WIDGET_TYPE_IDS.join(', ') + '. ' +
+      'Sizes: s = half-width square, m = full width, l = full width and double height (not every type has every size; ' +
+      'home_get_layout lists them). Examples: {type:"weather", config:{place:"Chittagong", lat:22.35, lon:91.78}}; ' +
+      '{type:"stat", size:"s", title:"Steps", config:{value:"8,420", caption:"Goal 10,000", progress:0.84, icon:"👟"}}; ' +
+      '{type:"notes", config:{items:["Buy milk",{text:"Call Rafi",done:true}]}}; {type:"clock", size:"s", config:{timezone:"Europe/London", label:"London"}}; ' +
+      '{type:"html", config:{html:"<div style=\'font:600 28px system-ui\'>Hi</div>"}} (sandboxed, no app access). Returns the new widget id.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: [...HOME_WIDGET_TYPE_IDS], description: 'Widget type.' },
+        size: { type: 'string', enum: ['s', 'm', 'l'], description: 'Optional size; defaults to the type\'s usual size.' },
+        title: { type: 'string', description: 'Optional card title (max 60 chars).' },
+        accent: { type: 'string', description: 'Optional accent colour, hex like "#6366f1" or a CSS colour name.' },
+        config: { type: 'object', description: 'Type-specific settings; see home_get_layout catalog.' },
+        position: { type: 'number', description: '0-based place in the order; omit to add at the end.' },
+      },
+      required: ['type'],
+    },
+    run: async (args, deps) => editHome(deps, (layout) => {
+      const { layout: next, widget } = addHomeWidget(layout, args);
+      const position = next.widgets.indexOf(widget);
+      return { layout: next, message: `Added ${widget.type} widget '${widget.id}' (size ${widget.size}) at position ${position} on Home.`, data: { widget, position } };
+    }),
+  },
+  {
+    name: 'home_update_widget',
+    description:
+      'Change a Home widget by id: new size, title, accent, or config. config is merged into the existing config ' +
+      '(set replaceConfig true to replace it). Use it to keep a stat, list or note widget current. Pass title:"" to clear the title.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Widget id from home_get_layout.' },
+        size: { type: 'string', enum: ['s', 'm', 'l'] },
+        title: { type: 'string' },
+        accent: { type: 'string' },
+        config: { type: 'object' },
+        replaceConfig: { type: 'boolean', description: 'Replace instead of merge.' },
+      },
+      required: ['id'],
+    },
+    run: async (args, deps) => editHome(deps, (layout) => {
+      const { layout: next, widget } = updateHomeWidget(layout, args);
+      return { layout: next, message: `Updated Home widget '${widget.id}' (${widget.type}, size ${widget.size}).`, data: { widget } };
+    }),
+  },
+  {
+    name: 'home_remove_widget',
+    description: 'Remove a widget from the app\'s Home screen by id.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    run: async (args, deps) => editHome(deps, (layout) => {
+      const { layout: next, widget } = removeHomeWidget(layout, args.id);
+      return { layout: next, message: `Removed ${widget.type} widget '${widget.id}' from Home. ${next.widgets.length} widgets left.`, data: { removed: widget.id } };
+    }),
+  },
+  {
+    name: 'home_move_widget',
+    description: 'Reorder Home: move the widget with this id to a 0-based position (0 = top). Small widgets pair up side by side in order.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' }, position: { type: 'number', description: '0-based target position.' } },
+      required: ['id', 'position'],
+    },
+    run: async (args, deps) => editHome(deps, (layout) => {
+      const { layout: next, widget, position } = moveHomeWidget(layout, args.id, args.position);
+      return { layout: next, message: `Moved '${widget.id}' to position ${position}. Order: ${next.widgets.map((w) => w.id).join(', ')}.`, data: { order: next.widgets.map((w) => w.id) } };
+    }),
+  },
+  {
+    name: 'home_set_layout',
+    description:
+      'Replace the whole Home screen in one call: widgets is the full ordered list of {type, size?, title?, accent?, config?, id?} ' +
+      '(keep an existing id to keep that widget). Or pass reset:true to restore the default Home. Use it for a complete redesign.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        widgets: { type: 'array', items: { type: 'object' }, description: 'Full ordered widget list (max 24).' },
+        reset: { type: 'boolean', description: 'Restore the default Home instead.' },
+      },
+    },
+    run: async (args, deps) => editHome(deps, (layout) => {
+      if (args.reset === true) {
+        const next = { ...defaultHomeLayout(), updatedBy: 'agent' as const };
+        return { layout: next, message: `Home reset to the default ${next.widgets.length} widgets.`, data: { order: next.widgets.map((w) => w.id) } };
+      }
+      const next = replaceHomeWidgets(layout, args.widgets);
+      return { layout: next, message: `Home now has ${next.widgets.length} widgets: ${next.widgets.map((w) => `${w.id} (${w.size})`).join(', ')}.`, data: { order: next.widgets.map((w) => w.id) } };
+    }),
   },
 
   // ── Phase 2: speech, scanning and device hardware ─────────────────────────
@@ -3366,6 +3536,8 @@ async function cancellableCopy<T>(api: FolderApi, run: RunContext, start: (copyI
 }
 
 /** Folder tools that only read: offered without asking once the user shares a folder. */
+/** Home screen tools only rearrange the app's own Home page; they run without an approval prompt. */
+export const HOME_TOOLS = ['home_get_layout', 'home_add_widget', 'home_update_widget', 'home_remove_widget', 'home_move_widget', 'home_set_layout'] as const;
 export const FOLDER_READ_TOOLS = ['list_folders', 'folder_list', 'folder_read', 'folder_search'] as const;
 /** Folder tools that change files: always ask by default. */
 export const FOLDER_CHANGE_TOOLS = ['folder_write', 'folder_mkdir', 'folder_move', 'folder_delete', 'folder_copy'] as const;
@@ -3491,7 +3663,7 @@ export function createDeviceToolsTransport(
 /** The server config remote callers pass alongside their own servers. */
 export function deviceServerConfig(): { name: string; url: string; protocolVersion: 'auto'; toolApprovalPolicies: Record<string, 'always_allow'> } {
   // Reading a folder the user picked needs no extra ask; changes stay always_ask.
-  const toolApprovalPolicies = Object.fromEntries(FOLDER_READ_TOOLS.map((name) => [name, 'always_allow' as const]));
+  const toolApprovalPolicies = Object.fromEntries([...FOLDER_READ_TOOLS, ...HOME_TOOLS].map((name) => [name, 'always_allow' as const]));
   return { name: DEVICE_SERVER_NAME, url: 'device://local', protocolVersion: 'auto', toolApprovalPolicies };
 }
 

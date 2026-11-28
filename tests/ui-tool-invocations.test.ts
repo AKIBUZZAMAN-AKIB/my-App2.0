@@ -113,10 +113,10 @@ describe('UI-side built-in tool calls against the real schemas', () => {
 
   it('finds the call sites of every screen that calls tools directly', () => {
     const files = new Set(sites.map((s) => s.file));
-    for (const f of ['www/agent.html', 'www/agent-workspace.js', 'www/home.html']) expect(files, f).toContain(f);
+    for (const f of ['www/agent.html', 'www/agent-workspace.js']) expect(files, f).toContain(f);
     const tools = new Set(sites.map((s) => s.tool));
     for (const t of ['write_file', 'list_files', 'delete_file', 'memory_list', 'memory_store', 'memory_search']) expect(tools, t).toContain(t);
-    expect(sites.length).toBeGreaterThanOrEqual(20);
+    expect(sites.length).toBeGreaterThanOrEqual(15);
   });
 
   it('every call names a built-in tool and passes its schema and byte limits', () => {

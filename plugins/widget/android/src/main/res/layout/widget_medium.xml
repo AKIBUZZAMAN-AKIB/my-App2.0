@@ -5,8 +5,8 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:gravity="center"
-    android:background="#0F172A"
-    android:padding="12dp">
+    android:background="@drawable/widget_bg_card"
+    android:padding="16dp">
 
     <TextView
         android:id="@+id/widget_icon"
@@ -70,7 +70,7 @@
         android:layout_height="32dp"
         android:layout_marginTop="6dp"
         android:gravity="center"
-        android:background="#1E293B"
+        android:background="@drawable/widget_btn_card"
         android:textColor="#FFFFFF"
         android:textSize="11sp"
         android:visibility="gone"

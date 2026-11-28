@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
 
-import { createDeviceToolsTransport, deviceServerConfig, DEVICE_SERVER_NAME, FOLDER_CHANGE_TOOLS, FOLDER_READ_TOOLS, type DeviceToolDeps } from '../bridge/device-tools';
+import { createDeviceToolsTransport, deviceServerConfig, DEVICE_SERVER_NAME, FOLDER_CHANGE_TOOLS, FOLDER_READ_TOOLS, HOME_TOOLS, type DeviceToolDeps } from '../bridge/device-tools';
 import {
   extractDocumentText, folderApiFromPlugin, folderErrorText, formatBytes, looksBinary, normalizeFolderPath, resolveFolder, wholeUtf8Length,
   FOLDER_PLUGIN_METHODS, type FolderApi, type FolderEntry, type FolderGrant,
@@ -237,7 +237,7 @@ describe('folder tools', () => {
     const policy = (n: string) => catalogue.find((e) => e.name === namespacedToolName(DEVICE_SERVER_NAME, n))?.approvalPolicy;
     for (const n of FOLDER_READ_TOOLS) expect(policy(n)).toBe('always_allow');
     for (const n of FOLDER_CHANGE_TOOLS) expect(policy(n)).toBe('always_ask');
-    const others = catalogue.filter((e) => ![...FOLDER_READ_TOOLS, ...FOLDER_CHANGE_TOOLS].some((n) => e.name === namespacedToolName(DEVICE_SERVER_NAME, n)));
+    const others = catalogue.filter((e) => ![...FOLDER_READ_TOOLS, ...FOLDER_CHANGE_TOOLS, ...HOME_TOOLS].some((n) => e.name === namespacedToolName(DEVICE_SERVER_NAME, n)));
     expect(others.length).toBeGreaterThan(5);
     for (const e of others) expect(e.approvalPolicy, e.name).toBe('always_ask');
   });

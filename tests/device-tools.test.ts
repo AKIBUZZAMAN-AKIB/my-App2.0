@@ -8,6 +8,7 @@ import {
   deviceToolNames,
   parseBingResults,
   FOLDER_READ_TOOLS,
+  HOME_TOOLS,
   DEVICE_SERVER_NAME,
   type DeviceToolDeps,
 } from '../bridge/device-tools';
@@ -298,6 +299,7 @@ describe('device tools catalogue', () => {
       'network_status', 'schedule_alarm', 'list_alarms', 'cancel_alarm', 'open_url',
       'web_search', 'search_images', 'geocode_location', 'get_weather', 'get_route', 'download_file', 'upload_file', 'toast', 'app_info', 'stop_ringing',
       'show_floating_ui', 'update_floating_ui', 'hide_floating_ui', 'set_widget', 'pin_widget',
+      'home_get_layout', 'home_add_widget', 'home_update_widget', 'home_remove_widget', 'home_move_widget', 'home_set_layout',
       'speak', 'stop_speaking', 'listen', 'scan_qr', 'dial_phone', 'compose_sms', 'torch',
       'battery_status', 'pick_file',
       'ask_user', 'zip_files', 'unzip_file', 'sql_query',
@@ -420,8 +422,8 @@ describe('connectMcpServers wiring', () => {
     for (const entry of catalogue) {
       expect(entry.name.startsWith(`${DEVICE_SERVER_NAME}__`)).toBe(true);
       expect(entry.webviewOnly).toBe(true);
-      // Only reads of a folder the user shared skip the ask; everything else asks.
-      const readsSharedFolder = FOLDER_READ_TOOLS.some((n) => entry.name === namespacedToolName(DEVICE_SERVER_NAME, n));
+      // Only reads of a folder the user shared and the in-app Home layout tools skip the ask; everything else asks.
+      const readsSharedFolder = [...FOLDER_READ_TOOLS, ...HOME_TOOLS].some((n) => entry.name === namespacedToolName(DEVICE_SERVER_NAME, n));
       expect(entry.approvalPolicy).toBe(readsSharedFolder ? 'always_allow' : 'always_ask');
     }
     const names = catalogue.map((entry: any) => entry.name);
@@ -1483,5 +1485,67 @@ describe('home widget kind resolution', () => {
     expect(resolveHomeWidgetKind('nativekit-widget', { homeWidgetKinds: ['nativekit-widget'] })).toEqual({ kind: 'nativekit-widget', note: '' });
     expect(resolveHomeWidgetKind('anything', {}).kind).toBe('anything');
     expect(resolveHomeWidgetKind('x', { homeWidgetKinds: ['nativekit-miniapp-slot-01'] }).kind).toBe('x');
+  });
+});
+
+// ── in-app Home screen tools ────────────────────────────────────────────────
+
+describe('home_* tools', () => {
+  function homeDeps() {
+    let stored: string | null = null;
+    const { deps } = fakeDeps({ home: { read: () => stored, write: (json) => { stored = json; } } });
+    return { deps, layout: () => JSON.parse(stored ?? 'null') };
+  }
+
+  it('are listed and run without an approval prompt', () => {
+    const names = deviceToolNames();
+    for (const name of ['home_get_layout', 'home_add_widget', 'home_update_widget', 'home_remove_widget', 'home_move_widget', 'home_set_layout']) {
+      expect(names).toContain(name);
+      expect(deviceServerConfig().toolApprovalPolicies[name]).toBe('always_allow');
+    }
+  });
+
+  it('reads the default layout with the widget catalogue', async () => {
+    const { deps } = homeDeps();
+    const result = await callTool(deps, 'home_get_layout');
+    const text = textOf(result);
+    const body = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+    expect(body.widgets[0]).toMatchObject({ position: 0, id: 'clock-main', type: 'clock' });
+    expect(Object.keys(body.catalog)).toContain('stat');
+  });
+
+  it('adds, updates, moves and removes widgets and persists the layout', async () => {
+    const { deps, layout } = homeDeps();
+    const added = await callTool(deps, 'home_add_widget', { type: 'stat', size: 's', title: 'Steps', config: { value: '8,420', progress: 0.84 }, position: 0 });
+    expect(added.isError).toBeFalsy();
+    const id = layout().widgets[0].id;
+    expect(layout().widgets[0]).toMatchObject({ type: 'stat', size: 's', title: 'Steps' });
+    expect(layout().updatedBy).toBe('agent');
+
+    await callTool(deps, 'home_update_widget', { id, config: { value: '9,001' } });
+    expect(layout().widgets[0].config).toEqual({ value: '9,001', progress: 0.84 });
+
+    await callTool(deps, 'home_move_widget', { id, position: 3 });
+    expect(layout().widgets[3].id).toBe(id);
+
+    await callTool(deps, 'home_remove_widget', { id });
+    expect(layout().widgets.some((w: any) => w.id === id)).toBe(false);
+  });
+
+  it('rejects unknown types, unknown ids and sizes the type does not have', async () => {
+    const { deps } = homeDeps();
+    const rocket = await callTool(deps, 'home_add_widget', { type: 'rocket' });
+    expect(JSON.stringify(rocket)).toMatch(/rocket|type/);
+    expect(textOf(rocket)).not.toContain('Added');
+    expect(textOf(await callTool(deps, 'home_remove_widget', { id: 'nope' }))).toContain('home_get_layout');
+    expect((await callTool(deps, 'home_update_widget', { id: 'battery-main', size: 'l' })).isError).toBe(true);
+  });
+
+  it('replaces the whole layout and resets to the default', async () => {
+    const { deps, layout } = homeDeps();
+    await callTool(deps, 'home_set_layout', { widgets: [{ type: 'clock', size: 'l' }, { type: 'list', config: { items: ['a', 'b'] } }] });
+    expect(layout().widgets.map((w: any) => w.type)).toEqual(['clock', 'list']);
+    await callTool(deps, 'home_set_layout', { reset: true });
+    expect(layout().widgets[0].id).toBe('clock-main');
   });
 });

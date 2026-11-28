@@ -108,7 +108,11 @@ public abstract class NativeKitWidgetProvider extends AppWidgetProvider {
         // gradients, ImageView, Button...) and references it by name. We still fill the SAME id
         // contract below (widget_value/title/subtitle/icon/image/progress/button/root), so a fully
         // custom look works with zero layout code in this plugin.
-        String layoutName = cfg.optString("layout", "medium");
+        // 'auto' (the default when no layout is given) follows the size the user gave the widget
+        // on the launcher: small for a 1-2 cell tile, large for a tall one, medium otherwise.
+        // onAppWidgetOptionsChanged re-renders on every resize, so it adapts live.
+        String layoutName = cfg.optString("layout", "auto");
+        if (layoutName.isEmpty() || "auto".equals(layoutName)) layoutName = autoLayout(manager, appWidgetId);
         int layoutRes = resolveLayout(context, layoutName);
         RemoteViews views = new RemoteViews(context.getPackageName(), layoutRes);
 
@@ -240,8 +244,11 @@ public abstract class NativeKitWidgetProvider extends AppWidgetProvider {
      */
     private void renderHtmlWidget(Context context, AppWidgetManager manager, int appWidgetId, JSONObject cfg) {
         try {
-            int widthPx = cfg.optInt("widthPx", 320);
-            int heightPx = cfg.optInt("heightPx", 320);
+            // Snapshot at the widget's real size (launcher options, dp -> px) so the HTML is not
+            // stretched or blurred; explicit widthPx/heightPx still win.
+            int[] size = widgetSizePx(context, manager, appWidgetId);
+            int widthPx = cfg.optInt("widthPx", size[0]);
+            int heightPx = cfg.optInt("heightPx", size[1]);
             int layoutRes = resolveHtmlLayout(context, cfg.optString("layout", ""));
             HtmlWidgetRenderer.render(context, cfg, widthPx, heightPx, (bitmap) -> {
                 android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -291,6 +298,44 @@ public abstract class NativeKitWidgetProvider extends AppWidgetProvider {
         } catch (Throwable error) {
             Log.e(TAG, "renderHtmlWidget failed for widget " + appWidgetId, error);
         }
+    }
+
+    /** Bundled preset that fits the widget's current launcher size. */
+    static String autoLayout(AppWidgetManager manager, int appWidgetId) {
+        try {
+            android.os.Bundle options = manager.getAppWidgetOptions(appWidgetId);
+            int w = options != null ? options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0) : 0;
+            int h = options != null ? options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0) : 0;
+            return pickLayout(w, h);
+        } catch (Throwable error) {
+            Log.e(TAG, "autoLayout failed for widget " + appWidgetId, error);
+            return "medium";
+        }
+    }
+
+    /** Size rule (dp): under ~2 cells wide is small, 3+ rows tall is large, else medium. */
+    static String pickLayout(int widthDp, int heightDp) {
+        if (widthDp <= 0 && heightDp <= 0) return "medium";
+        if (widthDp > 0 && widthDp < 150) return "small";
+        if (heightDp >= 220) return "large";
+        return "medium";
+    }
+
+    /** The widget's size in pixels from its launcher options; 320x320 when unknown. */
+    static int[] widgetSizePx(Context context, AppWidgetManager manager, int appWidgetId) {
+        int widthPx = 320;
+        int heightPx = 320;
+        try {
+            android.os.Bundle options = manager.getAppWidgetOptions(appWidgetId);
+            float density = context.getResources().getDisplayMetrics().density;
+            int wDp = options != null ? options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0) : 0;
+            int hDp = options != null ? options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0) : 0;
+            if (wDp > 0) widthPx = Math.min(1200, Math.round(wDp * density));
+            if (hDp > 0) heightPx = Math.min(1200, Math.round(hDp * density));
+        } catch (Throwable error) {
+            Log.e(TAG, "widgetSizePx failed for widget " + appWidgetId, error);
+        }
+        return new int[] { widthPx, heightPx };
     }
 
     /** Pick the container layout for an HTML widget; defaults to the bundled {@code widget_html}. */
