@@ -536,6 +536,9 @@ pub fn forget_after(conn: &Connection, session_key: &str, keep_turns: u32, now_m
         super::jobs::cancel_active(tx, session_key, "the chat was rewound", now_ms)?;
         // Goal changes made in removed turns are voided (kept, marked).
         super::goals::void_after(tx, session_key, keep_turns, "the chat was rewound", now_ms)?;
+        // Plan §1.4: the context tree forgets the removed turns in the same
+        // transaction (their nodes, temp summaries made of them, their log).
+        crate::context_tree::gc::forget_after(tx, session_key, keep_turns, now_ms)?;
         let cur = load_memory(tx, session_key);
         if cur.through_turn <= keep_turns {
             return Ok(false);
@@ -563,6 +566,8 @@ pub fn reset_memory(conn: &Connection, session_key: &str, reason: &str, now_ms: 
         // Turn numbers no longer match: every goal event is voided (kept,
         // marked, visible in the goal history) and the goals replayed empty.
         super::goals::void_all(tx, session_key, reason, now_ms)?;
+        // Turn numbers no longer match for the context tree either.
+        crate::context_tree::gc::reset(tx, session_key, now_ms)?;
         let empty = TurnMemory { updated_at: now_ms, ..Default::default() };
         save_version_in(tx, session_key, cur.version, &empty, "reset", &json!({"reason": reason, "previousThroughTurn": cur.through_turn}), None, now_ms)
     })

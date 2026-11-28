@@ -27,6 +27,7 @@ pub mod assemble;
 pub mod budget;
 pub mod catalog;
 pub mod dispatch;
+pub mod gc;
 pub mod model;
 pub mod ops;
 pub mod reading;
