@@ -1534,6 +1534,11 @@ const NativeKit: any = {
                 // Web search and file transfers must leave the WebView: swap
                 // the plain fetch default for the CapacitorHttp adapter.
                 ...defaultDeviceToolDeps(),
+                // Only declared kinds have an Android widget provider.
+                homeWidgetKinds:
+                  config.widget?.enabled !== false && config.widget?.homeScreen?.enabled !== false
+                    ? (config.widget?.homeScreen?.kinds ?? []).map((kind) => kind.id)
+                    : [],
                 // open_url mode "agent" opens the in-app agent browser. Referenced
                 // lazily like the facades below so wiring order never matters; on
                 // non-native platforms createAppBrowser falls back to a popup
@@ -1544,8 +1549,14 @@ const NativeKit: any = {
                 // here first so it also appears in More → Store → Floating UI.
                 artifacts: {
                   publish: (kind: 'floating-ui', input: any) => NativeKit.appBrowser.artifacts.publish(kind, input),
-                  showFloatingUI: (input: { artifactId: string }) => NativeKit.appBrowser.artifacts.showFloatingUI(input),
-                  hideFloatingUI: (input?: { artifactId?: string }) => NativeKit.appBrowser.artifacts.hideFloatingUI(input),
+                  // publish() stores the overlay under the HOST owner, so show/hide must
+                  // name that owner too. Without sourceType the app-browser defaults to
+                  // 'mini-app' and looks up a third-party app with an empty id, which
+                  // failed every show_floating_ui with "Third-party app not found: ".
+                  showFloatingUI: (input: { artifactId: string }) =>
+                    NativeKit.appBrowser.artifacts.showFloatingUI({ ...input, sourceType: 'host' }),
+                  hideFloatingUI: (input?: { artifactId?: string }) =>
+                    NativeKit.appBrowser.artifacts.hideFloatingUI(input?.artifactId ? { ...input, sourceType: 'host' } : undefined),
                 },
                 // sql_query and stage_miniapp reach the facades assembled on
                 // NativeKit below — referenced lazily so wiring order never matters.

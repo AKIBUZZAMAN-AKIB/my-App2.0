@@ -2026,7 +2026,11 @@ export function createAppBrowser(nativeKit: any, config: AppBrowserConfig): any 
   async function resolveArtifactOwner(sourceType: unknown, appId?: string): Promise<NativeArtifactOwner> {
     if (sourceType === 'host') return hostArtifactOwner();
     if (sourceType !== 'mini-app') throw new Error("Artifact sourceType must be 'mini-app' or 'host'");
-    return artifactOwner(await getApp(String(appId ?? ''), false));
+    const id = String(appId ?? '').trim();
+    // A selector with neither an appId nor sourceType 'host' used to surface as
+    // "Third-party app not found: " (empty id), which hid the real mistake.
+    if (!id) throw new Error("Artifact selector needs an appId for a Mini App artifact, or sourceType 'host' for the app's own artifacts");
+    return artifactOwner(await getApp(id, false));
   }
   function registerArtifactBrokerMethods(): void {
     const definitions: Array<[string, NativeArtifactKind, 'miniUI' | 'floatingUI' | 'homeWidget']> = [
@@ -2587,13 +2591,13 @@ export function createAppBrowser(nativeKit: any, config: AppBrowserConfig): any 
       const nested = await Promise.all(owners.map((owner) => artifactManager.list(owner, filter.kind)));
       return nested.flat();
     },
-    read: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; kind: NativeArtifactKind; artifactId: string }) => artifactManager.read(await resolveArtifactOwner(input.sourceType ?? 'mini-app', input.appId), input.kind, input.artifactId),
-    remove: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; kind: NativeArtifactKind; artifactId: string }) => artifactManager.remove(await resolveArtifactOwner(input.sourceType ?? 'mini-app', input.appId), input.kind, input.artifactId),
+    read: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; kind: NativeArtifactKind; artifactId: string }) => artifactManager.read(await resolveArtifactOwner(input.sourceType ?? (input.appId ? 'mini-app' : 'host'), input.appId), input.kind, input.artifactId),
+    remove: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; kind: NativeArtifactKind; artifactId: string }) => artifactManager.remove(await resolveArtifactOwner(input.sourceType ?? (input.appId ? 'mini-app' : 'host'), input.appId), input.kind, input.artifactId),
     removeOwner: async (appId: string) => artifactManager.removeOwner(artifactOwner(await getApp(appId, false))),
-    mountMiniUI: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; artifactId: string; target: HTMLElement; replace?: boolean; className?: string }) => artifactManager.mountMiniUI(await resolveArtifactOwner(input.sourceType ?? 'mini-app', input.appId), input.artifactId, input.target, input),
-    activateHomeWidget: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; artifactId: string }) => artifactManager.activateHomeWidget(await resolveArtifactOwner(input.sourceType ?? 'mini-app', input.appId), input.artifactId),
-    requestPinHomeWidget: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; artifactId: string }) => artifactManager.requestPinHomeWidget(await resolveArtifactOwner(input.sourceType ?? 'mini-app', input.appId), input.artifactId),
-    showFloatingUI: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; artifactId: string }) => artifactManager.showFloating(await resolveArtifactOwner(input.sourceType ?? 'mini-app', input.appId), input.artifactId),
+    mountMiniUI: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; artifactId: string; target: HTMLElement; replace?: boolean; className?: string }) => artifactManager.mountMiniUI(await resolveArtifactOwner(input.sourceType ?? (input.appId ? 'mini-app' : 'host'), input.appId), input.artifactId, input.target, input),
+    activateHomeWidget: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; artifactId: string }) => artifactManager.activateHomeWidget(await resolveArtifactOwner(input.sourceType ?? (input.appId ? 'mini-app' : 'host'), input.appId), input.artifactId),
+    requestPinHomeWidget: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; artifactId: string }) => artifactManager.requestPinHomeWidget(await resolveArtifactOwner(input.sourceType ?? (input.appId ? 'mini-app' : 'host'), input.appId), input.artifactId),
+    showFloatingUI: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; artifactId: string }) => artifactManager.showFloating(await resolveArtifactOwner(input.sourceType ?? (input.appId ? 'mini-app' : 'host'), input.appId), input.artifactId),
     hideFloatingUI: async (input: { sourceType?: 'mini-app' | 'host'; appId?: string; artifactId?: string } = {}) => {
       // A trusted host/user emergency stop may omit the selector. A supplied
       // selector remains owner-checked, matching the untrusted broker behavior.
