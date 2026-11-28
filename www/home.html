@@ -23,6 +23,7 @@
     { id: 'ocean_waves', label: 'Ocean waves', animated: true, colors: ['#0ea5e9', '#2563eb', '#06b6d4'] },
     { id: 'bubbles', label: 'Bubbles', animated: true, colors: ['#8b5cf6', '#3b82f6', '#ec4899'] },
     { id: 'starry_night', label: 'Starry night', animated: true, colors: ['#4338ca', '#1e293b', '#a5b4fc'] },
+    { id: 'html', label: 'Custom HTML', animated: false, custom: true, colors: [] },
   ];
   const SPEEDS = ['slow', 'normal', 'fast'], INTENSITIES = ['subtle', 'normal', 'vivid'], MOTIONS = ['auto', 'off'];
   const SPEED_K = { slow: 1.8, normal: 1, fast: 0.55 };
@@ -334,6 +335,54 @@ body { padding-top: calc(env(safe-area-inset-top, 0px) + 12px); }
 @keyframes flash { 0%, 100% { box-shadow: var(--shadow); } 30% { box-shadow: 0 0 0 3px var(--ring), var(--shadow); } }
 
 /* ==========================================================================
+   Type scale = the Agent app's (www/agent.html, 16px rem): 20px/650 header
+   title, 17px heading, 14px body, 13px small, 12px and 11px labels, 24px stat
+   value and 36px for the biggest numbers (its weather temperature). Every size
+   is multiplied by --fs so the text-size setting still works.
+   ========================================================================== */
+.hello { font-size: calc(13px * var(--fs)); font-weight: 500; }
+.today { font-size: calc(20px * var(--fs)); font-weight: 650; line-height: 1.25; letter-spacing: -0.015em; }
+.section-label, .section-label button { font-size: calc(12px * var(--fs)); }
+.chip { width: 24px; height: 24px; border-radius: 7px; font-size: 14px; }
+.wt { font-size: calc(13px * var(--fs)); font-weight: 500; }
+.wh .tag { font-size: calc(12px * var(--fs)); }
+.huge { font-size: calc(36px * var(--fs)); font-weight: 650; line-height: 1.1; letter-spacing: -0.03em; }
+.big { font-size: calc(24px * var(--fs)); font-weight: 650; line-height: 1.2; letter-spacing: -0.02em; }
+.sub { font-size: calc(12px * var(--fs)); }
+.empty { font-size: calc(13px * var(--fs)); }
+.btn { height: 34px; font-size: calc(14px * var(--fs)); font-weight: 500; }
+.clock .ampm { font-size: calc(14px * var(--fs)); font-weight: 500; margin-left: 4px; }
+.weather .wx { font-size: calc(28px * var(--fs)); }
+.hours div { font-size: calc(11px * var(--fs)); } .hours b { font-size: calc(13px * var(--fs)); }
+.days { font-size: calc(13px * var(--fs)); }
+.cal-day { font-size: calc(11px * var(--fs)); }
+.week span { font-size: calc(10px * var(--fs)); }
+.week b { height: 28px; font-size: calc(13px * var(--fs)); }
+.month b { height: 26px; font-size: calc(12px * var(--fs)); }
+.ev { font-size: calc(14px * var(--fs)); } .ev small { font-size: calc(12px * var(--fs)); }
+.ring { width: 72px; height: 72px; } .ring::before { width: 60px; height: 60px; }
+.ring b { font-size: calc(17px * var(--fs)); font-weight: 650; }
+.alist div { font-size: calc(13px * var(--fs)); padding: 8px 12px; }
+.note-text { font-size: calc(14px * var(--fs)); }
+.check { font-size: calc(14px * var(--fs)); min-height: 32px; }
+.check i { width: 18px; height: 18px; font-size: 11px; }
+.round, .sw-ctrl .round { width: 36px; height: 36px; font-size: 16px; }
+.laps { font-size: calc(11px * var(--fs)); }
+.quote { font-size: calc(14px * var(--fs)); }
+.stats { font-size: calc(12px * var(--fs)); } .stats b { font-size: calc(17px * var(--fs)); }
+.app { font-size: calc(11px * var(--fs)); }
+.app i { width: 44px; height: 44px; border-radius: 12px; font-size: 20px; }
+.stat .unit { font-size: calc(14px * var(--fs)); }
+.trend { font-size: calc(11px * var(--fs)); }
+.list li { font-size: calc(13px * var(--fs)); } .list li small { font-size: calc(11px * var(--fs)); }
+.tools button { font-size: calc(12px * var(--fs)); }
+.sheet h2 { font-size: calc(17px * var(--fs)); font-weight: 600; }
+.cat b { font-size: calc(14px * var(--fs)); } .cat small { font-size: calc(12px * var(--fs)); }
+.toast { font-size: calc(13px * var(--fs)); }
+.icon-btn { width: 34px; height: 34px; font-size: 16px; }
+.dock .btn { height: 40px; }
+
+/* ==========================================================================
    Background themes (light/dark always follows the system). #bg sits behind
    everything; swatches in the Background sheet reuse the same .bgx markup.
    Animations use transform/opacity only and pause for reduced motion, for
@@ -397,8 +446,17 @@ body { background: transparent; }
 :root[data-bg-motion="off"] .bgx *, :root[data-bg-motion="off"] .bgx *::before, .bg-paused .bgx *, .bg-paused .bgx *::before { animation-play-state: paused !important; }
 /* Cards stay readable over a backdrop: near-opaque surface, blur only over still backdrops */
 :root:not([data-bg="plain"]) .w:not(.weather) { background: color-mix(in oklab, var(--card) 90%, transparent); -webkit-backdrop-filter: blur(14px) saturate(1.1); backdrop-filter: blur(14px) saturate(1.1); }
-:root[data-bg-animated="true"] .w:not(.weather) { background: color-mix(in oklab, var(--card) 95%, transparent); -webkit-backdrop-filter: none; backdrop-filter: none; }
+:root[data-bg-animated="true"] .w:not(.weather), :root[data-bg="html"] .w:not(.weather) { background: color-mix(in oklab, var(--card) 95%, transparent); -webkit-backdrop-filter: none; backdrop-filter: none; }
 :root:not([data-bg="plain"]) .icon-btn:not(.on) { background: color-mix(in oklab, var(--card) 85%, transparent); }
+/* Custom HTML background: a sandboxed iframe that cannot be tapped */
+.bgx .bg-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; pointer-events: none; background: transparent; }
+.html-edit { display: grid; gap: 8px; margin-top: 8px; }
+.html-edit textarea { width: 100%; min-height: 120px; resize: vertical; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 10px 12px; font: calc(12px * var(--fs)) / 1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.html-edit .row { display: flex; flex-wrap: wrap; gap: 8px; }
+.html-edit .row .btn { flex: 1 1 auto; }
+.html-edit .file { position: relative; overflow: hidden; }
+.html-edit .file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.html-edit .err { color: var(--danger, #dc2626); font-size: calc(12px * var(--fs)); min-height: 1em; margin: 0 4px; }
 /* Header: greeting + date on the left, edit on the right */
 .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .top .icon-btn { flex: none; margin-top: 2px; }
@@ -441,6 +499,13 @@ body { background: transparent; }
   <p class="note" id="bgNote">Light or dark follows your phone. Every background works in both.</p>
   <h3>Still</h3><div class="swatches" id="bgStill"></div>
   <h3>Animated</h3><div class="swatches" id="bgAnim"></div>
+  <h3>Your HTML</h3><p class="note">Paste a whole HTML page or pick an .html file. It runs behind your widgets in a locked sandbox: no internet, no taps, no access to your data.</p>
+  <div class="swatches" id="bgHtmlPick"></div>
+  <div class="html-edit">
+    <textarea id="bgHtmlText" spellcheck="false" placeholder="<!doctype html>&#10;<html>&#10;  <body style=&quot;background: linear-gradient(#a5b4fc, #5eead4)&quot;></body>&#10;</html>"></textarea>
+    <div class="row"><button class="btn pri" id="bgHtmlUse">Use this HTML</button><span class="btn file">Choose .html file<input type="file" id="bgHtmlFile" accept=".html,.htm,text/html"></span><button class="btn" id="bgHtmlExample">Load example</button></div>
+    <p class="err" id="bgHtmlErr" role="status"></p>
+  </div>
   <h3>Colour strength</h3><div class="seg" id="bgIntensity"></div>
   <h3>Animation speed</h3><div class="seg" id="bgSpeed"></div>
   <div class="toggle-row"><span>Animate backgrounds</span><button class="switch" id="bgMotion" role="switch" aria-label="Animate backgrounds"></button></div>
@@ -652,7 +717,7 @@ R.weather = (w, el) => {
   const cur = e.d.current, day = e.d.daily, deg = '°';
   const now = wx(cur.weather_code, cur.is_day); el?.classList.toggle('night', !cur.is_day);
   let out = head(w, place, 'sun', w.size === 's' ? '' : esc(now.text)) + '<div class="wb">';
-  out += `<div class="row"><div class="big" style="font-size:${w.size === 's' ? 48 : 58}px">${Math.round(cur.temperature_2m)}${deg}</div><div class="wx">${now.icon}</div></div>`;
+  out += `<div class="row"><div class="big" style="font-size:calc(${w.size === 's' ? 28 : 36}px * var(--fs))">${Math.round(cur.temperature_2m)}${deg}</div><div class="wx">${now.icon}</div></div>`;
   out += `<div class="sub">${w.size === 's' ? esc(now.text) + '<br>' : ''}H ${Math.round(day.temperature_2m_max[0])}${deg} · L ${Math.round(day.temperature_2m_min[0])}${deg}${w.size !== 's' ? ` · Feels ${Math.round(cur.apparent_temperature)}${deg} · ${Math.round(cur.relative_humidity_2m)}% humidity` : ''}</div>`;
   if (w.size !== 's') {
     const hi = e.d.hourly, start = Math.max(0, hi.time.findIndex((t) => new Date(t).getTime() > Date.now() - 3600e3));
@@ -693,9 +758,9 @@ R.battery = (w) => {
 R.alarms = (w) => {
   const list = live.alarms;
   if (!list) return head(w, 'Alarms', 'bell') + '<div class="wb"><div class="empty">Alarms show in the app.</div></div>';
-  if (!list.length) return head(w, 'Alarms', 'bell') + `<div class="wb"><div class="big" style="font-size:30px">No alarms</div><div class="sub">Ask the agent: “wake me at 6:30”</div></div>`;
+  if (!list.length) return head(w, 'Alarms', 'bell') + `<div class="wb"><div class="big">No alarms</div><div class="sub">Ask the agent: “wake me at 6:30”</div></div>`;
   const n = list[0], t = new Date(n.scheduledAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).split(' ');
-  let out = head(w, 'Next alarm', 'bell', w.size === 's' ? '' : esc(rel(n.scheduledAt))) + `<div class="wb"><div class="${w.size === 's' ? 'big' : 'huge'}">${esc(t[0])}<span class="ampm" style="font-size:20px;color:var(--muted);margin-left:6px;font-weight:600">${esc(t[1] || '')}</span></div><div class="sub">${esc(n.title || n.label || 'Alarm')}${w.size === 's' ? ' · ' + esc(rel(n.scheduledAt)) : ''}</div>`;
+  let out = head(w, 'Next alarm', 'bell', w.size === 's' ? '' : esc(rel(n.scheduledAt))) + `<div class="wb"><div class="${w.size === 's' ? 'big' : 'huge'}">${esc(t[0])}<span class="ampm" style="font-size:calc(14px * var(--fs));color:var(--muted);margin-left:4px;font-weight:500">${esc(t[1] || '')}</span></div><div class="sub">${esc(n.title || n.label || 'Alarm')}${w.size === 's' ? ' · ' + esc(rel(n.scheduledAt)) : ''}</div>`;
   if (w.size === 'l') out += '<div class="alist">' + list.slice(1, 4).map((a) => `<div><b>${esc(fmtTime(a.scheduledAt))}</b><span>${esc(a.title || a.label || 'Alarm')} · ${esc(rel(a.scheduledAt))}</span></div>`).join('') + '</div>';
   return out + '</div>';
 };
@@ -722,7 +787,7 @@ R.stopwatch = (w) => {
   const s = swOf(w.id), timer = w.config.mode === 'timer' || Number(w.config.seconds) > 0;
   const ctrl = `<div class="sw-ctrl"><button class="round" data-sw="reset" aria-label="Reset">${ic('reset')}</button>${!timer && w.size !== 's' ? `<button class="round" data-sw="lap" aria-label="Lap">${ic('flag')}</button>` : ''}<button class="round go" data-sw="toggle" aria-label="${s.run ? 'Pause' : 'Start'}">${ic(s.run ? 'pause' : 'play')}</button></div>`;
   const laps = !timer && s.laps.length ? `<div class="laps">${s.laps.slice(-3).reverse().map((l, i) => `Lap ${s.laps.length - i} · ${fmtSw(l).replace(/<[^>]+>/g, '')}`).join('   ')}</div>` : '';
-  return head(w, timer ? 'Timer' : 'Stopwatch', 'timer', s.run ? 'Running' : '') + `<div class="wb"><div class="row" style="align-items:center"><div class="${w.size === 's' ? 'big' : 'huge'}" style="${w.size === 's' ? 'font-size:38px' : 'font-size:50px'}" data-tick="sw">${swText(w)}</div>${w.size === 's' ? '' : ctrl}</div>${w.size === 's' ? `<div style="margin-top:10px">${ctrl}</div>` : laps}</div>`;
+  return head(w, timer ? 'Timer' : 'Stopwatch', 'timer', s.run ? 'Running' : '') + `<div class="wb"><div class="row" style="align-items:center"><div class="${w.size === 's' ? 'big' : 'huge'}" style="font-size:calc(${w.size === 's' ? 24 : 36}px * var(--fs))" data-tick="sw">${swText(w)}</div>${w.size === 's' ? '' : ctrl}</div>${w.size === 's' ? `<div style="margin-top:10px">${ctrl}</div>` : laps}</div>`;
 };
 R.agent = (w) => {
   const a = live.agent;
@@ -769,7 +834,7 @@ function card(w, i) {
 }
 function render() {
   grid.replaceChildren(...layout.widgets.map(card));
-  if (!layout.widgets.length) grid.innerHTML = `<section class="w m" style="align-items:flex-start;justify-content:center;gap:14px"><div class="big" style="font-size:28px">Your Home is empty</div><div class="sub">Add widgets, or ask the agent to build your Home.</div><button class="btn pri" id="emptyAdd">${ic('plus')} Add widget</button></section>`;
+  if (!layout.widgets.length) grid.innerHTML = `<section class="w m" style="align-items:flex-start;justify-content:center;gap:14px"><div class="big" style="font-size:calc(20px * var(--fs))">Your Home is empty</div><div class="sub">Add widgets, or ask the agent to build your Home.</div><button class="btn pri" id="emptyAdd">${ic('plus')} Add widget</button></section>`;
   header();
 }
 function paintType(type) {
@@ -839,7 +904,26 @@ const PREFS_KEY = 'myapp.home.prefs.v1';
 const CMD_KEY = 'myapp.home.command.v1';
 const CMD_EVENT = 'myapp:home-command';
 const BG = window.__homeBg;
-const PREF_DEFAULTS = { textSize: 'default', density: 'comfortable', accent: '', greeting: '', background: 'plain', bgSpeed: 'normal', bgIntensity: 'normal', bgMotion: 'auto' };
+const PREF_DEFAULTS = { textSize: 'default', density: 'comfortable', accent: '', greeting: '', background: 'plain', bgSpeed: 'normal', bgIntensity: 'normal', bgMotion: 'auto', bgHtml: '', bgHtmlName: '' };
+const BG_HTML_MAX = 60000; // same limit as HOME_BG_HTML_MAX in bridge/home-layout.ts
+const BG_EXAMPLE_URL = './home-backgrounds/constellation.html';
+let bgExample = '';
+const BG_EXAMPLE_FALLBACK = '<!doctype html><html><head><style>:root{color-scheme:light dark}html,body{margin:0;height:100%;background:linear-gradient(160deg,#eef2ff,#f0fdfa)}@media (prefers-color-scheme:dark){html,body{background:linear-gradient(160deg,#0b1020,#0a1a1a)}}</style></head><body></body></html>';
+/* A custom background runs in an iframe with sandbox="allow-scripts" only: an opaque
+   origin, so no localStorage, cookies, parent page or app bridge. The CSP below blocks
+   all network, forms and navigation; the iframe ignores taps (pointer-events: none). */
+const BG_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'";
+function bgSrcdoc(html, motionOff) {
+  const head = `<meta http-equiv="Content-Security-Policy" content="${BG_CSP}"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">`
+    + `<script>window.HOME_MOTION=${motionOff ? "'off'" : "'auto'"};<\/script>`
+    + (motionOff ? '<style>*,*::before,*::after{animation-play-state:paused!important;transition:none!important}</style>' : '');
+  const body = String(html || bgExample || BG_EXAMPLE_FALLBACK);
+  // Our tags go first, before anything the HTML itself declares.
+  return /<head[^>]*>/i.test(body) ? body.replace(/<head[^>]*>/i, (m) => m + head) : head + body;
+}
+function bgFrame(html, motionOff, label) {
+  return `<iframe class="bg-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="eager" tabindex="-1" aria-hidden="true" title="${esc(label || 'Background')}" srcdoc="${esc(bgSrcdoc(html, motionOff))}"></iframe>`;
+}
 function cleanPrefs(raw) {
   const p = { ...PREF_DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
   delete p.theme; delete p.showAsk; // old settings: the theme switch and the Ask bar are gone
@@ -847,13 +931,20 @@ function cleanPrefs(raw) {
   if (!BG.speeds.includes(p.bgSpeed)) p.bgSpeed = 'normal';
   if (!BG.intensities.includes(p.bgIntensity)) p.bgIntensity = 'normal';
   if (!BG.motions.includes(p.bgMotion)) p.bgMotion = 'auto';
+  if (typeof p.bgHtml !== 'string' || p.bgHtml.length > BG_HTML_MAX) p.bgHtml = '';
+  p.bgHtmlName = typeof p.bgHtmlName === 'string' ? p.bgHtmlName.slice(0, 40) : '';
   return p;
 }
 function readPrefs() { const raw = (() => { try { return localStorage.getItem(PREFS_KEY); } catch { return null; } })(); return { raw, value: cleanPrefs(parse(raw, {})) }; }
 let { raw: lastPrefs, value: prefs } = readPrefs();
 const darkMq = matchMedia('(prefers-color-scheme: dark)');
 const reduceMq = matchMedia('(prefers-reduced-motion: reduce)');
-const bgCurrent = () => { const b = BG.find(prefs.background) || BG.list[0]; return { id: b.id, label: b.label, animated: b.animated, speed: prefs.bgSpeed, intensity: prefs.bgIntensity, motion: prefs.bgMotion, moving: b.animated && prefs.bgMotion !== 'off' && !reduceMq.matches }; };
+const bgCurrent = () => {
+  const b = BG.find(prefs.background) || BG.list[0];
+  const cur = { id: b.id, label: b.label, animated: b.animated, speed: prefs.bgSpeed, intensity: prefs.bgIntensity, motion: prefs.bgMotion, moving: b.animated && prefs.bgMotion !== 'off' && !reduceMq.matches };
+  if (b.id === 'html') cur.html = prefs.bgHtml ? { name: prefs.bgHtmlName || 'Custom', characters: prefs.bgHtml.length } : { name: 'Constellation (example)', example: true };
+  return cur;
+};
 const bgLayers = (id) => {
   if (id === 'aurora_flow') return '<i class="b1"></i><i class="b2"></i><i class="b3"></i>';
   if (id === 'sunset_glow') return '<i class="g1"></i><i class="g2"></i>';
@@ -864,16 +955,25 @@ const bgLayers = (id) => {
   return '';
 };
 let paintedBg = '';
+const bgKey = () => prefs.background === 'html' ? `html|${prefs.bgMotion}|${prefs.bgHtml.length}|${prefs.bgHtml.slice(0, 64)}|${prefs.bgHtml.slice(-64)}|${bgExample.length}` : prefs.background;
 function applyPrefs() {
   const r = document.documentElement;
   BG.paint(prefs); // system light/dark + background colours, text size, density
   if (/^#[0-9a-f]{6}$/i.test(prefs.accent || '')) { r.style.setProperty('--user-accent', prefs.accent); r.style.setProperty('--user-accent-fg', '#fff'); }
   else { r.style.removeProperty('--user-accent'); r.style.removeProperty('--user-accent-fg'); }
   const bg = $('#bg');
-  if (paintedBg !== prefs.background) { paintedBg = prefs.background; bg.dataset.bg = prefs.background; bg.innerHTML = bgLayers(prefs.background); }
+  const key = bgKey();
+  if (paintedBg !== key) {
+    paintedBg = key; bg.dataset.bg = prefs.background;
+    bg.innerHTML = prefs.background === 'html' ? bgFrame(prefs.bgHtml, prefs.bgMotion === 'off', prefs.bgHtmlName) : bgLayers(prefs.background);
+  }
   if (document.body.classList.contains('bg-open')) paintBgSheet();
 }
 function swatch(b) {
+  if (b.id === 'html') {
+    const name = prefs.bgHtml ? (prefs.bgHtmlName || 'Custom') : 'Constellation';
+    return `<button class="swatch" data-bg-pick="html" aria-pressed="${prefs.background === 'html'}" aria-label="Custom HTML: ${esc(name)}"><span class="pv"><span class="tag">HTML</span><span class="bgx" data-bg="html">${bgFrame(prefs.bgHtml, true, name)}</span><b></b><b></b><b></b></span>${esc(name)}</button>`;
+  }
   const v = BG.vars(b.id, prefs.bgIntensity, darkMq.matches);
   const style = Object.entries(v).map(([k, x]) => `${k}:${x}`).join(';');
   return `<button class="swatch" data-bg-pick="${b.id}" aria-pressed="${prefs.background === b.id}" aria-label="${esc(b.label)}${b.animated ? ' (animated)' : ''}"><span class="pv">${b.animated ? '<span class="tag">Live</span>' : ''}<span class="bgx" data-bg="${b.id}" style="${style}">${bgLayers(b.id)}</span><b></b><b></b><b></b></span>${esc(b.label)}</button>`;
@@ -881,9 +981,11 @@ function swatch(b) {
 const seg = (list, cur, key, disabled) => list.map((x) => `<button data-${key}="${x}" aria-pressed="${cur === x}"${disabled ? ' disabled' : ''}>${x[0].toUpperCase() + x.slice(1)}</button>`).join('');
 function paintBgSheet() {
   const cur = BG.find(prefs.background) || BG.list[0];
-  $('#bgStill').innerHTML = BG.list.filter((b) => !b.animated).map(swatch).join('');
+  $('#bgStill').innerHTML = BG.list.filter((b) => !b.animated && !b.custom).map(swatch).join('');
   $('#bgAnim').innerHTML = BG.list.filter((b) => b.animated).map(swatch).join('');
-  $('#bgIntensity').innerHTML = seg(BG.intensities, prefs.bgIntensity, 'bg-int', cur.id === 'plain');
+  const htmlKey = `${prefs.bgHtml.length}|${prefs.bgHtmlName}|${prefs.background === 'html'}|${bgExample.length}`;
+  if ($('#bgHtmlPick').dataset.key !== htmlKey) { $('#bgHtmlPick').dataset.key = htmlKey; $('#bgHtmlPick').innerHTML = swatch(BG.find('html')); }
+  $('#bgIntensity').innerHTML = seg(BG.intensities, prefs.bgIntensity, 'bg-int', cur.id === 'plain' || cur.id === 'html');
   $('#bgSpeed').innerHTML = seg(BG.speeds, prefs.bgSpeed, 'bg-speed', !cur.animated || prefs.bgMotion === 'off');
   $('#bgMotion').setAttribute('aria-checked', String(prefs.bgMotion !== 'off'));
   $('#bgNote').textContent = 'Light or dark follows your phone. Every background works in both.' + (reduceMq.matches ? ' Your phone asks for reduced motion, so animated backgrounds stay still.' : '');
@@ -897,6 +999,31 @@ $('#bgSheet').addEventListener('click', (e) => {
   else return;
   savePrefs(); paintBgSheet();
 });
+function useBgHtml(html, name) {
+  const err = $('#bgHtmlErr');
+  if (typeof html !== 'string' || !html.trim()) { err.textContent = 'Paste some HTML first.'; return false; }
+  if (html.length > BG_HTML_MAX) { err.textContent = `That HTML is ${html.length.toLocaleString()} characters; the limit is ${BG_HTML_MAX.toLocaleString()}.`; return false; }
+  err.textContent = '';
+  prefs.bgHtml = html; prefs.bgHtmlName = String(name || 'Custom').slice(0, 40); prefs.background = 'html';
+  savePrefs(); paintBgSheet(); return true;
+}
+$('#bgHtmlUse').onclick = () => { if (useBgHtml($('#bgHtmlText').value, 'Custom')) toast('Custom HTML background on'); };
+$('#bgHtmlExample').onclick = async () => { await loadBgExample(); $('#bgHtmlText').value = bgExample; $('#bgHtmlErr').textContent = ''; };
+$('#bgHtmlFile').onchange = async (e) => {
+  const f = e.target.files && e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  if (f.size > BG_HTML_MAX * 4) { $('#bgHtmlErr').textContent = 'That file is too big for a background.'; return; }
+  const text = await f.text();
+  $('#bgHtmlText').value = text;
+  if (useBgHtml(text, f.name.replace(/\.html?$/i, ''))) toast('Custom HTML background on');
+};
+async function loadBgExample() {
+  if (bgExample) return bgExample;
+  try { const r = await fetch(BG_EXAMPLE_URL, { cache: 'no-cache' }); if (r.ok) bgExample = await r.text(); } catch {}
+  if (bgExample) applyPrefs();
+  return bgExample;
+}
+loadBgExample();
 function savePrefs() { lastPrefs = JSON.stringify(prefs); try { localStorage.setItem(PREFS_KEY, lastPrefs); } catch {} applyPrefs(); header(); paintType('html'); }
 // Follow the phone's light/dark and reduced-motion settings live.
 darkMq.addEventListener?.('change', () => { applyPrefs(); paintType('html'); });
@@ -904,18 +1031,29 @@ reduceMq.addEventListener?.('change', () => { if (document.body.classList.contai
 document.addEventListener('visibilitychange', () => document.documentElement.classList.toggle('bg-paused', document.visibilityState !== 'visible'));
 
 /* ---------- Agent control: one dispatcher for home_control commands and window.MyAppHome ---------- */
-const ACTIONS = ['get_state', 'list_backgrounds', 'set_background', 'set_background_speed', 'set_background_intensity', 'set_background_motion', 'set_text_size', 'set_density', 'set_accent', 'set_greeting', 'stopwatch_start', 'stopwatch_pause', 'stopwatch_reset', 'stopwatch_lap', 'check_item', 'open_app', 'edit_mode', 'open_add_sheet', 'refresh', 'scroll_to'];
+const ACTIONS = ['get_state', 'list_backgrounds', 'set_background', 'set_background_html', 'set_background_speed', 'set_background_intensity', 'set_background_motion', 'set_text_size', 'set_density', 'set_accent', 'set_greeting', 'stopwatch_start', 'stopwatch_pause', 'stopwatch_reset', 'stopwatch_lap', 'check_item', 'open_app', 'edit_mode', 'open_add_sheet', 'refresh', 'scroll_to'];
 function only(type, id) { const all = layout.widgets.filter((w) => w.type === type); const w = id ? all.find((x) => x.id === id) : all.length === 1 ? all[0] : null; if (!w) throw new Error(`No single ${type} widget${id ? ` with id ${id}` : ''}.`); return w; }
 function runAction(action, a = {}) {
   const v = a.value;
   switch (action) {
-    case 'get_state': return { prefs, theme: 'system', systemDark: darkMq.matches, reducedMotion: reduceMq.matches, background: bgCurrent(), editing, widgets: layout.widgets.map((w) => ({ id: w.id, type: w.type, size: w.size, title: w.title })), stopwatches: swAll, actions: ACTIONS };
+    case 'get_state': return { prefs: { ...prefs, bgHtml: prefs.bgHtml ? `[${prefs.bgHtml.length} characters]` : '' }, theme: 'system', systemDark: darkMq.matches, reducedMotion: reduceMq.matches, background: bgCurrent(), editing, widgets: layout.widgets.map((w) => ({ id: w.id, type: w.type, size: w.size, title: w.title })), stopwatches: swAll, actions: ACTIONS };
     case 'list_backgrounds': return { current: bgCurrent(), backgrounds: BG.list.map((b) => ({ id: b.id, label: b.label, animated: b.animated, colors: b.colors })), options: { speed: BG.speeds, intensity: BG.intensities, motion: BG.motions } };
     case 'set_background': {
       const b = BG.find(v); if (!b) throw new Error(`background: ${BG.list.map((x) => x.id).join('|')}`);
       const opt = (x, list, name) => { if (x == null || x === '') return undefined; if (!list.includes(x)) throw new Error(`${name}: ${list.join('|')}`); return x; };
       const sp = opt(a.speed, BG.speeds, 'speed'), it = opt(a.intensity, BG.intensities, 'intensity'), mo = opt(a.motion, BG.motions, 'motion');
+      if (a.html != null && a.html !== '') {
+        if (b.id !== 'html') throw new Error('html is only for the "html" background');
+        if (typeof a.html !== 'string' || a.html.length > BG_HTML_MAX) throw new Error(`html: a string up to ${BG_HTML_MAX} characters`);
+        prefs.bgHtml = a.html; prefs.bgHtmlName = String(a.name || 'Custom').slice(0, 40);
+      }
       prefs.background = b.id; if (sp) prefs.bgSpeed = sp; if (it) prefs.bgIntensity = it; if (mo) prefs.bgMotion = mo; break;
+    }
+    case 'set_background_html': {
+      const h = typeof v === 'string' ? v : '';
+      if (!h.trim() || h.trim().toLowerCase() === 'example') { prefs.bgHtml = ''; prefs.bgHtmlName = ''; }
+      else { if (h.length > BG_HTML_MAX) throw new Error(`html: up to ${BG_HTML_MAX} characters`); prefs.bgHtml = h; prefs.bgHtmlName = String(a.name || 'Custom').slice(0, 40); }
+      prefs.background = 'html'; break;
     }
     case 'set_background_speed': if (!BG.speeds.includes(v)) throw new Error(`speed: ${BG.speeds.join('|')}`); prefs.bgSpeed = v; break;
     case 'set_background_intensity': if (!BG.intensities.includes(v)) throw new Error(`intensity: ${BG.intensities.join('|')}`); prefs.bgIntensity = v; break;

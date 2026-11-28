@@ -2021,6 +2021,8 @@ const TOOL_SPECS: DeviceToolSpec[] = [
         speed: { type: 'string', enum: [...HOME_BG_SPEEDS], description: 'set_background: animation speed (optional).' },
         intensity: { type: 'string', enum: [...HOME_BG_INTENSITIES], description: 'set_background: colour strength (optional).' },
         motion: { type: 'string', enum: [...HOME_BG_MOTIONS], description: 'set_background: "auto" animates, "off" keeps it still (optional).' },
+        html: { type: 'string', description: 'set_background with value "html": the whole HTML page to draw behind the widgets (sandboxed, no network, no app data).' },
+        name: { type: 'string', description: 'set_background (html) / set_background_html: a short name for the custom HTML background.' },
       },
       required: ['action'],
     },
@@ -2038,7 +2040,7 @@ const TOOL_SPECS: DeviceToolSpec[] = [
           const layout = readHome(deps);
           const prefs = parseHomePrefs(state.readPrefs());
           const body = {
-            prefs,
+            prefs: { ...prefs, bgHtml: prefs.bgHtml ? `[${prefs.bgHtml.length} characters]` : '' },
             theme: 'system',
             background: describeHomeBackgrounds(prefs).current,
             widgets: layout.widgets.map((w, position) => ({ position, id: w.id, type: w.type, size: w.size, title: w.title })),
@@ -2052,10 +2054,14 @@ const TOOL_SPECS: DeviceToolSpec[] = [
           return textResult(JSON.stringify(body), body);
         }
         if (action.startsWith('set_')) {
-          const prefs = applyHomePref(parseHomePrefs(state.readPrefs()), action, args.value, { speed: args.speed, intensity: args.intensity, motion: args.motion });
+          const prefs = applyHomePref(parseHomePrefs(state.readPrefs()), action, args.value, { speed: args.speed, intensity: args.intensity, motion: args.motion, html: args.html, name: args.name });
           state.writePrefs(JSON.stringify(prefs));
           if (action.startsWith('set_background')) {
             const bg = findHomeBackground(prefs.background)!;
+            if (bg.id === 'html') {
+              const what = prefs.bgHtml ? `"${prefs.bgHtmlName || 'Custom'}" (${prefs.bgHtml.length} characters of your HTML)` : 'the built-in Constellation example';
+              return textResult(`Home background is now Custom HTML: ${what}, drawn behind the widgets in a sandbox with no network, no taps and no app data. Motion ${prefs.bgMotion}.`, { prefs: { ...prefs, bgHtml: prefs.bgHtml ? `[${prefs.bgHtml.length} characters]` : '' }, background: describeHomeBackgrounds(prefs).current });
+            }
             const extras = bg.animated ? `, speed ${prefs.bgSpeed}, intensity ${prefs.bgIntensity}, motion ${prefs.bgMotion}` : `, intensity ${prefs.bgIntensity}`;
             return textResult(`Home background is now ${bg.label}${bg.animated ? ' (animated)' : ''}${extras}. It adapts to the phone's light/dark theme.`, { prefs, background: describeHomeBackgrounds(prefs).current });
           }

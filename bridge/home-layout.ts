@@ -355,6 +355,8 @@ export interface HomeBackground {
   id: string;
   label: string;
   animated: boolean;
+  /** true for the background drawn from the user's own HTML */
+  custom?: boolean;
   /** theme colours as #rrggbb; empty for Plain (the light/dark ground) */
   colors: readonly string[];
   description: string;
@@ -372,6 +374,7 @@ export const HOME_BACKGROUNDS = [
   { id: 'ocean_waves', label: 'Ocean waves', animated: true, colors: ['#0ea5e9', '#2563eb', '#06b6d4'], description: 'Layered waves rolling along the bottom.' },
   { id: 'bubbles', label: 'Bubbles', animated: true, colors: ['#8b5cf6', '#3b82f6', '#ec4899'], description: 'Bubbles rising gently.' },
   { id: 'starry_night', label: 'Starry night', animated: true, colors: ['#4338ca', '#1e293b', '#a5b4fc'], description: 'Twinkling stars over a deep sky.' },
+  { id: 'html', label: 'Custom HTML', animated: false, custom: true, colors: [], description: "Your own HTML page drawn behind the widgets in a locked sandbox: no network, no taps, no access to the app's data. Without saved HTML it shows the built-in Constellation example." },
 ] as const satisfies readonly HomeBackground[];
 
 export type HomeBackgroundId = (typeof HOME_BACKGROUNDS)[number]['id'];
@@ -383,6 +386,14 @@ export const HOME_BG_MOTIONS = ['auto', 'off'] as const;
 export type HomeBgSpeed = (typeof HOME_BG_SPEEDS)[number];
 export type HomeBgIntensity = (typeof HOME_BG_INTENSITIES)[number];
 export type HomeBgMotion = (typeof HOME_BG_MOTIONS)[number];
+/** Largest custom HTML background, in characters. */
+export const HOME_BG_HTML_MAX = 60_000;
+
+function checkBgHtml(html: unknown): string {
+  if (typeof html !== 'string' || !html.trim()) throw new Error('html must be the HTML of the background page (a non-empty string).');
+  if (html.length > HOME_BG_HTML_MAX) throw new Error(`html is ${html.length} characters; the limit is ${HOME_BG_HTML_MAX}.`);
+  return html;
+}
 
 export function findHomeBackground(id: unknown): HomeBackground | undefined {
   const key = typeof id === 'string' ? id.trim().toLowerCase().replace(/[\s-]+/g, '_') : '';
@@ -399,11 +410,15 @@ export interface HomePrefs {
   bgSpeed: HomeBgSpeed;
   bgIntensity: HomeBgIntensity;
   bgMotion: HomeBgMotion;
+  /** custom HTML background; empty = the built-in example */
+  bgHtml: string;
+  bgHtmlName: string;
 }
 
 export const DEFAULT_HOME_PREFS: HomePrefs = {
   textSize: 'default', density: 'comfortable', accent: '', greeting: '',
   background: 'plain', bgSpeed: 'normal', bgIntensity: 'normal', bgMotion: 'auto',
+  bgHtml: '', bgHtmlName: '',
 };
 
 export const HOME_APP_IDS = ['agent', 'calendar', 'browser', 'notes', 'reminder', 'habits', 'academic', 'store', 'more'] as const;
@@ -412,7 +427,8 @@ export const HOME_APP_IDS = ['agent', 'calendar', 'browser', 'notes', 'reminder'
 export const HOME_CONTROL_ACTIONS = {
   get_state: 'Read Home settings (including the background), the layout summary and each stopwatch/timer state.',
   list_backgrounds: 'List every background theme (static and animated) with its options, and the one in use.',
-  set_background: 'value: background id from list_backgrounds (' + HOME_BACKGROUND_IDS.join(', ') + '); optional speed, intensity, motion in the same call.',
+  set_background: 'value: background id from list_backgrounds (' + HOME_BACKGROUND_IDS.join(', ') + '); optional speed, intensity, motion in the same call. For "html", pass html (and optional name) to set its page in the same call.',
+  set_background_html: 'value: a whole HTML page (max ' + HOME_BG_HTML_MAX + ' characters) to draw behind the widgets, or "example" for the built-in Constellation; optional name. It runs in a sandbox with no network, no taps and no app data, and should follow prefers-color-scheme and prefers-reduced-motion.',
   set_background_speed: 'value: "slow" | "normal" | "fast" — how fast an animated background moves.',
   set_background_intensity: 'value: "subtle" | "normal" | "vivid" — how strong the background colours are.',
   set_background_motion: 'value: "auto" (animate unless the phone asks for reduced motion) | "off" (keep animated backgrounds still).',
@@ -463,10 +479,12 @@ export function parseHomePrefs(json: string | null | undefined): HomePrefs {
   if ((HOME_BG_SPEEDS as readonly string[]).includes(raw.bgSpeed)) p.bgSpeed = raw.bgSpeed;
   if ((HOME_BG_INTENSITIES as readonly string[]).includes(raw.bgIntensity)) p.bgIntensity = raw.bgIntensity;
   if ((HOME_BG_MOTIONS as readonly string[]).includes(raw.bgMotion)) p.bgMotion = raw.bgMotion;
+  if (typeof raw.bgHtml === 'string' && raw.bgHtml.length <= HOME_BG_HTML_MAX) p.bgHtml = raw.bgHtml;
+  if (typeof raw.bgHtmlName === 'string') p.bgHtmlName = raw.bgHtmlName.slice(0, 40);
   return p;
 }
 
-export interface HomeBackgroundOptions { speed?: unknown; intensity?: unknown; motion?: unknown }
+export interface HomeBackgroundOptions { speed?: unknown; intensity?: unknown; motion?: unknown; html?: unknown; name?: unknown }
 
 export function applyPref(prefs: HomePrefs, action: HomeControlAction, value: unknown, options: HomeBackgroundOptions = {}): HomePrefs {
   const next = { ...prefs };
@@ -483,9 +501,20 @@ export function applyPref(prefs: HomePrefs, action: HomeControlAction, value: un
       const bg = findHomeBackground(value);
       if (!bg) throw new Error(`value must be a background id: ${HOME_BACKGROUND_IDS.join(', ')}.`);
       next.background = bg.id as HomeBackgroundId;
+      if (bg.id === 'html' && given(options.html)) {
+        next.bgHtml = checkBgHtml(options.html);
+        next.bgHtmlName = given(options.name) ? String(options.name).slice(0, 40) : 'Custom';
+      } else if (given(options.html)) throw new Error('html is only for the "html" background.');
       if (given(options.speed)) next.bgSpeed = pickFrom(options.speed, HOME_BG_SPEEDS, 'speed');
       if (given(options.intensity)) next.bgIntensity = pickFrom(options.intensity, HOME_BG_INTENSITIES, 'intensity');
       if (given(options.motion)) next.bgMotion = pickFrom(options.motion, HOME_BG_MOTIONS, 'motion');
+      break;
+    }
+    case 'set_background_html': {
+      const v = typeof value === 'string' ? value : '';
+      if (!v.trim() || v.trim().toLowerCase() === 'example') { next.bgHtml = ''; next.bgHtmlName = ''; }
+      else { next.bgHtml = checkBgHtml(v); next.bgHtmlName = given(options.name) ? String(options.name).slice(0, 40) : 'Custom'; }
+      next.background = 'html';
       break;
     }
     case 'set_background_speed': next.bgSpeed = pick(HOME_BG_SPEEDS, 'value'); break;
@@ -547,9 +576,13 @@ export function checkItem(layout: HomeLayout, id: unknown, index: unknown, done:
 export function describeHomeBackgrounds(prefs: HomePrefs) {
   const current = findHomeBackground(prefs.background) ?? HOME_BACKGROUNDS[0];
   return {
-    current: { id: current.id, label: current.label, animated: current.animated, speed: prefs.bgSpeed, intensity: prefs.bgIntensity, motion: prefs.bgMotion },
+    current: {
+      id: current.id, label: current.label, animated: current.animated, speed: prefs.bgSpeed, intensity: prefs.bgIntensity, motion: prefs.bgMotion,
+      ...(current.id === 'html' ? { html: prefs.bgHtml ? { name: prefs.bgHtmlName || 'Custom', characters: prefs.bgHtml.length } : { name: 'Constellation (example)', example: true } } : {}),
+    },
+    customHtml: prefs.bgHtml ? { name: prefs.bgHtmlName || 'Custom', characters: prefs.bgHtml.length } : null,
     backgrounds: HOME_BACKGROUNDS.map((b) => ({ id: b.id, label: b.label, animated: b.animated, colors: b.colors, description: b.description })),
-    options: { speed: HOME_BG_SPEEDS, intensity: HOME_BG_INTENSITIES, motion: HOME_BG_MOTIONS },
+    options: { speed: HOME_BG_SPEEDS, intensity: HOME_BG_INTENSITIES, motion: HOME_BG_MOTIONS, htmlMaxCharacters: HOME_BG_HTML_MAX },
     note: 'Light or dark always follows the phone setting; backgrounds adapt to both. Animated backgrounds stay still when the phone asks for reduced motion.',
   };
 }

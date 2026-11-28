@@ -1635,6 +1635,52 @@ describe('home_* tools', () => {
     expect(state.background).toMatchObject({ id: 'ocean_waves', animated: true, motion: 'off' });
   });
 
+  it('home_control sets a custom HTML background, inline or from the example, with limits', async () => {
+    const kv: Record<string, string | null> = { prefs: null };
+    const { deps } = fakeDeps({
+      home: { read: () => null, write: () => {} },
+      homeState: {
+        readPrefs: () => kv.prefs, writePrefs: (j) => { kv.prefs = j; },
+        readStopwatches: () => null, writeStopwatches: () => {}, sendCommand: () => {},
+      },
+    });
+    const page = '<!doctype html><html><body style="background:linear-gradient(#a5b4fc,#5eead4)"></body></html>';
+    const r = await callTool(deps, 'home_control', { action: 'set_background', value: 'html', html: page, name: 'Mint' });
+    expect(r.isError).toBeFalsy();
+    expect(textOf(r)).toMatch(/Custom HTML: "Mint"/);
+    expect(JSON.parse(kv.prefs!)).toMatchObject({ background: 'html', bgHtml: page, bgHtmlName: 'Mint' });
+    // The state the agent reads back does not echo the whole page.
+    const stateText = textOf(await callTool(deps, 'home_control', { action: 'get_state' }));
+    expect(stateText).not.toContain('linear-gradient(#a5b4fc');
+    expect(stateText).toContain('Mint');
+
+    await callTool(deps, 'home_control', { action: 'set_background', value: 'aurora' });
+    expect(JSON.parse(kv.prefs!)).toMatchObject({ background: 'aurora', bgHtml: page }); // saved HTML is kept
+    await callTool(deps, 'home_control', { action: 'set_background', value: 'html' });
+    expect(JSON.parse(kv.prefs!).background).toBe('html');
+
+    expect((await callTool(deps, 'home_control', { action: 'set_background_html', value: 'example' })).isError).toBeFalsy();
+    expect(JSON.parse(kv.prefs!)).toMatchObject({ background: 'html', bgHtml: '' });
+    await callTool(deps, 'home_control', { action: 'set_background_html', value: page, name: 'Again' });
+    expect(JSON.parse(kv.prefs!)).toMatchObject({ bgHtml: page, bgHtmlName: 'Again' });
+
+    expect((await callTool(deps, 'home_control', { action: 'set_background_html', value: 'x'.repeat(60_001) })).isError).toBe(true);
+    expect((await callTool(deps, 'home_control', { action: 'set_background', value: 'sunset', html: page })).isError).toBe(true);
+    expect(JSON.parse(kv.prefs!).bgHtmlName).toBe('Again');
+  });
+
+  it('home.html draws custom HTML in a locked sandbox and ships the example', () => {
+    const html = readFileSync(resolve(__dirname, '../www/home.html'), 'utf8');
+    expect(html).toMatch(/sandbox="allow-scripts"/);
+    expect(html).not.toMatch(/allow-same-origin/);
+    expect(html).toMatch(/default-src 'none'/);
+    expect(html).toMatch(/\.bg-frame \{[^}]*pointer-events: none/);
+    const example = readFileSync(resolve(__dirname, '../www/home-backgrounds/constellation.html'), 'utf8');
+    expect(example).toMatch(/prefers-color-scheme: dark/);
+    expect(example).toMatch(/prefers-reduced-motion/);
+    expect(example).toMatch(/HOME_MOTION/);
+  });
+
   it('home.html offers exactly the background catalogue the agent can set, and no theme switch', () => {
     const html = readFileSync(resolve(__dirname, '../www/home.html'), 'utf8');
     const block = html.slice(html.indexOf('const BACKGROUNDS = ['), html.indexOf('];', html.indexOf('const BACKGROUNDS = [')));
