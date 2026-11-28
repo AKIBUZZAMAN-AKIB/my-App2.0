@@ -184,7 +184,8 @@ pub fn handle(
         // Normally answered by the agent loop (with the platform's provider);
         // here the checklist's long-term group alone is written.
         "remember" | "forget" => {
-            let (text, is_error) = super::memory_checklist::long_term_apply(conn, None, action, args);
+            let own = super::memory_checklist::mem_scope(conn, env.session_key).own;
+            let (text, is_error) = super::memory_checklist::long_term_apply(conn, None, &own, action, args);
             Ok(if is_error { fail(action, text) } else { ok_text(action, text, json!({})) })
         }
         "" => Ok(fail("unknown", "action is required: view, set, category, summarize, recall, note, strategy, prompt, original, memory, remember, forget, task.")),
@@ -473,7 +474,8 @@ fn view(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled 
         }
     }
     let summary = select::summarize(&nodes);
-    let rendered = render::checklist(&env.budget, env.model, &blocks, rev, env.redact_paths);
+    let mut rendered = render::checklist(&env.budget, env.model, &blocks, rev, env.redact_paths);
+    rendered.push_str(&user_checklists_text(conn, env.session_key));
     Ok(ok_text(
         "view",
         rendered,
@@ -497,6 +499,27 @@ fn view(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled 
             })).collect::<Vec<_>>(),
         }),
     ))
+}
+
+/// The user's own checklists, listed under `ctx view` so the model knows what
+/// the person filed and switched off. Read-only for the model.
+fn user_checklists_text(conn: &rusqlite::Connection, session_key: &str) -> String {
+    let lists = store::load_user_checklists(conn, session_key).unwrap_or_default();
+    if lists.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\nUser checklists (the user's own; read-only for you, never delete):\n");
+    for l in lists {
+        let cap = l.cap_tokens.map(|c| format!(" cap {c}")).unwrap_or_default();
+        out.push_str(&format!(
+            "{} {} \"{}\"{cap}: {}\n",
+            if l.included { "●" } else { "○" },
+            l.id,
+            l.title,
+            if l.items.is_empty() { "(empty)".to_string() } else { l.items.join(", ") },
+        ));
+    }
+    out
 }
 
 fn set(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled {
@@ -590,6 +613,12 @@ fn category(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Hand
     let cats = store::load_categories(conn, env.session_key)?;
     let id = args.get("id").and_then(|v| v.as_str());
     let title = args.get("title").and_then(|v| v.as_str());
+    if id.is_some_and(|i| i.starts_with(store::USER_CHECKLIST_PREFIX)) {
+        return Ok(fail(
+            "category",
+            "ucl/… are the user's own checklists: you can read them in view, never rename or delete them.",
+        ));
+    }
 
     match (id, title) {
         // Create or rename.

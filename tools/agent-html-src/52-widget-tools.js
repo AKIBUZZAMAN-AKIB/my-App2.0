@@ -98,6 +98,8 @@ const WidgetTools = (() => {
     return cur;
   }
 
+  /** The current code, for an edit that did not match, so the next try copies it exactly. */
+  const codeHint = (code) => (typeof code === 'string' && code.length <= 6000 ? `\nCurrent code:\n${code}` : '');
   const specCode = (spec) => JSON.stringify({ root: spec.root, elements: spec.elements, state: spec.state }, null, 2);
 
   /** Applies one edit_widget call to the current code of its title; cached per call. */
@@ -115,7 +117,7 @@ const WidgetTools = (() => {
     const list = Array.isArray(a.edits) ? a.edits : isObj(a.edits) ? [a.edits] : (a.old_string != null ? [{ old_string: a.old_string, new_string: a.new_string }] : null);
     if (target.kind === 'html') {
       const r = C.applyEdits(target.html, list);
-      if (!r.ok) return fail(`${r.error} Nothing was changed.`);
+      if (!r.ok) return fail(`${r.error} Nothing was changed.${codeHint(target.html)}`);
       if (!r.source.trim()) return fail('The edits would leave the widget empty. Nothing was changed.');
       if (r.source.length > MAX_CODE) return fail(`The edited code is ${r.source.length} characters; the limit is ${MAX_CODE}. Nothing was changed.`);
       const done = { kind: 'html', title: target.title, html: r.source, number: target.number + 1, count: list.length, prevId: target.id };
@@ -125,8 +127,9 @@ const WidgetTools = (() => {
     }
     let spec = editStore.get(id);
     if (!spec) {
-      const r = C.applyEdits(specCode(target.version.spec), list);
-      if (!r.ok) return fail(`${r.error} Nothing was changed. The code of a render_spec/present widget is its spec as JSON with 2-space indent: {"root", "elements", "state"}.`);
+      const code = specCode(target.version.spec);
+      const r = C.applyEdits(code, list);
+      if (!r.ok) return fail(`${r.error} Nothing was changed. The code of a render_spec/present widget is its spec as JSON with 2-space indent: {"root", "elements", "state"}.${codeHint(code)}`);
       try { spec = JSON.parse(r.source); } catch (e) { return fail(`After the edits the spec is not valid JSON (${e.message}). Nothing was changed.`); }
       if (!isObj(spec)) return fail('After the edits the spec is not a JSON object. Nothing was changed.');
       editStore.put(id, spec);
@@ -198,16 +201,42 @@ const WidgetTools = (() => {
     return lines.join('\n');
   }
 
+  /** A later edit_widget call in the same thread that changed the same widget. */
+  function retriedLater(part) {
+    const rt = runtimeFor(null, part.toolCallId);
+    const key = tkey(part.args?.title);
+    let after = false;
+    for (const p of toolParts(messagesOf(rt))) {
+      if (p.toolCallId === part.toolCallId) { after = true; continue; }
+      if (!after || bare(p.toolName) !== 'edit_widget' || p.isError || p.result === undefined) continue;
+      if (tkey(p.args?.title) !== key) continue;
+      const d = edits.get(p.toolCallId);
+      if (!d || !d.error) return true;
+    }
+    return false;
+  }
+  /** A failed edit: nothing when a later edit of the same widget went through (the agent
+   * fixed it itself), else one quiet line that opens to the reason. */
+  function editFailed(part, error) {
+    if (retriedLater(part)) return h('span', { class: 'wt-edit-retried', hidden: true });
+    const title = String(part.args?.title || '').trim();
+    const raw = String(error || (typeof part.result === 'string' ? part.result : part.result?.content ?? part.result?.output ?? '') || '');
+    const reason = raw.replace(/^(Error:\s*)+/i, '').split(/\n(?:Current code|The current code)/)[0].trim();
+    return h('details', { class: 'wt-edit-failed' },
+      h('summary', {}, h('span', { class: 'wt-edit-failed-dot', 'aria-hidden': 'true' }), title ? `Couldn't update “${title}”` : "Couldn't update the widget", h('span', { class: 'wt-edit-failed-more' }, 'Why')),
+      reason ? h('p', { class: 'wt-edit-failed-reason' }, reason.length > 400 ? `${reason.slice(0, 400)}…` : reason) : null);
+  }
+
   function editCard(part, status) {
     const id = part.toolCallId;
-    if (part.isError) return h('p', { class: 'field-hint wt-edit-failed' }, 'The widget edit did not apply.');
+    if (part.isError) return editFailed(part, edits.get(id)?.error);
     let done = edits.get(id);
     if (!done && part.result !== undefined) {
       const rt = runtimeFor(null, id);
       if (rt) { const cur = replay(messagesOf(rt), id, { sessionKey: rt.id }); done = computeEdit(part, cur, { sessionKey: rt.id }); }
     }
     if (!done) return h('p', { class: 'field-hint' }, status?.type === 'running' ? `Editing ${String(part.args?.title || 'the widget')}…` : 'The widget edit did not finish.');
-    if (done.error) return h('p', { class: 'field-hint wt-edit-failed' }, 'The widget edit did not apply.');
+    if (done.error) return editFailed(part, done.error);
     if (done.kind === 'spec') {
       const v = GenUI.calls.get(done.versionId);
       return v ? v.card() : h('p', { class: 'field-hint' }, 'This version is no longer available.');

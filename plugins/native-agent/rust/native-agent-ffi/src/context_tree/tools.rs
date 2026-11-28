@@ -91,9 +91,9 @@ pub fn legacy_names() -> Vec<&'static str> {
 pub fn tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: CTX_TOOL.into(),
-        description: "See and steer what is in your context window: a checklist of every item with its token \
-cost and state. Nothing is lost (anything out is stored and recallable); locked rules and essentials \
-cannot be removed."
+        description: "See and steer your context window: each item's token cost and state. Nothing \
+is lost (what is out stays recallable); locked rules and essentials cannot be removed. ucl/* are the \
+user's checklists: never delete them."
 .into(),
         input_schema: schema(),
         webview_only: false,

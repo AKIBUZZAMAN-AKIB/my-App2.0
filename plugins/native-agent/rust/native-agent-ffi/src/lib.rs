@@ -817,6 +817,9 @@ impl NativeAgentHandle {
         let messages = db::load_session_messages_raw(&conn, &session_key)?;
         let cut = Self::locate_cut(&messages, keep_user_turns, expected_prompt.as_deref())?;
         let removed = messages.len() - cut;
+        // Turns kept whole. A cut at a message that joined an open turn (a
+        // steer) goes through that turn: its memory goes with the rest.
+        let kept_turns = turn_memory::whole_turns_before(&messages, cut);
         let kept: Vec<types::Message> = messages.into_iter().take(cut).collect();
         if removed > 0 {
             let agent_id = db::load_session_agent_id(&conn, &session_key)?
@@ -836,14 +839,10 @@ impl NativeAgentHandle {
                     now,
                     None,
                 )?;
-                turn_memory::forget_after(
-                    tx,
-                    &session_key,
-                    turn_memory::split_turns(&kept).len() as u32,
-                    now,
-                )
-                .map_err(|e| NativeAgentError::Database {
-                    msg: format!("memory: {}", e),
+                turn_memory::forget_after(tx, &session_key, kept_turns, now).map_err(|e| {
+                    NativeAgentError::Database {
+                        msg: format!("memory: {}", e),
+                    }
                 })?;
                 Ok::<(), NativeAgentError>(())
             })?;
@@ -1095,6 +1094,18 @@ impl NativeAgentHandle {
             req.get("action").and_then(|v| v.as_str())
         {
             self.ensure_no_turn_in_flight(&action.replace("memory.", "change the memory: "))?;
+        }
+        // A sub-agent's panel shows its own long-term memory as it stands
+        // now (entries saved or cleared from its Memory tab included).
+        if let (Some("ctx.tree" | "ctx.memory"), Some(key)) = (
+            req.get("action").and_then(|v| v.as_str()),
+            req.get("sessionKey").and_then(|v| v.as_str()),
+        ) {
+            if key.starts_with(context_tree::memory_checklist::SUBAGENT_KEY_PREFIX) {
+                if let Ok(conn) = db::open_db(&self.config.db_path) {
+                    agent_loop::sync_own_memory(&conn, key, &self.subagents);
+                }
+            }
         }
         if let Some(out) = memory_request(&self.config, &req) {
             let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
@@ -2462,6 +2473,11 @@ pub(crate) fn memory_action(
             let window = req.get("window").and_then(|v| v.as_u64()).unwrap_or(0);
             context_tree::wiring::snapshot_on(conn, key, None, window, "")
         }
+        "ctx.requests" => {
+            // The request ledger alone: every model request per turn (how many,
+            // tokens full / sent / saved, provider input and output).
+            context_tree::request_log::summary(conn, key)
+        }
         "ctx.set" => {
             // The checklist in the context panel: the person takes items out of
             // the window or brings them back, through the same batch the model's
@@ -2516,6 +2532,57 @@ pub(crate) fn memory_action(
                 o.insert("memory".into(), m["memory"].clone());
             }
             out
+        }
+        "ctx.checklist" => {
+            // The person's own checklists (store.rs `ucl/…`) and the switch on
+            // the model's (`cat/…`, `task/pick`). `op`: create, rename, cap,
+            // delete, include, exclude, add, remove. Returns the new lists.
+            use context_tree::store as cs;
+            cs::ensure_tables(conn).map_err(|e| err(e.to_string()))?;
+            let now = now_millis();
+            let op = req.get("op").and_then(|v| v.as_str()).unwrap_or("");
+            let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let title = req.get("title").and_then(|v| v.as_str());
+            let cap = req.get("cap").and_then(|v| v.as_i64());
+            let items: Vec<String> = req
+                .get("items")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let mine = id.starts_with(cs::USER_CHECKLIST_PREFIX);
+            let res: rusqlite::Result<(bool, String)> = turn_memory::write_tx(conn, |tx| {
+                let _ = cs::ensure_session(tx, key, now);
+                let out = match op {
+                    "create" => {
+                        let nid = cs::create_user_checklist(tx, key, title.unwrap_or(""), cap, now)?;
+                        if !items.is_empty() {
+                            cs::add_checklist_items(tx, key, &nid, &items, now)?;
+                        }
+                        (true, nid)
+                    }
+                    "rename" if mine => (cs::update_user_checklist(tx, key, &id, title, None, now)?, id.clone()),
+                    "cap" if mine => (cs::update_user_checklist(tx, key, &id, None, Some(cap), now)?, id.clone()),
+                    "delete" if mine => (cs::delete_user_checklist(tx, key, &id)?, id.clone()),
+                    "include" | "exclude" if !id.is_empty() => {
+                        (cs::set_checklist_included(tx, key, &id, op == "include", now)?, id.clone())
+                    }
+                    "add" if mine => (cs::add_checklist_items(tx, key, &id, &items, now)? > 0, id.clone()),
+                    "remove" if mine => (cs::remove_checklist_items(tx, key, &id, &items)? > 0, id.clone()),
+                    _ => (false, id.clone()),
+                };
+                if out.0 {
+                    let _ = cs::bump_rev(tx, key, now);
+                }
+                Ok(out)
+            });
+            let (ok, nid) = res.map_err(|e: rusqlite::Error| err(e.to_string()))?;
+            let nodes = cs::load_nodes(conn, key).unwrap_or_default();
+            serde_json::json!({
+                "ok": ok,
+                "op": op,
+                "id": nid,
+                "checklists": context_tree::wiring::checklists_json(conn, key, &nodes),
+            })
         }
         "ctx.reset" => {
             // Plan §15.4: start this chat's tree again. Every ctx_* row of the

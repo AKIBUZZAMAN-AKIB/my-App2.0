@@ -353,11 +353,13 @@ const AgentTabs = (() => {
 
   /* ---- Settings: every per-agent control, each with \u201cuse the default\u201d ---- */
   // [key on the record, label, kind, {min,max,step,hint,nullable}]
+  // Messaging rules (rate limit, who it may message, hidden) live in Team > Agent rules
+  // and tools in the Tools tab, so Settings does not repeat them.
   const FIELDS = [
     ['title', 'Title', 'text', { maxLength: 120, hint: 'A short label shown under its name. Up to 120 characters.' }],
     ['description', 'Description', 'textarea', { maxLength: 1000, hint: 'What it is for. Up to 1,000 characters.' }],
-    ['model', 'Model', 'text', { hint: 'Empty = the main agent\u2019s model.' }],
-    ['provider', 'Provider', 'text', { hint: 'Empty = the main agent\u2019s provider.' }],
+    ['provider', 'Provider', 'pick', { hint: 'Default = the main agent\u2019s provider. Only providers with a connected key (and the Free Router) can be picked; it applies from its next run.' }],
+    ['model', 'Model', 'pick', { hint: 'The models of the provider above. Default = that provider\u2019s default (or the main agent\u2019s model when the provider is Default). Type an id to use one that is not listed.' }],
     ['temperature', 'Temperature', 'number', { min: 0, max: 2, step: 0.1, nullable: true, hint: '0\u20132. Empty = the app\u2019s setting.' }],
     ['systemPrompt', 'System prompt', 'textarea', { hint: 'Added to its instructions. Empty = none.' }],
     ['maxChildDepth', 'Levels it may start below itself', 'int', { min: 0, max: 3, nullable: true, hint: '0 = it cannot start agents. Empty = the chat limit.' }],
@@ -365,13 +367,12 @@ const AgentTabs = (() => {
     ['timeoutSeconds', 'Time limit (seconds)', 'int', { min: 10, max: 86400, hint: 'It stops after this long.' }],
     ['tokenBudget', 'Token budget', 'int', { min: 0, max: 5000000, hint: '0 = no cap, like the main agent: auto-compaction keeps it within its model\u2019s context window. Else input + output tokens over all steps.' }],
     ['maxSteps', 'Max steps', 'int', { min: 1, max: 200 }],
-    ['peerRateLimit', 'Messages to other agents per minute', 'int', { min: 0, max: 600, nullable: true, hint: '0 = no limit. Empty = the chat-wide limit.' }],
   ];
   const compactionOf = (r) => (r.compaction && typeof r.compaction === 'object' ? r.compaction : null);
   function validate(kind, raw, o) {
     const v = String(raw ?? '').trim();
     if (o.maxLength && v.length > o.maxLength) return { ok: false, msg: `At most ${o.maxLength} characters (now ${v.length}).` };
-    if (kind === 'text' || kind === 'textarea' || kind === 'select') return { ok: true, value: v };
+    if (kind === 'text' || kind === 'textarea' || kind === 'select' || kind === 'pick') return { ok: true, value: v };
     if (!v) return o.nullable ? { ok: true, value: null } : { ok: false, msg: 'Needs a value.' };
     const n = Number(v);
     if (!Number.isFinite(n) || (kind === 'int' && !Number.isInteger(n))) return { ok: false, msg: kind === 'int' ? 'Whole number.' : 'A number.' };
@@ -383,10 +384,19 @@ const AgentTabs = (() => {
     const { r } = ctx;
     const teamOk = ctx.can('subagentTeam');
     const inputs = new Map();
+    // Provider and model: searchable pickers fed by the main chat's provider and model lists.
+    const picker = typeof SubagentModelPicker !== 'undefined' ? SubagentModelPicker.create(r) : null;
     const rows = FIELDS.map(([key, label, kind, o]) => {
       const id = `sa-set-${key}`;
       const cur = r[key];
       let input;
+      if (kind === 'pick' && picker) {
+        const p = picker[key];
+        const err = h('p', { class: 'field-error', role: 'alert', 'data-error-for': key, hidden: true });
+        inputs.set(key, { input: p.input, err, kind, o });
+        return h('div', { class: 'field sa-vfield sa-vpick', 'data-field': key }, withInfo(h('label', { class: 'label', for: id }, label), o.hint, label), p.button, p.input, p.note || null, err);
+      }
+      if (kind === 'pick') kind = 'text';
       if (kind === 'select') {
         input = h('select', { id, class: 'select', 'data-key': key }, ...ctx.MEMORY_MODES.map(([v, l]) => h('option', { value: v, selected: v === (cur || 'private') }, l)));
       } else if (kind === 'textarea') {
@@ -429,7 +439,7 @@ const AgentTabs = (() => {
       for (const [key, { input, err, kind, o }] of inputs) {
         const res = validate(kind, input.value, o);
         if (!res.ok) { err.textContent = res.msg; err.hidden = false; input.setAttribute('aria-invalid', 'true'); if (!bad) input.focus(); bad = true; continue; }
-        const before = r[key] ?? (kind === 'text' || kind === 'textarea' ? '' : null);
+        const before = r[key] ?? (kind === 'text' || kind === 'textarea' || kind === 'pick' ? '' : null);
         if (JSON.stringify(res.value) !== JSON.stringify(before)) patch[key] = res.value;
       }
       if (mode.value === 'default') { if (own) patch.compaction = null; } else {

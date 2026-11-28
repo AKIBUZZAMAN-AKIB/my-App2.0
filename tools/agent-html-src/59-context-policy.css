@@ -127,3 +127,88 @@
   .cp-sec { padding: 0.625rem; }
   .cp-seg-btn { padding: 0 0.625rem; }
 }
+
+/* Overall: totals over this chat's tasks, and whether the policy really shortens requests. */
+.cp-ov { display: flex; flex-direction: column; gap: 8px; }
+.cp-ov-check { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 8px 10px; border-radius: 10px; font-size: 0.75rem; line-height: 1.45; background: var(--muted); border-left: 3px solid var(--muted-foreground); color: var(--muted-foreground); }
+.cp-ov-check-ok { border-left-color: #2fa86a; color: var(--foreground); }
+.cp-ov-check-full { border-left-color: #c08a2e; color: var(--foreground); }
+.cp-ov-badge { flex: none; padding: 0 7px; border-radius: 999px; font-size: 0.625rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.cp-ov-ok { background: color-mix(in srgb, #2fa86a 20%, transparent); color: #23935b; }
+.cp-ov-full { background: color-mix(in srgb, #c08a2e 22%, transparent); color: #a2731f; }
+.cp-ov-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; margin: 0; }
+.cp-ov-tile { min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
+.cp-ov-tile dt { color: var(--muted-foreground); font-size: 0.6875rem; }
+.cp-ov-tile dd { margin: 2px 0 0; font-size: 1.0625rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cp-ov-sub { display: block; color: var(--muted-foreground); font-size: 0.6875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cp-ov-tile-hero { border-color: color-mix(in srgb, #2fa86a 45%, var(--border)); background: color-mix(in srgb, #2fa86a 8%, var(--background)); }
+.cp-ov-tile-hero dd { color: #23935b; }
+.cp-ov-bars { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.cp-ov-bar-head { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; }
+.cp-ov-bar-name { color: var(--muted-foreground); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-ov-bar-num { margin-left: auto; color: var(--muted-foreground); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cp-ov-track { display: block; height: 6px; margin-top: 3px; border-radius: 3px; overflow: hidden; background: var(--muted); }
+.cp-ov-fill { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #2fa86a, var(--primary)); }
+.cp-ov-src { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 0.75rem; }
+.cp-tab-block { margin: 10px 0; }
+.cp-tab-block > .cp-h { margin: 0 0 6px; }
+
+
+/* ---- Professional panel pass: one calm surface, clear hierarchy, nothing leaves the panel. */
+.cc-policy { min-width: 0; max-width: 100%; overflow-x: hidden; padding-bottom: calc(4px + env(safe-area-inset-bottom, 0px)); }
+.cp-root { gap: 0.875rem; }
+.cp-root select.cp-input { appearance: none; -webkit-appearance: none; padding-right: 1.75rem; background-image: linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%), linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%); background-position: calc(100% - 0.85rem) 55%, calc(100% - 0.55rem) 55%; background-size: 0.3rem 0.3rem; background-repeat: no-repeat; text-overflow: ellipsis; }
+.cp-input, .cp-json { transition: border-color .15s, box-shadow .15s; }
+.cp-input:focus, .cp-json:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent); }
+.cp-sec { gap: 0.625rem; padding: 0.875rem; border-radius: 0.75rem; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); }
+.cp-h { font-size: 0.6875rem; letter-spacing: 0.06em; }
+.cp-tab { gap: 0.75rem; padding: 0.125rem 0 0.25rem; }
+.cp-tab > .cp-row:last-child { position: sticky; bottom: 0; padding: 0.5rem 0 0.125rem; background: linear-gradient(to bottom, transparent, var(--popover, var(--background)) 35%); }
+.cp-tab > .cp-row:last-child .cp-btn { flex: 1 1 auto; min-height: 2.25rem; }
+.cp-tab-block { margin: 0; padding: 0.75rem; border: 1px solid var(--border); border-radius: 0.75rem; background: var(--card, var(--background)); min-width: 0; }
+.cp-tab .cp-seg { display: flex; width: 100%; }
+.cp-tab .cp-seg-btn { flex: 1 1 0; }
+.cp-tab .cp-row-wrap > .cp-muted { font-size: 0.75rem; }
+
+/* what the next request really uses */
+.cp-eff { display: grid; grid-template-columns: 1fr; gap: 2px; padding: 0.5rem 0.625rem; border-radius: 0.5rem; border: 1px solid var(--border); background: var(--background); font-size: 0.75rem; }
+.cp-eff-k { font-size: 0.625rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-foreground); }
+.cp-eff-v { font-weight: 600; color: var(--foreground); overflow-wrap: anywhere; }
+.cp-eff-note { color: var(--muted-foreground); font-size: 0.6875rem; }
+.cp-eff-warn { border-color: color-mix(in srgb, var(--warning, #d97706) 55%, var(--border)); background: color-mix(in srgb, var(--warning, #d97706) 9%, var(--background)); }
+.cp-eff-off .cp-eff-v { color: var(--muted-foreground); }
+.cp-ov-tile-empty dd { color: var(--muted-foreground); }
+
+/* rules: ranked, draggable, contained */
+.cp-drag-hint { margin: 0; }
+.cp-rules { position: relative; counter-reset: none; overflow: hidden; padding: 2px 0; }
+.cp-rule { position: relative; background: var(--background); transition: box-shadow .15s, border-color .15s, opacity .15s; }
+.cp-rule-off { opacity: 0.6; }
+.cp-rule-head { flex-wrap: nowrap; min-width: 0; }
+.cp-rule-head .cp-rule-id { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-rule-btns { display: inline-flex; gap: 0.25rem; flex: none; }
+.cp-rule-head .cp-btn:first-of-type { margin-left: 0; }
+.cp-drag { flex: none; display: inline-grid; place-items: center; width: 1.75rem; height: 2rem; margin: -0.25rem 0 -0.25rem -0.25rem; border: 0; border-radius: 0.375rem; background: transparent; color: var(--muted-foreground); font-size: 1.125rem; line-height: 1; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.cp-drag:hover { background: var(--muted); color: var(--foreground); }
+.cp-drag:focus-visible { outline: 2px solid var(--ring, var(--primary)); outline-offset: 1px; }
+.cp-rank { flex: none; display: inline-grid; place-items: center; min-width: 1.25rem; height: 1.25rem; padding: 0 0.25rem; border-radius: 999px; background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); font-size: 0.6875rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cp-sorting { user-select: none; -webkit-user-select: none; }
+.cp-sorting .cp-rule:not(.cp-dragging) { transition: transform .12s; }
+.cp-dragging { z-index: 2; border-color: var(--primary); box-shadow: 0 8px 20px rgb(0 0 0 / 0.18); cursor: grabbing; transition: none; }
+.cp-dragging .cp-drag { cursor: grabbing; color: var(--primary); }
+@media (max-width: 380px) {
+  .cp-rule-head { flex-wrap: wrap; }
+  .cp-rule-btns { margin-left: auto; }
+  .cp-rule-head .cp-rule-id { flex-basis: 6rem; }
+}
+
+/* builder: conditions in tidy rows that wrap inside the panel */
+.cp-cond { padding: 0.375rem; border: 1px dashed var(--border); border-radius: 0.5rem; }
+.cp-cond > .cp-input { min-width: 0; }
+.cp-cond > select:first-child { flex: 1 1 9rem; }
+.cp-cond > .cp-input-op { flex: 0 0 auto; }
+.cp-cond > input, .cp-cond > select:nth-child(3) { flex: 1 1 5rem; }
+.cp-dialog-body { scroll-padding: 3rem 0; }
+.cp-rule-foot { display: flex; align-items: center; justify-content: flex-end; margin-top: 0.375rem; padding-top: 0.375rem; border-top: 1px solid var(--border); }
+.cp-rule-foot .cp-prio { display: inline-flex; align-items: center; gap: 0.375rem; }
+.cp-rule-foot .cp-input-num { width: 4.25rem; min-height: 1.75rem; }

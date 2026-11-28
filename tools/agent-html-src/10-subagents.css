@@ -162,9 +162,6 @@
 .sa-detail-desc { color: var(--muted-foreground, #64748b); margin: 0.15rem 0 0.25rem; font-size: 0.875rem; }
 .sa-links { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; }
 .sa-link { padding: 0; height: auto; text-decoration: underline; text-underline-offset: 2px; }
-.sa-setup > summary { display: flex; align-items: baseline; gap: 0.5rem; cursor: pointer; list-style: none; }
-.sa-setup > summary::-webkit-details-marker { display: none; }
-.sa-setup[open] > summary { margin-bottom: 0.5rem; }
 .sa-flash { outline: 2px solid var(--ring, #7c3aed); outline-offset: 2px; border-radius: 0.5rem; transition: outline-color 0.4s; }
 /* Small graph inside the spawning message's card */
 .sa-mini-graph { list-style: none; margin: 0.25rem 0 0; padding: 0.4rem 0.5rem; border: 1px dashed var(--border, #e5e7eb); border-radius: 0.5rem; display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8125rem; }

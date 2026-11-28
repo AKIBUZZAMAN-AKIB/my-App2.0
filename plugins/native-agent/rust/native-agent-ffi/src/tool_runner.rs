@@ -532,7 +532,7 @@ pub async fn execute_tool(
     }
 }
 
-/// Keep the checklist's long-term group (`ctx_mem_longterm`, every chat) in
+/// Keep the main agent's long-term group (`ctx_mem_longterm`) in
 /// step with a write that went through the old memory_* tools, so the tree
 /// shows what the provider holds without the model recalling it again.
 pub(crate) fn mirror_long_term(
@@ -541,7 +541,10 @@ pub(crate) fn mirror_long_term(
     result: &serde_json::Value,
     db_path: &str,
 ) {
+    // A sub-agent's own store: the agent loop mirrors it into that
+    // sub-agent's scope from the store itself, never into the main agent's.
     if result.get("error").is_some()
+        || result.get("memory").and_then(|v| v.as_str()) == Some("subagent")
         || result.get("success").and_then(|v| v.as_bool()) == Some(false)
         || !matches!(name, "memory_store" | "memory_forget")
     {

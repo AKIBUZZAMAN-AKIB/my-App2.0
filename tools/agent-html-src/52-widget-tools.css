@@ -7,5 +7,12 @@
 .wt-check[data-state="running"] svg { animation: aui-spin 1s linear infinite; }
 .wt-check[data-state="ok"] svg { color: var(--success); }
 .wt-check[data-state="issues"] svg, .wt-check[data-state="failed"] svg { color: var(--warning); }
-.wt-edit-failed { color: var(--muted-foreground); }
+.wt-edit-failed { color: var(--muted-foreground); font-size: 0.8125rem; margin: 0.25rem 0; }
+.wt-edit-failed > summary { display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; list-style: none; padding: 0.25rem 0.625rem; border: 1px solid var(--border); border-radius: 999px; }
+.wt-edit-failed > summary::-webkit-details-marker { display: none; }
+.wt-edit-failed-dot { width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--muted-foreground); opacity: 0.7; flex: none; }
+.wt-edit-failed-more { opacity: 0.7; text-decoration: underline; text-underline-offset: 2px; }
+.wt-edit-failed[open] .wt-edit-failed-more { display: none; }
+.wt-edit-failed-reason { margin: 0.375rem 0 0; padding: 0.5rem 0.75rem; border-radius: 0.5rem; background: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.wt-edit-retried { display: none; }
 @media (prefers-reduced-motion: reduce) { .wt-check[data-state="running"] svg { animation: none; } }

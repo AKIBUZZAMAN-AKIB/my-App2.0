@@ -181,6 +181,31 @@ pub fn ensure_tables(conn: &Connection) -> Result<()> {
             reason        TEXT
         );
         CREATE INDEX IF NOT EXISTS ctx_action_log_session ON ctx_action_log(session_key, seq);
+        CREATE TABLE IF NOT EXISTS ctx_checklists (
+            session_key TEXT NOT NULL,
+            id          TEXT NOT NULL,
+            title       TEXT NOT NULL,
+            owner       TEXT NOT NULL DEFAULT 'user',
+            cap_tokens  INTEGER,
+            included    INTEGER NOT NULL DEFAULT 1,
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL,
+            deleted     INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_key, id)
+        );
+        CREATE TABLE IF NOT EXISTS ctx_checklist_items (
+            session_key  TEXT NOT NULL,
+            checklist_id TEXT NOT NULL,
+            item_id      TEXT NOT NULL,
+            ord          INTEGER NOT NULL DEFAULT 0,
+            added_at     INTEGER NOT NULL,
+            PRIMARY KEY (session_key, checklist_id, item_id)
+        );
+        CREATE TABLE IF NOT EXISTS ctx_checklist_off (
+            session_key TEXT NOT NULL,
+            id          TEXT NOT NULL,
+            PRIMARY KEY (session_key, id)
+        );
         "#,
     )?;
     conn.execute(
@@ -753,6 +778,31 @@ pub fn temp_sources(conn: &Connection, session_key: &str, id: &str) -> Result<Ve
         .unwrap_or_default())
 }
 
+/// Every temp summary of a session, by id: what it stands in for, its focus,
+/// who made it and when. The panel uses it to show a summary where its turns
+/// were and to say which turns it covers.
+pub fn temp_summary_meta(
+    conn: &Connection,
+    session_key: &str,
+) -> Result<std::collections::HashMap<String, (Vec<String>, Option<String>, String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, sources, focus, made_by, created_at FROM ctx_temp_summaries WHERE session_key = ?1",
+    )?;
+    let rows = stmt.query_map(params![session_key], |r| {
+        let sources: String = r.get(1)?;
+        Ok((
+            r.get::<_, String>(0)?,
+            (
+                serde_json::from_str::<Vec<String>>(&sources).unwrap_or_default(),
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, i64>(4)?,
+            ),
+        ))
+    })?;
+    rows.collect()
+}
+
 /// Never keep more than the newest 20 strategy versions: they are edits of one
 /// document, and the model only ever needs the last few.
 pub fn put_strategy(
@@ -1105,6 +1155,12 @@ pub fn reset_session(conn: &Connection, session_key: &str) -> Result<ResetReport
         "DELETE FROM ctx_categories WHERE session_key = ?1",
         params![session_key],
     )?;
+    for t in ["ctx_checklists", "ctx_checklist_items", "ctx_checklist_off"] {
+        conn.execute(
+            &format!("DELETE FROM {t} WHERE session_key = ?1"),
+            params![session_key],
+        )?;
+    }
     conn.execute(
         "DELETE FROM ctx_sessions WHERE session_key = ?1",
         params![session_key],
@@ -1114,6 +1170,8 @@ pub fn reset_session(conn: &Connection, session_key: &str) -> Result<ResetReport
     super::memory_checklist::reset_session(conn, session_key)?;
     // The task context policy rows of the chat (pin, tasks, events) go too.
     crate::context_policy::store::reset_session(conn, session_key)?;
+    // The request ledger of the chat (requests per turn, tokens sent and saved).
+    super::request_log::clear(conn, session_key)?;
     Ok(r)
 }
 
@@ -1154,6 +1212,307 @@ pub const MAX_ACTION_LOG_ROWS: i64 = 20_000;
 
 /// How often the quotas run: every this many turns of a session (plan §6.6).
 pub const GC_EVERY_TURNS: u32 = 50;
+
+// ---------------------------------------------------------------- user checklists
+
+/// Prefix of the checklists the person makes in the panel. The model sees them
+/// in `ctx view` but can never rename or delete them.
+pub const USER_CHECKLIST_PREFIX: &str = "ucl/";
+/// The model's `ctx task` pick, as a checklist the person can switch off.
+pub const AI_TASK_CHECKLIST_ID: &str = "task/pick";
+
+/// A checklist the person made: a title, an optional token cap, a switch for
+/// the whole list, and the items filed in it. Items are referenced by id only;
+/// they stay where they live, so deleting the list loses nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserChecklist {
+    pub id: String,
+    pub title: String,
+    pub cap_tokens: Option<i64>,
+    pub included: bool,
+    pub created_at: i64,
+    pub items: Vec<String>,
+}
+
+impl UserChecklist {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "id": self.id,
+            "title": self.title,
+            "cap": self.cap_tokens,
+            "included": self.included,
+            "createdAt": self.created_at,
+            "items": self.items,
+            "source": "user",
+        })
+    }
+}
+
+fn clean_title(title: &str) -> String {
+    let t: String = title.trim().chars().take(120).collect();
+    if t.is_empty() {
+        "Checklist".into()
+    } else {
+        t
+    }
+}
+
+fn clean_cap(cap: Option<i64>) -> Option<i64> {
+    cap.filter(|c| *c > 0).map(|c| c.min(1_000_000))
+}
+
+/// Create a user checklist (`ucl/N`, numbers never reused). Returns its id.
+pub fn create_user_checklist(
+    conn: &Connection,
+    session_key: &str,
+    title: &str,
+    cap_tokens: Option<i64>,
+    now_ms: i64,
+) -> Result<String> {
+    let next: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(CAST(SUBSTR(id, 5) AS INTEGER)), 0) + 1 FROM ctx_checklists
+         WHERE session_key = ?1 AND id LIKE 'ucl/%'",
+        params![session_key],
+        |r| r.get(0),
+    )?;
+    let id = format!("{USER_CHECKLIST_PREFIX}{next}");
+    conn.execute(
+        "INSERT INTO ctx_checklists (session_key, id, title, owner, cap_tokens, included, created_at, updated_at)
+         VALUES (?1, ?2, ?3, 'user', ?4, 1, ?5, ?5)",
+        params![session_key, id, clean_title(title), clean_cap(cap_tokens), now_ms],
+    )?;
+    Ok(id)
+}
+
+/// Rename a user checklist and/or change its cap (`Some(None)` clears the cap).
+pub fn update_user_checklist(
+    conn: &Connection,
+    session_key: &str,
+    id: &str,
+    title: Option<&str>,
+    cap_tokens: Option<Option<i64>>,
+    now_ms: i64,
+) -> Result<bool> {
+    let mut n = 0;
+    if let Some(t) = title {
+        n += conn.execute(
+            "UPDATE ctx_checklists SET title = ?3, updated_at = ?4
+             WHERE session_key = ?1 AND id = ?2 AND owner = 'user' AND deleted = 0",
+            params![session_key, id, clean_title(t), now_ms],
+        )?;
+    }
+    if let Some(c) = cap_tokens {
+        n += conn.execute(
+            "UPDATE ctx_checklists SET cap_tokens = ?3, updated_at = ?4
+             WHERE session_key = ?1 AND id = ?2 AND owner = 'user' AND deleted = 0",
+            params![session_key, id, clean_cap(c), now_ms],
+        )?;
+    }
+    Ok(n > 0)
+}
+
+/// Switch a whole checklist on or off. A user checklist keeps the flag on its
+/// row; an AI one (`cat/…`, `task/pick`) is listed in `ctx_checklist_off`.
+pub fn set_checklist_included(
+    conn: &Connection,
+    session_key: &str,
+    id: &str,
+    included: bool,
+    now_ms: i64,
+) -> Result<bool> {
+    if id.starts_with(USER_CHECKLIST_PREFIX) {
+        return Ok(conn.execute(
+            "UPDATE ctx_checklists SET included = ?3, updated_at = ?4
+             WHERE session_key = ?1 AND id = ?2 AND deleted = 0",
+            params![session_key, id, included as i64, now_ms],
+        )? > 0);
+    }
+    if included {
+        conn.execute(
+            "DELETE FROM ctx_checklist_off WHERE session_key = ?1 AND id = ?2",
+            params![session_key, id],
+        )?;
+    } else {
+        conn.execute(
+            "INSERT OR IGNORE INTO ctx_checklist_off (session_key, id) VALUES (?1, ?2)",
+            params![session_key, id],
+        )?;
+    }
+    Ok(true)
+}
+
+/// The AI checklists the person switched off.
+pub fn ai_checklists_off(conn: &Connection, session_key: &str) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT id FROM ctx_checklist_off WHERE session_key = ?1") {
+        if let Ok(rows) = stmt.query_map(params![session_key], |r| r.get::<_, String>(0)) {
+            out.extend(rows.flatten());
+        }
+    }
+    out
+}
+
+/// Whether the model's `ctx task` pick is switched off (then the task runs with
+/// full context). False when the tables do not exist yet.
+pub fn ai_task_pick_off(conn: &Connection, session_key: &str) -> bool {
+    ai_checklists_off(conn, session_key).contains(AI_TASK_CHECKLIST_ID)
+}
+
+/// Delete a user checklist. Its items were only referenced, so they simply show
+/// where they came from again; nothing else changes.
+pub fn delete_user_checklist(conn: &Connection, session_key: &str, id: &str) -> Result<bool> {
+    let n = conn.execute(
+        "UPDATE ctx_checklists SET deleted = 1
+         WHERE session_key = ?1 AND id = ?2 AND owner = 'user' AND deleted = 0",
+        params![session_key, id],
+    )?;
+    conn.execute(
+        "DELETE FROM ctx_checklist_items WHERE session_key = ?1 AND checklist_id = ?2",
+        params![session_key, id],
+    )?;
+    Ok(n > 0)
+}
+
+/// File items in a user checklist, in order. An item lives in at most one user
+/// checklist, so it leaves any other first. Returns how many were added.
+pub fn add_checklist_items(
+    conn: &Connection,
+    session_key: &str,
+    id: &str,
+    item_ids: &[String],
+    now_ms: i64,
+) -> Result<usize> {
+    let live: bool = conn
+        .query_row(
+            "SELECT 1 FROM ctx_checklists WHERE session_key = ?1 AND id = ?2 AND owner = 'user' AND deleted = 0",
+            params![session_key, id],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if !live {
+        return Ok(0);
+    }
+    let mut ord: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(ord), 0) FROM ctx_checklist_items WHERE session_key = ?1 AND checklist_id = ?2",
+        params![session_key, id],
+        |r| r.get(0),
+    )?;
+    let mut added = 0;
+    for item in item_ids {
+        let item = item.trim();
+        if item.is_empty() || item.len() > 160 {
+            continue;
+        }
+        conn.execute(
+            "DELETE FROM ctx_checklist_items WHERE session_key = ?1 AND item_id = ?2 AND checklist_id != ?3",
+            params![session_key, item, id],
+        )?;
+        ord += 1;
+        added += conn.execute(
+            "INSERT OR IGNORE INTO ctx_checklist_items (session_key, checklist_id, item_id, ord, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![session_key, id, item, ord, now_ms],
+        )?;
+    }
+    Ok(added)
+}
+
+/// Take items out of a user checklist (back to where they came from).
+pub fn remove_checklist_items(
+    conn: &Connection,
+    session_key: &str,
+    id: &str,
+    item_ids: &[String],
+) -> Result<usize> {
+    let mut n = 0;
+    for item in item_ids {
+        n += conn.execute(
+            "DELETE FROM ctx_checklist_items WHERE session_key = ?1 AND checklist_id = ?2 AND item_id = ?3",
+            params![session_key, id, item.trim()],
+        )?;
+    }
+    Ok(n)
+}
+
+/// Every live user checklist of a session with its items, oldest first.
+pub fn load_user_checklists(conn: &Connection, session_key: &str) -> Result<Vec<UserChecklist>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, cap_tokens, included, created_at FROM ctx_checklists
+         WHERE session_key = ?1 AND owner = 'user' AND deleted = 0 ORDER BY created_at, id",
+    )?;
+    let rows = stmt.query_map(params![session_key], |r| {
+        Ok(UserChecklist {
+            id: r.get(0)?,
+            title: r.get(1)?,
+            cap_tokens: r.get(2)?,
+            included: r.get::<_, i64>(3)? != 0,
+            created_at: r.get(4)?,
+            items: Vec::new(),
+        })
+    })?;
+    let mut out: Vec<UserChecklist> = rows.collect::<Result<_>>()?;
+    let mut items = conn.prepare(
+        "SELECT item_id FROM ctx_checklist_items WHERE session_key = ?1 AND checklist_id = ?2 ORDER BY ord, item_id",
+    )?;
+    for c in out.iter_mut() {
+        c.items = items
+            .query_map(params![session_key, c.id], |r| r.get::<_, String>(0))?
+            .collect::<Result<_>>()?;
+    }
+    Ok(out)
+}
+
+/// Apply the checklist switches to the nodes a request is built from (a view,
+/// never written back, so ticking a list again restores every item as it was):
+///
+/// * every item of a switched-off user checklist is left out;
+/// * a switched-on user checklist with a token cap sends its items in order
+///   until the cap, and leaves out the rest;
+/// * every item of a switched-off AI category (`cat/…`) is left out.
+///
+/// Locked and policy-pinned items are always sent.
+pub fn gate_nodes(conn: &Connection, session_key: &str, mut nodes: Vec<Node>) -> Vec<Node> {
+    let lists = load_user_checklists(conn, session_key).unwrap_or_default();
+    let off = ai_checklists_off(conn, session_key);
+    if lists.is_empty() && off.is_empty() {
+        return nodes;
+    }
+    let mut drop: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for l in &lists {
+        if !l.included {
+            drop.extend(l.items.iter().cloned());
+            continue;
+        }
+        if let Some(cap) = l.cap_tokens {
+            let mut used: i64 = 0;
+            for id in &l.items {
+                let Some(n) = nodes.iter().find(|n| n.id.as_str() == id) else { continue };
+                let t = super::select::sent_tokens(n) as i64;
+                if used + t > cap {
+                    drop.insert(id.clone());
+                } else {
+                    used += t;
+                }
+            }
+        }
+    }
+    for n in nodes.iter_mut() {
+        if n.deleted || n.pin.is_hard() {
+            continue;
+        }
+        let in_off_cat = off
+            .iter()
+            .any(|c| c.starts_with("cat/") && (n.parent == *c || n.tags.iter().any(|t| t == c)));
+        // A turn filed in a list carries its tool calls with it.
+        let id = n.id.as_str();
+        let turn_root = id.split("/call/").next().unwrap_or(id);
+        if in_off_cat || drop.contains(id) || drop.contains(turn_root) {
+            n.state = ItemState::Out;
+        }
+    }
+    nodes
+}
 
 #[cfg(test)]
 mod tests {
@@ -1308,6 +1667,90 @@ mod tests {
             .map(|r| r.unwrap())
             .collect();
         assert_eq!(ops, vec!["op6", "op7", "op8", "op9"]);
+    }
+
+    #[test]
+    fn user_checklists_create_rename_cap_and_delete_without_losing_items() {
+        let conn = db();
+        ensure_session(&conn, "s1", 1).unwrap();
+        let a = create_user_checklist(&conn, "s1", "  Trip plan ", Some(500), 10).unwrap();
+        let b = create_user_checklist(&conn, "s1", "", None, 11).unwrap();
+        assert_eq!(a, "ucl/1");
+        assert_eq!(b, "ucl/2");
+        let lists = load_user_checklists(&conn, "s1").unwrap();
+        assert_eq!(lists[0].title, "Trip plan");
+        assert_eq!(lists[0].cap_tokens, Some(500));
+        assert_eq!(lists[1].title, "Checklist");
+        assert!(load_user_checklists(&conn, "s2").unwrap().is_empty(), "scoped by session");
+
+        assert!(update_user_checklist(&conn, "s1", &a, Some("Hotels"), Some(None), 12).unwrap());
+        let l = &load_user_checklists(&conn, "s1").unwrap()[0];
+        assert_eq!((l.title.as_str(), l.cap_tokens), ("Hotels", None));
+
+        let t = vec!["turn/t2".to_string(), "sum/1-2".to_string()];
+        assert_eq!(add_checklist_items(&conn, "s1", &a, &t, 13).unwrap(), 2);
+        // Moving an item to another list takes it out of the first.
+        assert_eq!(add_checklist_items(&conn, "s1", &b, &t[..1], 14).unwrap(), 1);
+        let lists = load_user_checklists(&conn, "s1").unwrap();
+        assert_eq!(lists[0].items, vec!["sum/1-2".to_string()]);
+        assert_eq!(lists[1].items, vec!["turn/t2".to_string()]);
+        assert_eq!(remove_checklist_items(&conn, "s1", &b, &t[..1]).unwrap(), 1);
+
+        upsert_node(&conn, &node("s1", "turn/t3", NodeKind::Turn, ItemState::In, Pin::None)).unwrap();
+        assert!(delete_user_checklist(&conn, "s1", &a).unwrap());
+        assert!(!delete_user_checklist(&conn, "s1", &a).unwrap());
+        assert_eq!(load_user_checklists(&conn, "s1").unwrap().len(), 1);
+        assert!(load_node(&conn, "s1", "turn/t3").unwrap().is_some(), "items are never deleted");
+        // Ids are never reused.
+        assert_eq!(create_user_checklist(&conn, "s1", "x", None, 15).unwrap(), "ucl/3");
+    }
+
+    #[test]
+    fn a_switched_off_or_capped_checklist_leaves_its_items_out_of_the_request() {
+        let conn = db();
+        ensure_session(&conn, "s1", 1).unwrap();
+        for id in ["turn/t1", "turn/t2", "turn/t3"] {
+            upsert_node(&conn, &node("s1", id, NodeKind::Turn, ItemState::In, Pin::None)).unwrap();
+        }
+        let l = create_user_checklist(&conn, "s1", "L", Some(150), 1).unwrap();
+        let ids = vec!["turn/t1".to_string(), "turn/t2".to_string()];
+        add_checklist_items(&conn, "s1", &l, &ids, 2).unwrap();
+        let state = |nodes: &[Node], id: &str| nodes.iter().find(|n| n.id.as_str() == id).unwrap().state;
+
+        // Cap 150, 100 tokens each: the first fits, the second is left out.
+        let g = gate_nodes(&conn, "s1", load_nodes(&conn, "s1").unwrap());
+        assert_eq!(state(&g, "turn/t1"), ItemState::In);
+        assert_eq!(state(&g, "turn/t2"), ItemState::Out);
+        assert_eq!(state(&g, "turn/t3"), ItemState::In);
+
+        set_checklist_included(&conn, "s1", &l, false, 3).unwrap();
+        let g = gate_nodes(&conn, "s1", load_nodes(&conn, "s1").unwrap());
+        assert_eq!(state(&g, "turn/t1"), ItemState::Out);
+        assert_eq!(state(&load_nodes(&conn, "s1").unwrap(), "turn/t1"), ItemState::In, "the store is untouched");
+
+        set_checklist_included(&conn, "s1", &l, true, 4).unwrap();
+        update_user_checklist(&conn, "s1", &l, None, Some(None), 5).unwrap();
+        let g = gate_nodes(&conn, "s1", load_nodes(&conn, "s1").unwrap());
+        assert_eq!(state(&g, "turn/t2"), ItemState::In);
+    }
+
+    #[test]
+    fn ai_checklists_can_be_switched_off_and_on() {
+        let conn = db();
+        assert!(!ai_task_pick_off(&conn, "s1"));
+        set_checklist_included(&conn, "s1", AI_TASK_CHECKLIST_ID, false, 1).unwrap();
+        assert!(ai_task_pick_off(&conn, "s1"));
+        set_checklist_included(&conn, "s1", AI_TASK_CHECKLIST_ID, true, 2).unwrap();
+        assert!(!ai_task_pick_off(&conn, "s1"));
+
+        let mut n = node("s1", "note/n1", NodeKind::Note, ItemState::In, Pin::None);
+        n.parent = "cat/hotels".into();
+        upsert_node(&conn, &n).unwrap();
+        set_checklist_included(&conn, "s1", "cat/hotels", false, 3).unwrap();
+        let g = gate_nodes(&conn, "s1", load_nodes(&conn, "s1").unwrap());
+        assert_eq!(g[0].state, ItemState::Out);
+        reset_session(&conn, "s1").unwrap();
+        assert!(ai_checklists_off(&conn, "s1").is_empty(), "reset clears the switches");
     }
 
     fn db() -> Connection {

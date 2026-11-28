@@ -259,15 +259,14 @@ async function settingsContext(browser, w) {
   await p.fill('[data-key="maxSteps"]', '25');
   await p.fill('[data-key="systemPrompt"]', 'Answer in Bengali.');
   await p.fill('[data-key="maxChildDepth"]', '1');
-  await p.fill('[data-key="peerRateLimit"]', '5');
   await p.selectOption('[data-key="memoryMode"]', 'read_parent');
   await p.selectOption('[data-key="compaction"]', 'on');
   await p.fill('[data-key="thresholdPercent"]', '60');
   before = (await subCalls(p)).length;
   await p.click('[data-slot="agent-settings-save"]'); await sleep(700);
   const cf = (await subCalls(p)).slice(before).find((c) => c.action === 'configure');
-  const want = { temperature: null, systemPrompt: 'Answer in Bengali.', maxChildDepth: 1, memoryMode: 'read_parent', maxSteps: 25, peerRateLimit: 5, compaction: { enabled: true, thresholdPercent: 60 } };
-  const okCf = cf && Object.entries(want).every(([k, v]) => JSON.stringify(cf[k]) === JSON.stringify(v)) && !('model' in cf) && !('tokenBudget' in cf);
+  const want = { temperature: null, systemPrompt: 'Answer in Bengali.', maxChildDepth: 1, memoryMode: 'read_parent', maxSteps: 25, compaction: { enabled: true, thresholdPercent: 60 } };
+  const okCf = cf && Object.entries(want).every(([k, v]) => JSON.stringify(cf[k]) === JSON.stringify(v)) && !('model' in cf) && !('tokenBudget' in cf) && !('peerRateLimit' in cf);
   check(`${w}px Save sends only the changed fields (temperature null = default)`, okCf, JSON.stringify(cf));
   const rec = await p.evaluate((x) => window.__subagents.records.get(x), ids.b);
   check(`${w}px record updated (maxSteps 25, compaction 60%)`, rec.maxSteps === 25 && rec.compaction?.thresholdPercent === 60, JSON.stringify({ m: rec.maxSteps, c: rec.compaction }));

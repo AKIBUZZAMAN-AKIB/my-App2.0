@@ -704,6 +704,10 @@ pub trait SubagentRunner: Send + Sync {
         tools_json: &str,
     );
     fn clear(&self, session_key: &str);
+    /// Its chat goes back to its first `keep_turns` turns (an edit, a retry, a
+    /// restored version): forget the memory of the later ones, as the main
+    /// chat's rewind does (`turn_memory::forget_after`).
+    fn forget_turns_after(&self, _session_key: &str, _keep_turns: u32) {}
     /// Saved main chats (not sub-agent sessions), for cross-session asks.
     fn list_chats(&self) -> Vec<ChatInfo> {
         Vec::new()
@@ -823,6 +827,18 @@ impl SubagentRunner for EngineRunner {
         // background summary that is still running for it, as the main chat
         // does on memory.reset / rewind.
         crate::agent_loop::memory_worker::cancel(session_key);
+    }
+
+    fn forget_turns_after(&self, session_key: &str, keep_turns: u32) {
+        let Ok(conn) = crate::db::open_db(&self.config.db_path) else {
+            return;
+        };
+        let now = chrono::Utc::now().timestamp_millis();
+        match crate::turn_memory::forget_after(&conn, session_key, keep_turns, now) {
+            // It cancelled the chat's queued summary jobs; stop a running one too.
+            Ok(_) => crate::agent_loop::memory_worker::cancel(session_key),
+            Err(e) => tracing::warn!(session_key, "sub-agent memory rewind failed: {}", e),
+        }
     }
 
     fn list_chats(&self) -> Vec<ChatInfo> {
@@ -2244,6 +2260,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 Ok(Err(err)) => {
                     let cancelled = matches!(err, NativeAgentError::Cancelled);
                     let mut messages = prior;
+                    // As the loop does before a prompt: an earlier run that
+                    // stopped before its answer is closed first, so this
+                    // message keeps a turn of its own in the saved chat.
+                    crate::agent_loop::prepare_for_prompt(&mut messages);
                     messages.push(Message::user(&task_prompt));
                     if !partial.is_empty() {
                         messages.push(Message {
@@ -2400,6 +2420,18 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             hops += 1;
         }
         None
+    }
+
+    /// The memory of the sub-agent behind `session_key`: (name, memory mode,
+    /// parent session key). None for the main agent or an unknown key.
+    pub fn memory_scope_of(&self, session_key: &str) -> Option<(String, MemoryMode, String)> {
+        self.record_by_session(session_key).map(|r| {
+            (
+                r.name.clone(),
+                MemoryMode::parse(&r.memory_mode).unwrap_or(MemoryMode::Private),
+                r.parent_session_key.clone(),
+            )
+        })
     }
 
     pub fn temperature_for(&self, session_key: &str) -> Option<f64> {
@@ -2962,6 +2994,12 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             if text.is_some() { "edit" } else { "regenerate" },
         );
         let prior = messages[..idx].to_vec();
+        // Same as the main chat's rewind: the turns after the cut are gone, and
+        // so is a turn the cut goes through (an edit of a mid-turn message).
+        self.runner.forget_turns_after(
+            &rec.session_key,
+            crate::turn_memory::whole_turns_before(&messages, idx),
+        );
         if let Some(a) = attachments {
             self.next_attachments
                 .lock()
@@ -4229,7 +4267,7 @@ impl MemoryProvider for SubagentMemory {
         }
         let meta = metadata_json.and_then(|m| serde_json::from_str::<Value>(&m).ok());
         self.manager.memory_store(&self.name, &key, &text, meta);
-        json!({ "success": true, "key": key }).to_string()
+        json!({ "success": true, "key": key, "memory": "subagent" }).to_string()
     }
 
     fn recall(&self, query: String, limit: u32) -> String {
@@ -4238,7 +4276,7 @@ impl MemoryProvider for SubagentMemory {
 
     fn forget(&self, key: String) -> String {
         let removed = self.manager.memory_forget(&self.name, &key);
-        json!({ "success": removed, "key": key }).to_string()
+        json!({ "success": removed, "key": key, "memory": "subagent" }).to_string()
     }
 
     fn search(&self, query: String, max_results: u32) -> String {
@@ -4359,6 +4397,8 @@ mod tests {
         max_concurrent: AtomicUsize,
         /// attachments_json of each run, in order.
         attachments: StdMutex<Vec<Option<String>>>,
+        /// (session, kept turns) of each memory rewind, in order.
+        forgotten: StdMutex<Vec<(String, u32)>>,
     }
 
     impl SubagentRunner for Arc<Script> {
@@ -4535,6 +4575,12 @@ mod tests {
         }
         fn clear(&self, key: &str) {
             self.saved.lock().unwrap().remove(key);
+        }
+        fn forget_turns_after(&self, key: &str, keep_turns: u32) {
+            self.forgotten
+                .lock()
+                .unwrap()
+                .push((key.to_string(), keep_turns));
         }
         fn list_chats(&self) -> Vec<ChatInfo> {
             self.saved
@@ -5901,6 +5947,64 @@ mod tests {
         assert!(err && out.contains("Cancelled"), "{out}");
         assert_eq!(mgr.get(&late.id).unwrap().status, "cancelled");
         mgr.stop_where(|_| true);
+    }
+
+    /// An edit or a retry rewinds the sub-agent's turn memory like the main
+    /// chat's rewind: only turns kept whole stay, and an edit of a message that
+    /// joined an open turn (a parent's follow-up while it worked) drops that
+    /// turn too.
+    #[tokio::test]
+    async fn edit_and_retry_forget_the_turns_they_replace() {
+        let (mgr, script, _app, env, _) = setup();
+        let rec = mgr.spawn(0, spec("first"), &env).unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
+        // Turn 2 of its chat: a task, a tool round, a follow-up that arrived
+        // while it worked, the answer.
+        let mut msgs = script.load_messages(&rec.session_key);
+        msgs.extend([
+            Message::user("second"),
+            Message::assistant_blocks(vec![crate::types::ContentBlock::ToolUse {
+                id: "c1".into(),
+                name: "read_file".into(),
+                input: json!({}),
+                provider_metadata: None,
+            }]),
+            Message {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![crate::types::ContentBlock::ToolResult {
+                    tool_use_id: "c1".into(),
+                    content: "ok".into(),
+                    is_error: false,
+                }]),
+            },
+            Message::user("follow-up while working"),
+            Message::assistant_text("done: second"),
+        ]);
+        script
+            .saved
+            .lock()
+            .unwrap()
+            .insert(rec.session_key.clone(), msgs.clone());
+        assert_eq!(crate::turn_memory::split_turns(&msgs).len(), 2);
+        // Retry the last message (the follow-up, user message 3): it is inside
+        // turn 2, so only turn 1 is kept whole.
+        mgr.regenerate(&rec.id, None, None, &env).unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
+        assert_eq!(
+            script.forgotten.lock().unwrap().last().cloned(),
+            Some((rec.session_key.clone(), 1))
+        );
+        // Edit the first message: nothing is kept.
+        mgr.regenerate(&rec.id, Some(0), Some("first-edited"), &env)
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
+        assert_eq!(
+            script.forgotten.lock().unwrap().last().cloned(),
+            Some((rec.session_key.clone(), 0))
+        );
     }
 
     #[tokio::test]

@@ -649,13 +649,13 @@ const Subagents = (() => {
       }
     });
   }
-  function open(app, { id = null, tab = 'agents', section = null, agentTab: wantTab = null } = {}) {
+  // `section: 'setup'` is the old link to the removed Setup block; it opens Settings, where those fields live.
+  function open(app, { id = null, tab = 'agents', section = null, agentTab: wantTab = section === 'setup' ? 'settings' : null } = {}) {
     watchSelection();
     appRef = app || appRef;
-    if (openDialogRef?.panel?.isConnected) { openDialogRef.setSection?.(section); openDialogRef.go(tab, id, wantTab); return openDialogRef; }
+    if (openDialogRef?.panel?.isConnected) { openDialogRef.go(tab, id, wantTab); return openDialogRef; }
     let current = id ? 'detail' : tab;
     let detailId = id;
-    let openSection = section || null;
     // Which per-agent tab the detail shows (Overview keeps the full page).
     const tabOk = (t) => typeof AgentTabs !== 'undefined' && AgentTabs.has(t);
     if (typeof AgentTabs !== 'undefined') AgentTabs.useStatusChip(statusChip);
@@ -1021,14 +1021,19 @@ const Subagents = (() => {
       });
       mountDetail(head, AgentTabs.render(agentTab, ctx));
     }
-    /* The header's ··· menu: every control the engine has for one agent, grouped
-       like Linear's issue menu and GitHub's kebab (Run / Chat / Agent / Danger).
-       The header keeps only the primary action and "Open as chat"; nothing here is
-       shown twice on the page. Items that open a tab say so with a chevron-free
-       "sub" line; items that need the engine's team feature hide without it. */
-    /** On a narrow line the graph button folds away; ··· then carries it. */
-    const graphFolded = (trigger) => { const g = trigger?.closest?.('.sa-dhead')?.querySelector('[data-slot="agent-graph"]'); return !g || !g.getClientRects().length; };
-    function moreActions(r, busy, trigger, extra = {}) {
+    /* The header's ··· menu: only what has no other home on the page.
+       Each action lives in exactly one place (docs/subagents/SUBAGENT_UI_REDESIGN.md,
+       "Third pass: one home per action"):
+       - the header line holds the primary run action (Stop / Resume / Try again)
+         and "Open as chat";
+       - the tabs (Settings, Tools, Context, Memory, Team, Graph) hold the agent's
+         configuration, so ··· never repeats them as shortcuts;
+       - each chat reply already has Copy and Send to main chat, and Overview has
+         the queue priority.
+       What is left, grouped like Linear's issue menu and GitHub's kebab: Run, Chat,
+       Agent, then the destructive item on its own. Items that need an engine
+       feature hide without it. */
+    function moreActions(r, busy, trigger) {
       const report = r.result || '';
       const active = isActive(r);
       const team = can('subagentTeam');
@@ -1036,34 +1041,20 @@ const Subagents = (() => {
       const below = (x) => { const seen = new Set(); for (let id = parentOf(x); id && !seen.has(id); id = records.has(id) ? parentOf(records.get(id)) : null) { if (id === r.id) return true; seen.add(id); } return false; };
       const tree = [...records.values()].filter((x) => x.id !== r.id && below(x));
       const treeActive = tree.filter(isActive).length;
-      const tab = (t, label, ic, sub, slot) => (AgentTabs.has(t) && tabOk(t) ? { label, sub, icon: ic, onSelect: () => pickTab(t), attrs: { 'data-slot': slot } } : null);
-      const lastReply = lastAssistantText(detailData?.transcript);
+      const hasChat = !!(detailData?.transcript || []).length;
       openMenu(trigger, [
         { heading: 'Run' },
         busy ? { label: 'Interrupt', sub: 'Stop the current step; a message goes on', icon: 'hand', onSelect: () => interrupt(r), attrs: { 'data-slot': 'subagent-menu-interrupt' } } : null,
         team && active && !paused ? { label: 'Pause', sub: 'After this step; keeps its place', icon: 'pause', onSelect: async () => { const res = await act('pause', { id: r.id }, 'Paused.'); if (res?.subagent) upsert(res.subagent); paintDetail(); }, attrs: { 'data-slot': 'subagent-menu-pause' } } : null,
-        team && paused ? { label: 'Resume', icon: 'play', onSelect: async () => { const res = await act('resume', { id: r.id }, 'Resumed.'); if (res?.subagent) upsert(res.subagent); paintDetail(); }, attrs: { 'data-slot': 'subagent-menu-resume' } } : null,
         active && treeActive ? { label: `Stop it and ${tree.length} below`, icon: 'square', variant: 'destructive', onSelect: () => confirmDialog({ title: `Stop ${r.name} and the agents below it?`, description: `${tree.length + 1} agents stop. Their work so far is kept.`, confirmLabel: 'Stop all', destructive: true, onConfirm: () => act('stopTree', { id: r.id }, 'Stopping.').then(() => paintDetail()) }), attrs: { 'data-slot': 'subagent-menu-stop-tree' } } : null,
-        !active ? { label: 'Try again', sub: 'Same task, clean start', icon: 'rotate-ccw', onSelect: () => retry(r.id), attrs: { 'data-slot': 'subagent-menu-retry' } } : null,
         can('subagentQueue') ? { label: 'Run again\u2026', sub: 'Edit the task first', icon: 'refresh-cw', onSelect: () => rerunSheet(r), attrs: { 'data-slot': 'subagent-rerun' } } : null,
-        r.status === 'queued' && can('subagentQueue') ? { label: 'Queue priority\u2026', icon: 'list-ordered', onSelect: () => pickTab('overview'), attrs: { 'data-slot': 'subagent-menu-priority' } } : null,
         { separator: true },
         { heading: 'Chat' },
-        extra.openChat ? { label: 'Open as chat', sub: 'Full screen, with every chat tool', icon: 'maximize-2', onSelect: extra.openChat, attrs: { 'data-slot': 'subagent-menu-open-chat' } } : null,
-        { label: 'Select messages', sub: 'Or long-press a message', icon: 'square-check', disabled: !(detailData?.transcript || []).length, onSelect: () => { chatState.sel = { id: r.id, on: true, keys: new Set(), anchor: null, startLast: true }; pickTab('chat'); }, attrs: { 'data-slot': 'subagent-menu-select' } },
-        { label: 'Copy last reply', icon: 'copy', disabled: !lastReply, onSelect: () => copyOut(lastReply), attrs: { 'data-slot': 'subagent-menu-copy-last' } },
+        { label: 'Select messages', sub: 'Or long-press a message', icon: 'square-check', disabled: !hasChat, onSelect: () => { chatState.sel = { id: r.id, on: true, keys: new Set(), anchor: null, startLast: true }; pickTab('chat'); }, attrs: { 'data-slot': 'subagent-menu-select' } },
         { label: 'Attach result', sub: 'Add its report to your message', icon: 'arrow-up-right', disabled: !report || busy, onSelect: () => sendToMain(r, report), attrs: { 'data-slot': 'subagent-attach' } },
-        { label: 'Export chat', sub: 'Markdown file', icon: 'download', disabled: !(detailData?.transcript || []).length, onSelect: () => exportChat(r), attrs: { 'data-slot': 'subagent-menu-export' } },
+        { label: 'Export chat', sub: 'Markdown file', icon: 'download', disabled: !hasChat, onSelect: () => exportChat(r), attrs: { 'data-slot': 'subagent-menu-export' } },
         { separator: true },
         { heading: 'Agent' },
-        { label: 'Edit title\u2026', sub: `Its name stays \u201c${r.name}\u201d`, icon: 'pencil', onSelect: () => renameSheet(r), attrs: { 'data-slot': 'subagent-menu-rename' } },
-        tab('settings', 'Model and limits', 'sliders-horizontal', 'Model, budget, steps, time, prompt', 'subagent-menu-settings'),
-        tab('tools', 'Tools and permissions', 'wrench', null, 'subagent-menu-tools'),
-        tab('context', 'Context and compaction', 'gauge', null, 'subagent-menu-context'),
-        tab('memory', 'Memory', 'brain', null, 'subagent-menu-memory'),
-        swarmOn() ? { label: 'Swarm role', sub: 'Opens the Swarm tab at this agent', icon: 'hexagon', onSelect: () => openSwarm('swarm', r.id), attrs: { 'data-slot': 'subagent-menu-swarm' } } : null,
-        tab('team', 'Move or message', 'network', 'Parent, chat, team messages', 'subagent-menu-team'),
-        graphFolded(trigger) ? { label: 'Team graph', sub: 'Every agent and who started whom', icon: 'git-fork', onSelect: () => go('diagram'), attrs: { 'data-slot': 'subagent-menu-graph' } } : null,
         { label: 'Save as preset', icon: 'bookmark-plus', onSelect: () => saveAsPreset(r), attrs: { 'data-slot': 'subagent-save-preset' } },
         { label: 'Copy agent id', sub: r.sessionKey || `subagent:${r.id}`, icon: 'hash', onSelect: () => copyOut(r.sessionKey || `subagent:${r.id}`), attrs: { 'data-slot': 'subagent-menu-copy-id' } },
         { separator: true },
@@ -1080,24 +1071,6 @@ const Subagents = (() => {
         else toast(redactSecrets(e?.message || String(e), 300), { type: 'error' });
       }
       paintDetail();
-    }
-    function renameSheet(r) {
-      const input = h('input', { class: 'input', type: 'text', maxlength: '80', value: r.title || '', 'aria-label': 'Display name', placeholder: r.name, autocomplete: 'off', 'data-slot': 'subagent-rename-input' });
-      let dialog = null;
-      const save = h('button', { type: 'button', class: 'btn btn-default', 'data-slot': 'subagent-rename-save', onclick: async () => {
-        save.disabled = true;
-        const res = await act('configure', { id: r.id, title: input.value.trim() }, input.value.trim() ? 'Title saved.' : 'Title cleared.');
-        save.disabled = false;
-        if (res) { if (res.subagent) upsert(res.subagent); dialog.close(); paintDetail(); }
-      } }, 'Save');
-      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save.click(); } });
-      dialog = openDialog({ title: `Title for ${r.name}`, description: `Shown in the list, Overview and its chat. Agents still reach it as \u201c${r.name}\u201d. Leave empty for none.`, size: 'sm',
-        body: h('div', { class: 'sa-sheet' }, input), footer: [h('button', { type: 'button', class: 'btn btn-outline', onclick: () => dialog.close() }, 'Cancel'), save], initialFocus: input });
-    }
-    function lastAssistantText(items) {
-      const list = Array.isArray(items) ? items : [];
-      for (let i = list.length - 1; i >= 0; i -= 1) if (list[i]?.role === 'assistant') { const t = msgText(list[i].content ?? list[i].text ?? '', true).trim(); if (t) return t; }
-      return '';
     }
     function exportChat(r) {
       const list = Array.isArray(detailData?.transcript) ? detailData.transcript : [];
@@ -1177,14 +1150,14 @@ const Subagents = (() => {
       // A docked panel stays beside the chat, unless it covers the screen (a phone): then it would hide the chat it opened.
       const openChat = appRef?.chat?.openSubagent ? () => { appRef.chat.openSubagent(r.id); const covers = (dialog.panel?.getBoundingClientRect().width || 0) >= (window.innerWidth || 0) - 48; if (openIn() !== 'panel' || covers) dialog.close(); } : null;
       const chatSection = () => chatWithSelect(r, busy);
-      const ctx = makeCtx(r, { chatKey, chat: chatSection, setup: () => setupSection(r, busy), memoryEntries: memorySection, hierarchy: () => hierarchy, openChat });
+      const ctx = makeCtx(r, { chatKey, chat: chatSection, memoryEntries: memorySection, hierarchy: () => hierarchy, openChat });
       const budget = budgetOf(r), ctxNow = contextOf(r);
       const more = AgentTabs.action({ label: 'More actions', icon: 'ellipsis', slot: 'subagent-more' });
       more.dataset.iconOnly = 'true';
       more.setAttribute('aria-haspopup', 'menu');
       more.setAttribute('aria-expanded', 'false');
       more.classList.add('sa-dhead-more');
-      more.addEventListener('click', () => moreActions(r, busy, more, { openChat }));
+      more.addEventListener('click', () => moreActions(r, busy, more));
       const paused = !!r.paused || r.status === 'paused';
       const head = AgentTabs.header({
         back: backTo(r), ...windowTools(),
@@ -1197,8 +1170,9 @@ const Subagents = (() => {
           more],
       });
       if (agentTab !== 'overview') {
-        // Settings also holds the spawn setup; Memory also lists the saved entries.
-        const extra = agentTab === 'settings' ? setupSection(r, busy) : agentTab === 'memory' ? memorySection() : null;
+        // Memory also lists the saved entries. (Settings is the one place for model, limits and
+        // prompt; tools live in Tools, who it may see or message in Team > Agent rules.)
+        const extra = agentTab === 'memory' ? memorySection() : null;
         const view = AgentTabs.render(agentTab, ctx);
         mountDetail(head, extra ? h('div', { class: 'sa-dstack' }, view, extra) : view);
         return;
@@ -1245,45 +1219,6 @@ const Subagents = (() => {
       // A nested agent was started inside its parent's run: show the parent, where that call is.
       if (r.parentId && records.has(r.parentId)) { go('agents', r.parentId); toast(`Started by ${records.get(r.parentId).name}; its chat has the spawn_subagent call.`, { type: 'default' }); return; }
       toast('That message is not loaded in this chat.', { type: 'default' });
-    }
-    /** Model, tools and who it can see or message: saved on the record, used from its next run. */
-    function setupSection(r, busy) {
-      const teamOk = can('subagentTeam');
-      const fieldText = (label, value, hint) => { const el = h('input', { class: 'input', type: 'text', value: value || '', 'aria-label': label, autocomplete: 'off' }); return [el, labelled(label, el, hint)]; };
-      const [model, modelF] = fieldText('Model', r.model, 'Empty = the main agent\u2019s model');
-      const [provider, providerF] = fieldText('Provider', r.provider, 'Empty = the main agent\u2019s provider');
-      const [tools, toolsF] = fieldText('Tools', (r.tools || []).join(', '), 'Comma-separated. Empty = the main agent\u2019s tools; never more than its parent has');
-      const others = [...records.values()].filter((x) => x.id !== r.id && chatOf(x) === chatOf(r));
-      const [hiddenFrom, hiddenFromF] = fieldText('Hidden from', (r.hiddenFrom || []).join(', '), others.length ? `Names or ids, e.g. ${others.slice(0, 2).map((x) => x.name).join(', ')}` : 'Names or ids of other sub-agents');
-      const [canMessage, canMessageF] = fieldText('Can message', Array.isArray(r.canMessage) ? r.canMessage.join(', ') : '', Array.isArray(r.canMessage) && !r.canMessage.length ? 'Set to nobody in Team > Agent rules' : 'Empty = what the topology allows');
-      const hidden = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!r.hidden, 'aria-label': 'Hidden from other sub-agents' });
-      const list = (el) => el.value.split(',').map((x) => x.trim()).filter(Boolean);
-      const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'subagent-setup-save', disabled: !teamOk, onclick: async () => {
-        save.disabled = true;
-        // Send only what changed: an untouched field must not reset a rule set elsewhere
-        // (Team > Agent rules), e.g. "may message nobody" ([]) must not become "follow the topology".
-        const cm = list(canMessage);
-        const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-        const next = { model: model.value.trim() || null, provider: provider.value.trim() || null, tools: list(tools), hidden: hidden.checked, hiddenFrom: list(hiddenFrom), canMessage: cm.length ? cm : null };
-        const prev = { model: r.model || null, provider: r.provider || null, tools: r.tools || [], hidden: !!r.hidden, hiddenFrom: r.hiddenFrom || [], canMessage: Array.isArray(r.canMessage) ? r.canMessage : null };
-        if (!cm.length && Array.isArray(r.canMessage) && !r.canMessage.length) next.canMessage = [];
-        const patch = Object.fromEntries(Object.entries(next).filter(([k, v]) => !same(v, prev[k])));
-        if (!Object.keys(patch).length) { save.disabled = false; toast('Nothing changed.', { type: 'info' }); return; }
-        const res = await act('configure', { id: r.id, ...patch }, busy ? 'Saved. It applies from its next run.' : 'Saved.');
-        save.disabled = false;
-        if (res?.subagent) upsert(res.subagent);
-      } }, icon('check'), 'Save');
-      const wantOpen = openSection === 'setup';
-      openSection = null;
-      return h('details', { class: 'sa-section sa-setup', 'data-slot': 'subagent-setup', open: wantOpen },
-        h('summary', null, h('h4', null, 'Setup'), h('span', { class: 'field-hint' }, [r.model || 'main model', `${(r.tools || []).length || 'all'} tools`, r.hidden ? 'hidden' : ''].filter(Boolean).join(' \u00b7 '))),
-        teamOk ? null : h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Changing these needs the newer app engine.')),
-        h('div', { class: 'sa-grid' }, modelF, providerF),
-        toolsF,
-        h('div', { class: 'switch-row' }, infoLabel('Hidden from other sub-agents', 'They can\u2019t list or message it. You and the main agent still can.'), hidden),
-        h('div', { class: 'sa-grid' }, hiddenFromF, canMessageF),
-        h('p', { class: 'field-hint' }, `Runs in its own session (${r.sessionKey || `subagent:${r.id}`}).`),
-        h('div', { class: 'row-actions' }, save));
     }
     /* ---- the sub-agent as a full chat (S1) ---- */
     const chatState = { drafts: new Map(), sel: null, editing: null };
@@ -1897,7 +1832,7 @@ const Subagents = (() => {
       if (appEl) appEl.inert = false;
       dockSizing(dialog.panel);
     }
-    openDialogRef = { ...dialog, go, setSection: (x) => { openSection = x || null; } };
+    openDialogRef = { ...dialog, go };
     paint(true);
     refresh().then(() => paint(current !== 'detail')).catch((e) => { if (alive && current === 'agents') prependKids(panel, h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(e?.message || String(e), 300)))); });
     return openDialogRef;

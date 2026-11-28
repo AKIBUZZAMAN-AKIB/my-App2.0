@@ -33,6 +33,7 @@ pub mod model;
 pub mod ops;
 pub mod reading;
 pub mod render;
+pub mod request_log;
 #[cfg(test)]
 mod request_view_tests;
 #[cfg(test)]

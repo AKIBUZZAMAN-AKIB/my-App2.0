@@ -134,9 +134,24 @@ pub struct AgentLoopContext<'a> {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-struct TranscriptRepair {
+pub(crate) struct TranscriptRepair {
     closed_tool_uses: usize,
     dropped_orphan_tool_results: usize,
+}
+
+/// Settle the end of the stored history right before a new prompt is
+/// appended, so that prompt opens a turn of its own (`turn_memory::split_turns`),
+/// the same for the main agent and every sub-agent.
+///
+/// The history is repaired first: a run that ended on tool calls without
+/// results (an old build, a provider that stopped with calls pending) would
+/// otherwise get its synthetic results merged into the new prompt's message,
+/// which then is no prompt at all and opens no turn. Then a run that stopped
+/// before its final answer is closed with a short note.
+pub(crate) fn prepare_for_prompt(messages: &mut Vec<Message>) -> TranscriptRepair {
+    let repair = repair_transcript(messages);
+    crate::turn_memory::close_unfinished_turn(messages);
+    repair
 }
 
 /// Repair legacy/injected transcripts before sending them to a provider.
@@ -324,6 +339,76 @@ fn policy_now_ms() -> i64 {
 
 /// One turn, with its temp-context task opened and closed around it
 /// (`context_policy::lifecycle`).
+/// Bring the checklist's long-term group of this chat in line with the
+/// memory it really uses (see [`sync_own_memory`]), else the provider (the
+/// main agent, or a `shared` sub-agent, which writes its parent's memory).
+fn sync_long_term_mirror(ctx: &AgentLoopContext<'_>) {
+    use crate::context_tree::memory_checklist as mc;
+    let Ok(conn) = crate::db::open_db(&ctx.config.db_path) else {
+        return;
+    };
+    if let Some(sub) = ctx.subagents.as_ref() {
+        if sync_own_memory(&conn, &ctx.session_key, &sub.manager) {
+            return;
+        }
+    }
+    let Some(provider) = ctx.memory_provider.as_ref() else {
+        return;
+    };
+    let own = mc::mem_scope(&conn, &ctx.session_key).own;
+    let keys = mc::parse_long_term_keys(&provider.list(None, Some(200)));
+    let p = provider.clone();
+    mc::sync_long_term(
+        &conn,
+        &own,
+        keys.as_deref(),
+        &|k| mc::parse_long_term_text(&p.search(k.to_string(), 10), k),
+        now_millis(),
+    );
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// For a sub-agent's chat: record whose memory it uses, and mirror a
+/// `private` / `read_parent` sub-agent's own store (read straight from the
+/// manager, without the parent's entries a `read_parent` list mixes in) into
+/// its own scope. True when the mirror is done; false for the main agent and
+/// a `shared` sub-agent (their provider is the source).
+pub(crate) fn sync_own_memory(
+    conn: &rusqlite::Connection,
+    session_key: &str,
+    manager: &crate::subagents::SubagentManager,
+) -> bool {
+    use crate::context_tree::memory_checklist as mc;
+    if !session_key.starts_with(mc::SUBAGENT_KEY_PREFIX) {
+        return false;
+    }
+    let Some((name, mode, parent)) = manager.memory_scope_of(session_key) else {
+        return false;
+    };
+    let now = now_millis();
+    let _ = mc::save_scope(conn, session_key, &name, mode.as_str(), &parent, now);
+    if mode == crate::subagents::MemoryMode::Shared {
+        return false;
+    }
+    let mut texts: HashMap<String, String> = HashMap::new();
+    let mut keys: Vec<String> = Vec::new();
+    for e in manager.memory_entries(&name).into_iter().rev() {
+        if !texts.contains_key(&e.key) {
+            keys.push(e.key.clone());
+            texts.insert(e.key, e.text);
+        }
+    }
+    let own = mc::mem_scope(conn, session_key).own;
+    mc::sync_long_term(conn, &own, Some(&keys), &|k| texts.get(k).cloned(), now);
+    true
+}
+
 pub async fn run_agent_turn(
     ctx: AgentLoopContext<'_>,
 ) -> Result<AgentTurnResult, NativeAgentError> {
@@ -388,7 +473,12 @@ async fn run_agent_turn_inner(
     // Attachments were validated before the turn was spawned; a parse error
     // here would only mean a caller bypassed that, so fail the turn loudly.
     let attachments = crate::types::parse_attachments(ctx.params.attachments_json.as_deref())?;
+    let mut pre_repair = TranscriptRepair::default();
     if !ctx.params.prompt.trim().is_empty() || !attachments.is_empty() {
+        // The last run stopped before a final answer (step or time limit, an
+        // error, calls left without results): close its turn so this message
+        // opens a turn of its own instead of joining the unfinished one.
+        pre_repair = prepare_for_prompt(&mut messages);
         let attachment_count = attachments.len();
         let image_count = attachments
             .iter()
@@ -412,10 +502,12 @@ async fn run_agent_turn_inner(
         }
     }
 
-    // Repair the stored history before it is offered to a provider. Running
-    // after prompt insertion lets a synthetic tool result share the resumed
-    // user turn rather than creating adjacent user-role messages.
-    let repair = repair_transcript(&mut messages);
+    // Repair the stored history before it is offered to a provider. With a
+    // new prompt it was already repaired before the prompt went in (above);
+    // this pass covers a run without one and is a no-op otherwise.
+    let mut repair = repair_transcript(&mut messages);
+    repair.closed_tool_uses += pre_repair.closed_tool_uses;
+    repair.dropped_orphan_tool_results += pre_repair.dropped_orphan_tool_results;
     if repair.closed_tool_uses > 0 || repair.dropped_orphan_tool_results > 0 {
         event_bus::emit(
             callback,
@@ -544,8 +636,8 @@ async fn run_agent_turn_inner(
     // The turn being answered (1-based over the stored transcript), for
     // stored tool results.
     let current_turn = crate::turn_memory::split_turns(&messages).len().max(1) as u32;
-    // Every prompt of the chat so far, steering messages included: the context
-    // tree numbers turns over the whole chat, not over the (folded) view.
+    // Every turn of the chat so far (one per incoming message and the work for
+    // it; a steer joins the open turn): the context tree numbers turns over the whole chat, not over the (folded) view.
     // The stored transcript is kept summarized, so its prompts restart at 1 after
     // a summary: the tree adds the turns the summaries replaced (0 with it off).
     let tree_turn_base =
@@ -555,6 +647,8 @@ async fn run_agent_turn_inner(
     let mut memory_checked = false;
     // Retries after a provider context-overflow error (assembly.rs).
     let mut overflow_retries: usize = 0;
+    // The turn's prompt goes with its first request in the ledger.
+    let mut ledger_prompt_logged = false;
     // After an overflow: the transcript the provider rejected and the share of
     // it the retry may use. Kept as a share of that transcript (re-counted with
     // the current meter) so a calibration change between the two attempts
@@ -578,12 +672,13 @@ async fn run_agent_turn_inner(
             break;
         }
         ensure_not_aborted(&ctx.abort_flag).await?;
-        let before_steer = messages.len();
+        // A message that arrives mid-turn joins the open turn (see
+        // `turn_memory::split_turns`); count only turns it really opens.
+        let turns_before_steer = crate::turn_memory::split_turns(&messages).len();
         apply_steer_messages(&ctx.steer_rx, &mut messages).await;
-        tree_turns_total += messages[before_steer.min(messages.len())..]
-            .iter()
-            .filter(|m| m.is_user_prompt())
-            .count() as u32;
+        tree_turns_total += crate::turn_memory::split_turns(&messages)
+            .len()
+            .saturating_sub(turns_before_steer) as u32;
 
         let mut tools = merged_tool_definitions(
             &ctx.config.workspace_path,
@@ -693,30 +788,11 @@ async fn run_agent_turn_inner(
         if tree_enabled {
             // The long-term memory (every chat) is a group of the checklist tree:
             // bring its mirror in line with the provider before the tree is read.
-            if let (Some(provider), Ok(conn)) = (
-                ctx.memory_provider.as_ref(),
-                crate::db::open_db(&ctx.config.db_path),
-            ) {
-                let keys = crate::context_tree::memory_checklist::parse_long_term_keys(
-                    &provider.list(None, Some(200)),
-                );
-                let p = provider.clone();
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
-                crate::context_tree::memory_checklist::sync_long_term(
-                    &conn,
-                    keys.as_deref(),
-                    &|k| {
-                        crate::context_tree::memory_checklist::parse_long_term_text(
-                            &p.search(k.to_string(), 10),
-                            k,
-                        )
-                    },
-                    now,
-                );
-            }
+            // Each agent has its own long-term memory: a sub-agent's chat
+            // mirrors its own store (kept per name) into its own scope, so
+            // the main agent's entries and other sub-agents' never show up
+            // (or get removed) here.
+            sync_long_term_mirror(&ctx);
             // No separate memory tools while the checklist is on: `ctx memory`
             // reads every group, `ctx recall` reads summarized turns and stored
             // results, `ctx remember` / `ctx forget` write the long-term group.
@@ -740,6 +816,9 @@ async fn run_agent_turn_inner(
         let mut tree_drop: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
         let mut tree_drop_calls: std::collections::BTreeSet<(u32, u32)> =
             std::collections::BTreeSet::new();
+        // Engine summaries the user unticked in the checklist:
+        // (continuity summary, memory block).
+        let mut tree_sum_drop: (bool, bool) = (false, false);
         let mut tree_nums = crate::context_tree::wiring::TurnNumbers::default();
         let tree_prompt_base = system_prompt.clone();
         let mut system_prompt = tree_prompt_base.clone();
@@ -809,6 +888,17 @@ async fn run_agent_turn_inner(
         }
         if let Some(fold) = memory_fold.as_mut() {
             fold.sync(&messages);
+            // A row unticked, hidden or deleted in the checklist while this
+            // task runs leaves the very next request, not only the next turn.
+            if memory_loop::refresh_picks(
+                fold,
+                &mut messages,
+                &meter,
+                &ctx.config.db_path,
+                &ctx.session_key,
+            ) {
+                assembly_actions.push("memory_picks_refreshed");
+            }
             // Optional memory (other goals, history, segments) goes before
             // anything touches the recent turns or the current request.
             let over = total_cost_with(&messages, &token_cost).saturating_sub(context_budget);
@@ -819,7 +909,7 @@ async fn run_agent_turn_inner(
             }
         }
         // ── Context tree: decide on the folded view, then append the checklist.
-        // Turn numbers are absolute: `tree_turns_total` counts every prompt of the
+        // Turn numbers are absolute: `tree_turns_total` counts every turn of the
         // chat, the view shows the newest of them.
         let (context_budget, full_context_budget, system_prompt_tokens, reserved_input_tokens) =
             if tree_enabled {
@@ -901,6 +991,7 @@ async fn run_agent_turn_inner(
                         .filter(|t| !tree_raw.contains(t))
                         .collect();
                     tree_drop_calls = parts.drop_calls.clone();
+                    tree_sum_drop = (parts.drop_chat_summary, parts.drop_memory_summary);
                     // The same tool result (a file read twice with the same
                     // content, a memory recalled again) is sent once: at its
                     // last occurrence (memory_checklist.rs).
@@ -977,15 +1068,20 @@ async fn run_agent_turn_inner(
         // What this request sends: the view without the turns the tree took out.
         // With the tree off (or nothing dropped) it is the view itself.
         let tree_cost = |view: &[Message]| -> usize {
-            if tree_drop.is_empty() && tree_drop_calls.is_empty() {
+            if tree_drop.is_empty() && tree_drop_calls.is_empty() && tree_sum_drop == (false, false)
+            {
                 total_cost_with(view, &token_cost)
             } else {
                 total_cost_with(
-                    &crate::context_tree::wiring::request_view_mapped(
-                        view,
-                        &tree_nums,
-                        &tree_drop,
-                        &tree_drop_calls,
+                    &crate::context_tree::wiring::without_summaries(
+                        &crate::context_tree::wiring::request_view_mapped(
+                            view,
+                            &tree_nums,
+                            &tree_drop,
+                            &tree_drop_calls,
+                        ),
+                        tree_sum_drop.0,
+                        tree_sum_drop.1,
                     ),
                     &token_cost,
                 )
@@ -1256,6 +1352,33 @@ async fn run_agent_turn_inner(
                 &tree_drop_calls,
             )
         };
+        // A summary the user unticked in the checklist is not sent either.
+        let request_messages = crate::context_tree::wiring::without_summaries(
+            &request_messages,
+            tree_sum_drop.0,
+            tree_sum_drop.1,
+        );
+        // What this request would carry with every item of the chat in: the
+        // whole stored transcript (or the view, when it is larger) plus the
+        // system prompt and tools. The request ledger measures savings
+        // against it (context_tree/request_log.rs).
+        let ledger_full_tokens = {
+            let view = total_cost_with(&messages, &token_cost);
+            let stored = memory_fold
+                .as_ref()
+                .map(|f| total_cost_with(&f.full, &token_cost))
+                .unwrap_or(0);
+            view.max(stored).saturating_add(reserved_input_tokens)
+        };
+        let ledger_prompt = (!ledger_prompt_logged)
+            .then(|| {
+                messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.is_user_prompt())
+                    .map(|m| m.text())
+            })
+            .flatten();
         // Temp context for this task step (T1-T6, else the full view T7).
         let t7_tokens = total_cost_with(&request_messages, &token_cost);
         let policy_ids = memory_loop::stored_result_ids(&ctx);
@@ -1327,6 +1450,7 @@ async fn run_agent_turn_inner(
             };
         let request_messages: Vec<Message> = step_view.messages;
         let step_task_id = step_view.task_id.clone();
+        let step_policy_name = step_view.policy.as_str().to_string();
         if let Some(tid) = step_view.task_id.as_deref() {
             let sent = total_cost_with(&request_messages, &token_cost);
             crate::context_policy::lifecycle::record_tokens(
@@ -1592,6 +1716,25 @@ async fn run_agent_turn_inner(
                         "sessionKey": ctx.session_key,
                     }),
                 );
+                record_request(
+                    &ctx,
+                    crate::context_tree::request_log::RequestRow {
+                        turn: Some(tree_turns_total),
+                        step: iteration as u32,
+                        kind: crate::context_tree::request_log::RequestKind::Step.as_str(),
+                        status: "overflow",
+                        model: failed_route.map(|r| r.model.clone()).unwrap_or_default(),
+                        full_tokens: ledger_full_tokens as u64,
+                        sent_tokens: final_context_tokens.saturating_add(reserved_input_tokens)
+                            as u64,
+                        input_tokens: limits.prompt_tokens.unwrap_or(0) as u64,
+                        output_tokens: 0,
+                        latency_ms: request_started.elapsed().as_millis() as u64,
+                        prompt: ledger_prompt.clone(),
+                        policy: policy_step_task.as_ref().map(|_| step_policy_name.clone()),
+                    },
+                );
+                ledger_prompt_logged = true;
                 if !recover {
                     return Err(error);
                 }
@@ -1682,6 +1825,25 @@ async fn run_agent_turn_inner(
         cumulative_usage.input_tokens += response.usage.input_tokens;
         cumulative_usage.output_tokens += response.usage.output_tokens;
         cumulative_usage.total_tokens += response.usage.total_tokens;
+        // One user turn is many requests: file this one in the ledger.
+        record_request(
+            &ctx,
+            crate::context_tree::request_log::RequestRow {
+                turn: Some(tree_turns_total),
+                step: iteration as u32,
+                kind: crate::context_tree::request_log::RequestKind::Step.as_str(),
+                status: "ok",
+                model: actual_model.clone(),
+                full_tokens: ledger_full_tokens as u64,
+                sent_tokens: final_context_tokens.saturating_add(reserved_input_tokens) as u64,
+                input_tokens: response.usage.input_tokens as u64,
+                output_tokens: response.usage.output_tokens as u64,
+                latency_ms: request_started.elapsed().as_millis() as u64,
+                prompt: ledger_prompt.clone(),
+                policy: policy_step_task.as_ref().map(|_| step_policy_name.clone()),
+            },
+        );
+        ledger_prompt_logged = true;
 
         // Calibrate the token meter against the provider's own count of this
         // exact request (only when it answered with the model we counted for).
@@ -2082,6 +2244,7 @@ async fn run_agent_turn_inner(
                         crate::context_tree::memory_checklist::long_term_action(
                             &ctx.config.db_path,
                             ctx.memory_provider.as_ref(),
+                            &ctx.session_key,
                             act,
                             &tool_call.input,
                         )
@@ -3049,6 +3212,40 @@ fn safe_context_compaction_boundary(messages: &[Message], mut end: usize) -> usi
     }
 
     end.min(keep_last)
+}
+
+/// File one model request in the request ledger and tell the panel. Best
+/// effort: the ledger never blocks or fails a request.
+fn record_request(ctx: &AgentLoopContext<'_>, row: crate::context_tree::request_log::RequestRow) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let Ok(conn) = crate::db::open_db(&ctx.config.db_path) else {
+        return;
+    };
+    let Ok(turn) = crate::context_tree::request_log::record(&conn, &ctx.session_key, &row, now_ms)
+    else {
+        return;
+    };
+    event_bus::emit(
+        ctx.callback.as_deref(),
+        "context.request",
+        &serde_json::json!({
+            "sessionKey": ctx.session_key,
+            "turn": turn,
+            "step": row.step,
+            "kind": row.kind,
+            "status": row.status,
+            "model": row.model,
+            "fullTokens": row.full_tokens,
+            "sentTokens": row.sent_tokens,
+            "savedTokens": row.full_tokens.saturating_sub(row.sent_tokens),
+            "inputTokens": row.input_tokens,
+            "outputTokens": row.output_tokens,
+            "latencyMs": row.latency_ms,
+        }),
+    );
 }
 
 fn is_session_summary(message: &Message) -> bool {
@@ -5011,6 +5208,60 @@ mod transcript_invariant_tests {
                     && matches!(&blocks[1], ContentBlock::ToolResult { .. })
                     && matches!(&blocks[2], ContentBlock::Text { text } if text == "new prompt")
         ));
+    }
+
+    /// A new prompt after a run that stopped with calls left open gets a turn
+    /// of its own, for the main agent and sub-agents alike: the calls are
+    /// closed and the unfinished turn gets the stop note before the prompt goes
+    /// in, so the prompt stays a prompt instead of carrying synthetic results.
+    #[test]
+    fn a_prompt_after_a_run_stopped_on_open_calls_opens_its_own_turn() {
+        let mut messages = vec![
+            Message::user("old prompt"),
+            assistant_with_tool_calls(&["t1", "t2"]),
+        ];
+        let report = prepare_for_prompt(&mut messages);
+        assert_eq!(report.closed_tool_uses, 2);
+        messages.push(Message::user("new prompt"));
+        assert_eq!(
+            repair_transcript(&mut messages),
+            TranscriptRepair::default()
+        );
+        assert!(unanswered_tool_uses(&messages).is_empty());
+        assert!(messages.last().unwrap().is_user_prompt());
+        assert_eq!(
+            messages[messages.len() - 2].text(),
+            crate::turn_memory::STOPPED_BEFORE_ANSWER
+        );
+        let turns = crate::turn_memory::split_turns(&messages);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[1].start, messages.len() - 1);
+    }
+
+    /// Stopped after tool results (step or time limit): closed with the note.
+    /// Finished with an answer: nothing is added.
+    #[test]
+    fn prepare_for_prompt_closes_only_an_unfinished_turn() {
+        let mut stopped = vec![
+            Message::user("task"),
+            assistant_with_tool_calls(&["t1"]),
+            Message::tool_result("t1", "result", false),
+        ];
+        assert_eq!(
+            prepare_for_prompt(&mut stopped),
+            TranscriptRepair::default()
+        );
+        assert_eq!(stopped.len(), 4);
+        assert_eq!(stopped[3].text(), crate::turn_memory::STOPPED_BEFORE_ANSWER);
+
+        let mut answered = vec![Message::user("task"), Message::assistant_text("done")];
+        let before = serde_json::to_value(&answered).unwrap();
+        prepare_for_prompt(&mut answered);
+        assert_eq!(serde_json::to_value(&answered).unwrap(), before);
+
+        let mut empty: Vec<Message> = Vec::new();
+        prepare_for_prompt(&mut empty);
+        assert!(empty.is_empty());
     }
 
     #[test]

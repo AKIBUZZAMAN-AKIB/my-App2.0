@@ -207,7 +207,10 @@ impl ReadItem {
             content_hash: None,
             order,
             initial_state: ItemState::In,
-            initial_pin: Pin::Policy,
+            // Not pinned: the checklist shows a checkbox beside every summary so
+            // the user can leave it out of the request. The safety net still never
+            // evicts it (select::tier_of puts engine summaries out of its reach).
+            initial_pin: Pin::None,
             owner: Owner::Policy,
         }
     }
@@ -385,13 +388,23 @@ pub fn apply(
         unchanged: plan.unchanged,
         ..Default::default()
     };
+    // Engine summaries were hard-pinned (`policy`) before they got a checkbox:
+    // free the ones already stored so the user's choice can reach them.
+    conn.execute(
+        "UPDATE ctx_nodes SET pin = 'none', node_rev = node_rev + 1
+         WHERE session_key = ?1 AND kind = 'summary' AND pin = 'policy' AND id LIKE 'sum/%'",
+        rusqlite::params![session_key],
+    )?;
     for node in &plan.create {
         // An item that comes back (a turn that left the view for a step and
         // returned, a chat whose transcript was summarized and re-read) keeps the
         // choice that was made for it: in, out, a note, its tags and category.
         // Without this every returning item started `in` again and the user's
         // and the model's selection was lost after each summary.
-        let revived = revive_choice(conn, session_key, node)?;
+        let mut revived = revive_choice(conn, session_key, node)?;
+        if revived.is_none() {
+            revived = carried_summary_choice(conn, session_key, node)?;
+        }
         store::upsert_node(conn, revived.as_ref().unwrap_or(node))?;
         report.created += 1;
     }
@@ -412,6 +425,46 @@ pub fn apply(
         store::bump_rev(conn, session_key, now_ms)?;
     }
     Ok(report)
+}
+
+/// True for the id of the continuity summary: `sum/chat` or `sum/1-N`.
+pub fn is_continuity_summary_id(id: &str) -> bool {
+    id == "sum/chat"
+        || id
+            .strip_prefix("sum/1-")
+            .map(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            .unwrap_or(false)
+}
+
+/// The continuity summary gets a new id each time it grows (`sum/1-5` becomes
+/// `sum/1-8`). A user who took it out of the request meant the summary, not
+/// one size of it: the new one starts with the choice the last one had.
+fn carried_summary_choice(
+    conn: &rusqlite::Connection,
+    session_key: &str,
+    node: &Node,
+) -> Result<Option<Node>> {
+    if node.kind != NodeKind::Summary || !is_continuity_summary_id(node.id.as_str()) {
+        return Ok(None);
+    }
+    let last: Option<String> = conn
+        .query_row(
+            "SELECT state FROM ctx_nodes
+             WHERE session_key = ?1 AND kind = 'summary' AND id <> ?2
+               AND (id = 'sum/chat' OR id LIKE 'sum/1-%')
+             ORDER BY created_at DESC, node_rev DESC LIMIT 1",
+            rusqlite::params![session_key, node.id.as_str()],
+            |r| r.get(0),
+        )
+        .ok();
+    match last.as_deref().and_then(ItemState::parse) {
+        Some(state) if state != node.state => {
+            let mut carried = node.clone();
+            carried.state = state;
+            Ok(Some(carried))
+        }
+        _ => Ok(None),
+    }
 }
 
 #[cfg(test)]

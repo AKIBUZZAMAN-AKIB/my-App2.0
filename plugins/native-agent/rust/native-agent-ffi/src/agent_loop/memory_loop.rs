@@ -42,6 +42,12 @@ pub(super) struct Injected {
     /// The checklist's picks and #tags for this request (memory_checklist.rs),
     /// kept so a smaller re-selection honours them too.
     picks: tm::select::Picks,
+    /// The checklist rows and the token cap of this turn's selection, kept so
+    /// a checklist change made while the task runs (`refresh_picks`) can
+    /// choose the block again before the next step.
+    records: Vec<crate::context_tree::memory_checklist::Record>,
+    anchors: Vec<crate::context_tree::memory_checklist::Anchor>,
+    max_tokens: usize,
     /// Summarized turns put back as written (raw-vs-summary selection,
     /// `turn_memory::raw_select`), in turn order, with the first message of
     /// each so the context tree can number them by their real turn even
@@ -91,6 +97,70 @@ pub(super) fn reselect_smaller(
     messages[at] = block;
     inj.selection = sel;
     Some(before - after)
+}
+
+/// The person can untick, hide or delete a memory row (a range summary,
+/// a decision, …) in the context panel while a task is running. The memory
+/// block used to be chosen once, at the first step of the run, so the change
+/// only reached the model on the *next user message*: every later step of
+/// the running task still sent the unticked summary. Before every step the
+/// checklist picks are read again; when they changed, the block is chosen
+/// again with them and the status is saved, so the panel's colours and the
+/// request agree from the very next step. Returns true when the block changed.
+pub(super) fn refresh_picks(
+    fold: &mut MemoryFold,
+    messages: &mut [Message],
+    meter: &TokenMeter,
+    db_path: &str,
+    key: &str,
+) -> bool {
+    let Some(inj) = fold.injected.as_mut() else {
+        return false;
+    };
+    if inj.records.is_empty() {
+        return false;
+    }
+    let Ok(conn) = crate::db::open_db(db_path) else {
+        return false;
+    };
+    // Anchors were placed in the view at the first step; keep the same ones.
+    let picks = crate::context_tree::memory_checklist::build_picks_with(
+        &conn,
+        key,
+        &inj.records,
+        &inj.anchors,
+    );
+    if picks == inj.picks {
+        return false;
+    }
+    let Some(at) = messages.iter().position(tm::is_memory_message) else {
+        return false;
+    };
+    let count = |s: &str| meter.text(s);
+    let sel = tm::select::select_with(
+        &tm::select::Input {
+            mem: &inj.mem,
+            goals: &inj.goals,
+            query: &inj.query,
+            previous: &inj.previous,
+            fts_turns: &inj.fts_turns,
+            max_tokens: inj.max_tokens,
+        },
+        &picks,
+        &count,
+    );
+    let _ = crate::context_tree::memory_checklist::save_status(
+        &conn,
+        key,
+        &sel,
+        &picks,
+        &inj.records,
+        now_ms(),
+    );
+    messages[at] = tm::memory_block(&sel.text);
+    inj.selection = sel;
+    inj.picks = picks;
+    true
 }
 
 impl MemoryFold {
@@ -169,6 +239,10 @@ pub(super) struct RouteTextModel {
     session_key: String,
     abort: Abort,
     pub usage: std::sync::Mutex<TokenUsage>,
+    /// Where the summarizer's own requests are filed (the request ledger of
+    /// context_tree/request_log.rs), so a turn's real request count includes
+    /// them. `None` keeps them out (background jobs without a database).
+    ledger_db: Option<String>,
 }
 
 impl RouteTextModel {
@@ -185,6 +259,53 @@ impl RouteTextModel {
             ctx.session_key.clone(),
             Abort::Turn(ctx.abort_flag.clone()),
         )
+        .with_ledger(&ctx.config.db_path)
+    }
+    /// File every summarizer request in the request ledger of `db_path`.
+    pub fn with_ledger(mut self, db_path: &str) -> Self {
+        self.ledger_db = Some(db_path.to_string());
+        self
+    }
+    fn file_request(&self, model: &str, usage: &TokenUsage, latency_ms: u64) {
+        let Some(db) = self.ledger_db.as_deref() else {
+            return;
+        };
+        let Ok(conn) = crate::db::open_db(db) else {
+            return;
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let row = crate::context_tree::request_log::RequestRow {
+            turn: None,
+            kind: crate::context_tree::request_log::RequestKind::Summary.as_str(),
+            status: "ok",
+            model: model.to_string(),
+            sent_tokens: usage.input_tokens as u64,
+            input_tokens: usage.input_tokens as u64,
+            output_tokens: usage.output_tokens as u64,
+            latency_ms,
+            ..Default::default()
+        };
+        if let Ok(turn) =
+            crate::context_tree::request_log::record(&conn, &self.session_key, &row, now_ms)
+        {
+            crate::event_bus::emit(
+                self.callback.as_deref(),
+                "context.request",
+                &serde_json::json!({
+                    "sessionKey": self.session_key,
+                    "turn": turn,
+                    "kind": row.kind,
+                    "status": row.status,
+                    "model": row.model,
+                    "inputTokens": row.input_tokens,
+                    "outputTokens": row.output_tokens,
+                    "latencyMs": latency_ms,
+                }),
+            );
+        }
     }
     pub fn owned(
         route_plan: RoutePlan,
@@ -202,6 +323,7 @@ impl RouteTextModel {
             session_key,
             abort,
             usage: std::sync::Mutex::new(TokenUsage::default()),
+            ledger_db: None,
         }
     }
     pub fn take_usage(&self) -> TokenUsage {
@@ -258,6 +380,7 @@ impl TextModel for RouteTextModel {
             let mut dropped_reasoning_hint = false;
             let mut raised_budget = false;
             let outcome = loop {
+                let started = std::time::Instant::now();
                 let result = tokio::select! {
                     biased;
                     _ = self.abort.cancelled() => return Err("cancelled".into()),
@@ -272,6 +395,11 @@ impl TextModel for RouteTextModel {
                             u.output_tokens += response.usage.output_tokens;
                             u.total_tokens += response.usage.total_tokens;
                         }
+                        self.file_request(
+                            &route.model,
+                            &response.usage,
+                            started.elapsed().as_millis() as u64,
+                        );
                         let text = response.text();
                         if response.stop_reason == crate::types::StopReason::MaxTokens
                             && !raised_budget
@@ -1056,7 +1184,23 @@ pub(super) async fn apply(
     let memory_tokens = meter.message(&block);
     let mut raw_msgs: Vec<Message> = Vec::new();
     let mut raw_turns: Vec<(u32, String)> = Vec::new();
+    // A range the person unticked (or hid, or deleted) in the checklist goes
+    // nowhere: not its summary (picks.exclude, select.rs) and not its
+    // original turns either, even when "Both" or a per-turn "raw" box was
+    // set for it earlier. Before this, an unticked range in "Both" mode kept
+    // sending its originals, so the range looked "always sent".
+    let excluded_ranges: Vec<(u32, u32)> = picks
+        .exclude
+        .iter()
+        .filter_map(|rid| {
+            let (a, b) = rid.strip_prefix('S')?.split_once('-')?;
+            Some((a.parse().ok()?, b.parse().ok()?))
+        })
+        .collect();
     for &n in &raw_plan.raw_turns {
+        if excluded_ranges.iter().any(|&(a, b)| n >= a && n <= b) {
+            continue;
+        }
         let Some(t) = turns.get((n as usize).wrapping_sub(1)) else {
             continue;
         };
@@ -1095,6 +1239,9 @@ pub(super) async fn apply(
         previous,
         fts_turns,
         picks,
+        records: mem_rows,
+        anchors,
+        max_tokens,
         raw_turns,
     });
     Ok(Some(fold))

@@ -356,7 +356,8 @@ async fn run_job(env: &WorkerEnv, job: &jobs::Job, owner: &str, abort: &Arc<Atom
         env.webllm_pending.clone(),
         key.to_string(),
         Abort::Flag(abort.clone()),
-    );
+    )
+    .with_ledger(&env.db_path);
     let input_limit = (env.context_budget.saturating_mul(2) / 3).clamp(1_500, 120_000);
     let out_tokens = env.max_output.min(4_096);
     let now = now_ms();

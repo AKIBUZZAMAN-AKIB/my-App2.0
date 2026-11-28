@@ -70,6 +70,10 @@ pub fn tier_of(node: &Node) -> Tier {
     match node.kind {
         super::model::NodeKind::SysPart if node.pin == Pin::Locked => Tier::Law,
         super::model::NodeKind::Essential => Tier::Essential,
+        // The engine's own summaries (the continuity summary, the memory block):
+        // only the user's checkbox (or an explicit `ctx set`) takes them out; the
+        // safety net never evicts them to make room.
+        super::model::NodeKind::Summary if node.id.as_str().starts_with("sum/") => Tier::Essential,
         super::model::NodeKind::Strategy => Tier::Strategy,
         _ => Tier::Selectable,
     }

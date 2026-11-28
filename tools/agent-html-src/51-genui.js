@@ -602,15 +602,48 @@ const GenUI = (() => {
 
   /* ---------- forecasts from get_weather results in this chat ---------- */
   const weatherCache = new Map();
+  /** End (exclusive) of the balanced JSON object that starts at `from`, or -1. */
+  function jsonEnd(t, from) {
+    let depth = 0; let q = false;
+    for (let i = from; i < t.length; i++) {
+      const c = t[i];
+      if (q) { if (c === '\\') i++; else if (c === '"') q = false; continue; }
+      if (c === '"') q = true;
+      else if (c === '{' || c === '[') depth++;
+      else if ((c === '}' || c === ']') && --depth === 0) return i + 1;
+    }
+    return -1;
+  }
+  /** The JSON a device tool returned, from any shape the result arrives in: the engine's live
+   * event ({ content: "text", isError }), the bridge's MCP form ({ content: [{ text }],
+   * structuredContent }), an { output } string, or the bare text "Summary line\n{…json…}"
+   * (maybe inside an <untrusted_tool_output> tag). */
   function parseData(result) {
     let value = result;
-    if (isObj(value) && Array.isArray(value.content)) value = value.content.map((c) => c?.text || '').join('\n');
+    if (isObj(value) && isObj(value.structuredContent)) return value.structuredContent;
+    if (isObj(value) && typeof value.output === 'string') value = value.output;
+    else if (isObj(value) && typeof value.content === 'string') value = value.content;
+    else if (isObj(value) && Array.isArray(value.content)) value = value.content.map((c) => (typeof c === 'string' ? c : c?.text || '')).join('\n');
     if (typeof value === 'string') {
-      // Text first, then the JSON (a long result is wrapped in an untrusted tag).
-      const i = value.indexOf('\n{') >= 0 ? value.indexOf('\n{') + 1 : value.indexOf('{');
-      const j = value.lastIndexOf('}');
-      if (i < 0 || j < i) return null;
-      try { value = JSON.parse(value.slice(i, j + 1)); } catch { return null; }
+      const t = value;
+      let first = null;
+      // Each object that starts a line (or the text) is tried; the one with an id wins.
+      for (let i = t.indexOf('{'); i >= 0; i = t.indexOf('{', i + 1)) {
+        if (i > 0 && !/[\n>]\s*$/.test(t.slice(Math.max(0, i - 4), i))) continue;
+        const e = jsonEnd(t, i);
+        if (e < 0) continue;
+        let v;
+        try { v = JSON.parse(t.slice(i, e)); } catch { continue; }
+        if (!isObj(v)) continue;
+        if (v.id != null) return v;
+        first = first || v;
+        i = e - 1;
+      }
+      if (!first) {
+        const i = t.indexOf('{'); const e = i >= 0 ? jsonEnd(t, i) : -1;
+        if (e > 0) try { const v = JSON.parse(t.slice(i, e)); if (isObj(v)) first = v; } catch { /* not JSON */ }
+      }
+      return first;
     }
     return isObj(value) ? value : null;
   }
@@ -619,12 +652,18 @@ const GenUI = (() => {
     if (data?.id && (data.current || data.daily)) weatherCache.set(String(data.id), data);
     return data;
   }
+  /** Every chat thread the app has open (the main chat is listed even before it is in the map). */
+  function chatThreads() {
+    const list = app?.chat?.runtimes ? [...app.chat.runtimes.values()] : [];
+    if (app?.chat?.main && !list.includes(app.chat.main)) list.push(app.chat.main);
+    return list;
+  }
   const routeCache = new Map();
   /** A get_route result by id, from this app's chats. */
   function findRoute(id) {
     if (!id) return null;
     if (routeCache.has(id)) return routeCache.get(id);
-    const threads = app?.chat?.runtimes ? [...app.chat.runtimes.values()] : [app?.chat?.main];
+    const threads = chatThreads();
     for (const m of threads.flatMap((rt) => rt?.messages || [])) {
       for (const part of Array.isArray(m?.content) ? m.content : []) {
         if (part?.type !== 'tool-call' || !/get_route$/.test(part.toolName || '') || part.result == null) continue;
@@ -638,7 +677,7 @@ const GenUI = (() => {
   function findWeather(id) {
     if (!id) return null;
     if (weatherCache.has(id)) return weatherCache.get(id);
-    const threads = app?.chat?.runtimes ? [...app.chat.runtimes.values()] : [app?.chat?.main];
+    const threads = chatThreads();
     for (const m of threads.flatMap((rt) => rt?.messages || [])) {
       for (const part of Array.isArray(m?.content) ? m.content : []) {
         if (part?.type !== 'tool-call' || !/get_weather$/.test(part.toolName || '') || part.result == null) continue;
@@ -1287,20 +1326,62 @@ const GenUI = (() => {
   /** A JSON value that is a GenUI spec: { root, elements } (also inside { spec }), or a tree (or list) of catalog nodes.
    * Other casings of a name count only with a node shape (props / children / _type), so the lowercase
    * fence widgets ("table", "chart", "image") stay with Widgets. */
+  const lowerAliases = new Map(Object.entries(C.ALIASES || {}).map(([k, v]) => [k.toLowerCase(), v]));
+  lowerAliases.set('imagegallery', 'Carousel'); lowerAliases.set('images', 'Carousel'); lowerAliases.set('photos', 'Carousel');
+  /** The catalog name a common other name stands for ("Column" -> "Stack", "Gallery" -> "Carousel"), or null. */
+  const aliasName = (t) => (typeof t === 'string' && t ? lowerAliases.get(t.toLowerCase()) || null : null);
+  const nodeShaped = (x) => isObj(x.props) || Array.isArray(x.children) || x._type != null;
+  /** A group with no type: { children: [nodes] } (sometimes with props), a model's habit for "a column of cards". */
+  const typelessGroup = (x) => (x._type ?? x.type) == null && Array.isArray(x.children) && x.children.length > 0
+    && Object.keys(x).every((k) => k === 'children' || k === 'props') && x.children.every((c) => isObj(c) && isTextSpec(c));
+  /** A JSON value that is a GenUI spec: { root, elements } (also inside { spec }), or a tree (or list) of catalog nodes.
+   * Other casings of a name count only with a node shape (props / children / _type), so the lowercase
+   * fence widgets ("table", "chart", "image") stay with Widgets. A known other name ("Column", "Gallery")
+   * also counts with a node shape, and so does a typeless { children: [...] } group. */
   function isTextSpec(x) {
     if (Array.isArray(x)) return x.length > 0 && x.length <= 40 && x.every((n) => isObj(n) && isTextSpec(n));
     if (!isObj(x)) return false;
     if (isObj(x.spec) && !x.type) return isTextSpec(x.spec);
     if (typeof x.root === 'string' && isObj(x.elements)) return true;
     const t = x._type ?? x.type;
-    return !!catalogName(t, !(isObj(x.props) || Array.isArray(x.children) || x._type != null));
+    const shaped = nodeShaped(x);
+    if (catalogName(t, !shaped)) return true;
+    if (shaped && aliasName(t)) return true;
+    return typelessGroup(x);
+  }
+  /** A node whose type the catalog does not know, read by what it holds. */
+  function guessName(node) {
+    const p = { ...(isObj(node.props) ? node.props : {}), ...node };
+    if (Array.isArray(p.images) || Array.isArray(p.photos)) return 'Carousel';
+    if (Array.isArray(node.children)) return 'Stack';
+    if (typeof p.src === 'string' && /^https?:/.test(p.src)) return 'Image';
+    if (Array.isArray(p.items) && p.items.length && p.items.every((i) => isObj(i) && 'label' in i && 'value' in i)) return 'Facts';
+    if (Array.isArray(p.items)) return 'List';
+    if (typeof p.text === 'string') return 'Text';
+    return null;
+  }
+  /** Image lists written as images / photos ([{src, alt, caption}]) become the Carousel's items. */
+  function carouselItems(node) {
+    const props = isObj(node.props) ? { ...node.props } : null;
+    const bag = props || node;
+    if (Array.isArray(bag.items)) return node;
+    const list = Array.isArray(bag.images) ? bag.images : Array.isArray(bag.photos) ? bag.photos : null;
+    if (!list) return node;
+    const items = list.map((im) => (typeof im === 'string' ? { image: im } : isObj(im) ? {
+      image: im.image ?? im.src ?? im.url, title: im.title, caption: im.caption ?? im.alt, alt: im.alt, href: im.href ?? im.link,
+    } : null)).filter((i) => i && typeof i.image === 'string');
+    const out = { ...node };
+    if (props) { delete props.images; delete props.photos; out.props = { ...props, items }; } else { delete out.images; delete out.photos; out.items = items; }
+    return out;
   }
   function fixTree(node, depth = 0) {
     if (Array.isArray(node)) return node.map((n) => fixTree(n, depth));
     if (!isObj(node) || depth > C.LIMITS.depth) return node;
-    const name = catalogName(node._type ?? node.type);
-    const out = { ...node };
+    const t = node._type ?? node.type;
+    const name = catalogName(t) || aliasName(t) || (t == null || nodeShaped(node) ? guessName(node) : null);
+    let out = { ...node };
     if (name) { delete out._type; out.type = name; }
+    if (name === 'Carousel') out = carouselItems(out);
     if (Array.isArray(node.children)) out.children = node.children.map((c) => fixTree(c, depth + 1));
     return out;
   }
@@ -1313,7 +1394,7 @@ const GenUI = (() => {
       const spec = clone(x);
       for (const [id, el] of Object.entries(spec.elements)) {
         if (!isObj(el)) continue;
-        const name = catalogName(el.type ?? el._type);
+        const name = catalogName(el.type ?? el._type) || aliasName(el.type ?? el._type);
         if (name) { el.type = name; delete el._type; }
         if (!isObj(el.props)) {
           // Props written beside type (the tree habit) instead of inside props.
