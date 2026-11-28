@@ -665,6 +665,15 @@ const Subagents = (() => {
        (feature `subagentSwarm`) is on. Old links that asked an agent for its swarm,
        topics, board or decisions tab land here, on that section, with the agent marked. */
     const swarmOn = () => typeof AgentSwarm !== 'undefined' && can('subagentSwarm');
+    /* Workflows: saved graphs of sub-agents that pass results to each other (subagents/workflows.rs).
+       Shown while the engine reports the subagentWorkflows feature. */
+    const workflowsOn = () => typeof AgentWorkflows !== 'undefined' && can('subagentWorkflows');
+    let workflowsView = null;
+    const paintWorkflows = () => {
+      if (!workflowsView) workflowsView = AgentWorkflows.mount({ openAgent: (aid) => go('detail', aid) });
+      else workflowsView.refresh();
+      if (panel.firstChild !== workflowsView.root) setChildren(panel, workflowsView.root);
+    };
     const isSwarmTab = (t) => typeof AgentSwarm !== 'undefined' && AgentSwarm.TABS.includes(t);
     let swarmSection = (() => { try { const v = localStorage.getItem(SWARM_SECTION_KEY); return isSwarmTab(v) ? v : 'swarm'; } catch { return 'swarm'; } })();
     let swarmFocus = null; // the agent the Swarm tab was opened from (its role row is marked, and a chip leads back)
@@ -674,7 +683,7 @@ const Subagents = (() => {
     let alive = true;
     const body = h('div', { class: 'sa-screen' });
     // Built on every paint: the Swarm tab comes and goes with the engine's subagentSwarm feature.
-    const tabsNow = () => [['agents', 'Agents'], ...(advancedOn() ? [['explorer', 'Explorer']] : []), ['diagram', 'Diagram'], ...(swarmOn() ? [['swarm', 'Swarm']] : []), ['presets', 'Presets'], ['settings', 'Limits']];
+    const tabsNow = () => [['agents', 'Agents'], ...(advancedOn() ? [['explorer', 'Explorer']] : []), ['diagram', 'Diagram'], ...(workflowsOn() ? [['workflows', 'Workflows']] : []), ...(swarmOn() ? [['swarm', 'Swarm']] : []), ['presets', 'Presets'], ['settings', 'Limits']];
     const tablist = h('div', { class: 'segmented sa-tabs', role: 'tablist', 'aria-label': 'Agents sections' });
     const panel = h('div', { class: 'sa-panel', role: 'tabpanel', id: `sa-panel-${uid(5)}` });
     const go = (t, d, at = null) => {
@@ -744,6 +753,7 @@ const Subagents = (() => {
       else if (current === 'detail') { if (force) paintDetail(); else paintDetailLive(); }
       else if (current === 'diagram') { cancelAnimationFrame(diagramFrame); if (force) paintDiagram(true); else diagramFrame = requestAnimationFrame(() => paintDiagram(false)); }
       else if (current === 'explorer') paintExplorer(force);
+      else if (current === 'workflows') { if (force || panel.firstChild !== workflowsView?.root) paintWorkflows(); }
       else if (force) { if (current === 'presets') paintPresets(); else paintSettings(); }
     }
 
@@ -1819,7 +1829,7 @@ const Subagents = (() => {
     paintTabs();
     appendKids(body, tablist, panel);
     // No description line under the title (Settings has none either); the same text sits behind an (i).
-    const dialog = openDialog({ title: 'Agents', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; cancelAnimationFrame(diagramFrame); diagramGraph?.destroy?.(); diagramGraph = null; delegation?.destroy?.(); delegation = null; fullSection = null; window.removeEventListener('keydown', onFullKey, true); } });
+    const dialog = openDialog({ title: 'Agents', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); workflowsView?.destroy?.(); workflowsView = null; openDialogRef = null; cancelAnimationFrame(diagramFrame); diagramGraph?.destroy?.(); diagramGraph = null; delegation?.destroy?.(); delegation = null; fullSection = null; window.removeEventListener('keydown', onFullKey, true); } });
     dialog.panel.classList.add('sa-dialog');
     dialog.panel.querySelector('.dialog-title')?.append(AgentUiKit.infoTip('Sub-agents the agent started, their work and limits. Agents lists them, Explorer and Diagram show who started whom, Presets saves reusable setups and Limits sets how many may run.', 'Agents'));
     paintTabs();
@@ -1905,6 +1915,11 @@ const Subagents = (() => {
       runtime._saWrapped = true;
       runtime._onEvent = (event) => {
         const type = event?.eventType ?? event?.type ?? '';
+        if (typeof type === 'string' && type.startsWith('workflow.')) {
+          const n = parseMaybeJSON(event?.payloadJson ?? event?.payload, {}) || {};
+          try { window.dispatchEvent(new CustomEvent('agent:workflow', { detail: { type, payload: n } })); } catch (e) { console.warn('workflow event', e); }
+          return;
+        }
         if (typeof type === 'string' && type.startsWith('subagent.')) {
           const n = parseMaybeJSON(event?.payloadJson ?? event?.payload, {}) || {};
           eventLog.add(type, { id: n.id, name: n.name, status: n.status });
