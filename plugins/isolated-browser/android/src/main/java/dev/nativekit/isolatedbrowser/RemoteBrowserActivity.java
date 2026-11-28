@@ -121,6 +121,7 @@ public final class RemoteBrowserActivity extends Activity {
         // memory back immediately (the expensive provider init already happened).
         IsolatedBrowserWarmupService.releaseForSession();
         store = new BrowserStore(this);
+        theme = BrowserTheme.resolve(this, store);
         initialize(getIntent());
     }
 
@@ -191,78 +192,153 @@ public final class RemoteBrowserActivity extends Activity {
             syncChrome();
             return;
         }
+        shellTitleText = title;
+        theme = BrowserTheme.resolve(this, store);
+        applySystemBars();
+        boolean bottom = store != null && "bottom".equals(store.toolbarPosition());
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(SHELL_GROUND);
+        root.setBackgroundColor(theme.ground);
         LinearLayout toolbar = new LinearLayout(this);
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setBackgroundColor(SHELL_CHROME);
+        toolbar.setBackgroundColor(theme.chrome);
         toolbar.setPadding(dp(6), dp(6), dp(6), dp(6));
+        toolbar.setElevation(dp(2));
 
-        backButton = chromeButton("\u2039", "Back", view -> goBack());
+        backButton = chromeButton("\u2190", "Back", view -> goBack());
         toolbar.addView(backButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
-        forwardButton = chromeButton("\u203a", "Forward", view -> { if (webView != null && webView.canGoForward()) webView.goForward(); });
+        forwardButton = chromeButton("\u2192", "Forward", view -> { if (webView != null && webView.canGoForward()) webView.goForward(); });
         toolbar.addView(forwardButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
         address = new TextView(this);
         address.setText(title);
-        address.setTextColor(Color.rgb(226, 232, 240));
-        address.setTextSize(13);
+        address.setTextColor(theme.text);
+        address.setTextSize(14);
         address.setSingleLine(true);
         address.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
         address.setGravity(Gravity.CENTER_VERTICAL);
-        address.setPadding(dp(12), 0, dp(12), 0);
-        address.setBackground(rounded(Color.rgb(17, 30, 49), dp(20), 0));
+        address.setPadding(dp(14), 0, dp(14), 0);
+        address.setBackground(rounded(theme.surface, dp(20), 0));
+        address.setCompoundDrawablePadding(dp(6));
         address.setOnClickListener(view -> promptForAddress(false, false));
-        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(38), 1);
-        addressParams.setMargins(dp(2), 0, dp(2), 0);
+        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(40), 1);
+        addressParams.setMargins(dp(4), 0, dp(4), 0);
         toolbar.addView(address, addressParams);
 
-        // AI agent: one-way native -> page toggle of the docked agent panel. The
-        // floating bubble inside the page stays visible as well.
-        agentButton = chromeButton("\u2728", "AI page agent", view -> toggleAgent());
-        toolbar.addView(agentButton, new LinearLayout.LayoutParams(dp(38), dp(40)));
+        // AI agent: one-way native -> page toggle of the docked agent panel.
+        agentButton = chromeButton("\u2726", "AI page agent", view -> toggleAgent());
+        agentButton.setTextColor(theme.accent);
+        agentButton.setTextSize(18);
+        toolbar.addView(agentButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
         tabsButton = chromeButton("1", "Tabs", view -> showTabSwitcher());
-        tabsButton.setTextSize(13);
-        tabsButton.setBackground(rounded(Color.rgb(17, 30, 49), dp(9), Color.rgb(148, 163, 184)));
+        tabsButton.setTextSize(12);
+        tabsButton.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        tabsButton.setBackground(rounded(0, dp(7), theme.text));
         tabsButton.setOnLongClickListener(view -> { openNewTab(false); return true; });
-        LinearLayout.LayoutParams tabsParams = new LinearLayout.LayoutParams(dp(34), dp(34));
-        tabsParams.setMargins(dp(4), 0, dp(2), 0);
+        LinearLayout.LayoutParams tabsParams = new LinearLayout.LayoutParams(dp(26), dp(26));
+        tabsParams.setMargins(dp(8), 0, dp(6), 0);
         toolbar.addView(tabsButton, tabsParams);
         menuButton = chromeButton("\u22ee", "More options", view -> showOverflowMenu());
-        LinearLayout.LayoutParams menuParams = new LinearLayout.LayoutParams(dp(34), dp(40));
-        menuParams.setMargins(dp(2), 0, 0, 0);
-        toolbar.addView(menuButton, menuParams);
-        Button close = chromeButton("\u2715", "Close browser", view -> finish());
-        LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(dp(34), dp(40));
-        closeParams.setMargins(dp(2), 0, 0, 0);
-        toolbar.addView(close, closeParams);
+        menuButton.setTextSize(20);
+        toolbar.addView(menuButton, new LinearLayout.LayoutParams(dp(36), dp(40)));
 
-        root.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
         progress.setProgress(0);
-        root.addView(progress, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
+        try {
+            progress.setProgressTintList(android.content.res.ColorStateList.valueOf(theme.accent));
+            progress.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(theme.chrome));
+        } catch (Throwable ignored) {}
         findBar = buildFindBar();
         findBar.setVisibility(View.GONE);
-        root.addView(findBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         content = new FrameLayout(this);
-        content.setBackgroundColor(SHELL_GROUND);
-        root.addView(content, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        content.setBackgroundColor(theme.ground);
+        LinearLayout.LayoutParams barParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        if (bottom) {
+            // Bottom toolbar: thumb reach on tall phones (Safari / Samsung Internet style).
+            root.addView(findBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            root.addView(content, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+            root.addView(progress, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
+            root.addView(toolbar, barParams);
+        } else {
+            root.addView(toolbar, barParams);
+            root.addView(progress, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
+            root.addView(findBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            root.addView(content, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        }
         setContentView(root);
         shellBuilt = true;
         ImeInsetsHelper.apply(root);
         syncChrome();
+        updateTabBadge();
     }
 
-    private static final int SHELL_GROUND = Color.rgb(7, 17, 31);
-    private static final int SHELL_CHROME = Color.rgb(12, 22, 38);
+    /** Resolved appearance (Light / Dark / System + accent + backdrop). */
+    private BrowserTheme theme;
+    private String shellTitleText = "Browser";
+
+    /**
+     * Re-paints the whole shell after an appearance change without losing a
+     * single tab: the tab WebViews are detached, the shell is rebuilt with the
+     * new colours / toolbar position, and the current tab is re-attached.
+     */
+    private void rebuildShell() {
+        if (content != null) content.removeAllViews();
+        for (BrowserTab tab : tabs) {
+            if (tab.view != null && tab.view.getParent() instanceof ViewGroup) ((ViewGroup) tab.view.getParent()).removeView(tab.view);
+        }
+        shellBuilt = false;
+        buildShell(shellTitleText, shellTitleText);
+        for (BrowserTab tab : tabs) {
+            if (tab.view != null) tab.view.setBackgroundColor(theme.ground);
+            if (tab.agent != null) tab.agent.setTheme(theme.dark, BrowserTheme.hex(theme.accent));
+            if (tab.view != null) PageAgentHost.applyTheme(tab.view, theme.dark, BrowserTheme.hex(theme.accent));
+        }
+        if (current != null) { BrowserTab tab = current; current = null; showTab(tab, false); }
+    }
+
+    private void applySystemBars() {
+        try {
+            android.view.Window window = getWindow();
+            window.setStatusBarColor(theme.chrome);
+            window.setNavigationBarColor(theme.chrome);
+            View decor = window.getDecorView();
+            int flags = decor.getSystemUiVisibility();
+            int light = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            decor.setSystemUiVisibility(theme.dark ? (flags & ~light) : (flags | light));
+        } catch (Throwable ignored) {}
+    }
+
+    /** Themed AlertDialog builder: dialogs follow the browser's Light / Dark choice. */
+    private android.app.AlertDialog.Builder dialogBuilder() {
+        int style = theme != null && !theme.dark
+            ? android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
+            : android.R.style.Theme_DeviceDefault_Dialog_Alert;
+        return new android.app.AlertDialog.Builder(this, style);
+    }
+
+    /** Start-page / loading backdrop the user picked (plain ground or a soft gradient). */
+    private android.graphics.drawable.Drawable backdrop() {
+        if (theme.backdropTop == theme.ground && theme.backdropBottom == theme.ground) {
+            return new android.graphics.drawable.ColorDrawable(theme.ground);
+        }
+        return new android.graphics.drawable.GradientDrawable(
+            android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+            new int[] { theme.backdropTop, theme.backdropBottom });
+    }
+
+    /** Transparent button ground with a themed ripple. */
+    private android.graphics.drawable.Drawable pressable(int radius) {
+        android.graphics.drawable.GradientDrawable mask = rounded(Color.WHITE, radius, 0);
+        return new android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(BrowserTheme.alpha(theme.text, 40)), null, mask);
+    }
 
     private Button chromeButton(String label, String description, View.OnClickListener onClick) {
         Button button = new Button(this);
         button.setText(label);
         button.setContentDescription(description);
-        button.setTextColor(Color.rgb(226, 232, 240));
+        button.setTextColor(theme.text);
         button.setTextSize(16);
         button.setAllCaps(false);
         button.setPadding(0, 0, 0, 0);
@@ -270,7 +346,7 @@ public final class RemoteBrowserActivity extends Activity {
         button.setMinimumWidth(0);
         button.setMinHeight(0);
         button.setMinimumHeight(0);
-        button.setBackground(rounded(Color.rgb(17, 30, 49), dp(20), 0));
+        button.setBackground(pressable(dp(20)));
         button.setStateListAnimator(null);
         button.setOnClickListener(onClick);
         return button;
@@ -327,7 +403,7 @@ public final class RemoteBrowserActivity extends Activity {
         FrameLayout wrapper = new FrameLayout(this);
         wrapper.setPadding(dp(20), dp(8), dp(20), 0);
         wrapper.addView(input, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        new android.app.AlertDialog.Builder(this)
+        dialogBuilder()
             .setTitle(newTab ? (incognito ? "New incognito tab" : "New tab") : "Open address")
             .setView(wrapper)
             .setNegativeButton("Cancel", null)
@@ -405,6 +481,8 @@ public final class RemoteBrowserActivity extends Activity {
         menu.add(Menu.NONE, MENU_BOOKMARK, 26, marked ? "Remove bookmark" : "Add bookmark");
         menu.add(Menu.NONE, MENU_BOOKMARKS, 27, "Bookmarks");
         menu.add(Menu.NONE, MENU_HISTORY, 28, "History");
+        menu.add(Menu.NONE, MENU_APPEARANCE, 29, "Appearance");
+        menu.add(Menu.NONE, MENU_CLOSE, 40, "Close browser");
         popup.setOnMenuItemClickListener(this::onOverflowItem);
         popup.show();
     }
@@ -422,6 +500,8 @@ public final class RemoteBrowserActivity extends Activity {
             case MENU_BOOKMARK: toggleBookmark(); return true;
             case MENU_BOOKMARKS: showEntries("Bookmarks", true); return true;
             case MENU_HISTORY: showEntries("History", false); return true;
+            case MENU_APPEARANCE: showAppearance(); return true;
+            case MENU_CLOSE: finish(); return true;
             default: return false;
         }
     }
@@ -518,6 +598,7 @@ public final class RemoteBrowserActivity extends Activity {
         exitCustomView();
         cancelLoadTimeout();
         if (current != null && current != tab && current.view != null) {
+            captureThumb(current);
             try { current.view.onPause(); } catch (Throwable ignored) {}
         }
         tab.lastActive = System.currentTimeMillis();
@@ -581,7 +662,8 @@ public final class RemoteBrowserActivity extends Activity {
         int count = tabs.size();
         tabsButton.setText(count > 99 ? "99+" : String.valueOf(Math.max(1, count)));
         boolean incognito = current != null && current.incognito;
-        tabsButton.setBackground(rounded(incognito ? Color.rgb(76, 29, 149) : Color.rgb(17, 30, 49), dp(9), Color.rgb(148, 163, 184)));
+        tabsButton.setBackground(rounded(incognito ? theme.incognito : 0, dp(9), incognito ? theme.incognito : theme.text));
+        tabsButton.setTextColor(incognito ? Color.WHITE : theme.text);
         tabsButton.setContentDescription(count + (count == 1 ? " tab" : " tabs"));
     }
 
@@ -600,26 +682,158 @@ public final class RemoteBrowserActivity extends Activity {
         return group == null ? null : group.name;
     }
 
+    // ======================= tab switcher (page previews) =======================
+    //
+    // Tabs used to be a plain text list inside an AlertDialog. The switcher is
+    // now a full-screen surface that shows every tab as a preview of the page
+    // as it last looked (a scaled snapshot taken when the tab was left), the
+    // way Chrome / Firefox / Samsung Internet do it. The user picks the layout:
+    //   Grid — two preview cards per row (default, visual recognition)
+    //   List — compact rows with a small preview (more tabs on screen)
+    // The choice is persisted (BrowserStore.tabLayout) and can be flipped from
+    // the switcher header or from Appearance settings.
+
+    private android.app.Dialog switcher;
+
     private void showTabSwitcher() {
-        LinearLayout list = new LinearLayout(this);
+        captureThumb(current);
+        if (switcher != null && switcher.isShowing()) switcher.dismiss();
+        int style = theme.dark ? android.R.style.Theme_DeviceDefault_NoActionBar : android.R.style.Theme_DeviceDefault_Light_NoActionBar;
+        final android.app.Dialog dialog = new android.app.Dialog(this, style);
+        switcher = dialog;
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(theme.ground);
+
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(16), dp(10), dp(8), dp(6));
+        final TextView title = new TextView(this);
+        title.setTextColor(theme.text);
+        title.setTextSize(20);
+        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        final LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
-        list.setPadding(dp(12), dp(6), dp(12), dp(6));
+        list.setPadding(dp(12), dp(4), dp(12), dp(12));
+
+        // Grid / List segmented control.
+        LinearLayout segment = new LinearLayout(this);
+        segment.setBackground(rounded(theme.surface, dp(18), 0));
+        segment.setPadding(dp(3), dp(3), dp(3), dp(3));
+        final TextView gridChip = segmentChip("\u25a6  Grid");
+        final TextView listChip = segmentChip("\u2630  List");
+        segment.addView(gridChip, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
+        segment.addView(listChip, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
+        final Runnable paintSegment = () -> {
+            boolean grid = !"list".equals(store.tabLayout());
+            styleChip(gridChip, grid);
+            styleChip(listChip, !grid);
+        };
+        gridChip.setOnClickListener(v -> { store.setTabLayout("grid"); paintSegment.run(); fillTabRows(list, dialog, title); });
+        listChip.setOnClickListener(v -> { store.setTabLayout("list"); paintSegment.run(); fillTabRows(list, dialog, title); });
+        paintSegment.run();
+        header.addView(segment, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        Button more = chromeButton("\u22ee", "Tab options", v -> {
+            PopupMenu popup = new PopupMenu(this, v);
+            popup.getMenu().add(0, 1, 0, "Tab groups");
+            popup.getMenu().add(0, 2, 1, "New incognito tab");
+            if (groupFilter != null) popup.getMenu().add(0, 3, 2, "Show all tabs");
+            popup.getMenu().add(0, 4, 3, "Close all tabs");
+            popup.setOnMenuItemClickListener(item -> {
+                switch (item.getItemId()) {
+                    case 1: dialog.dismiss(); showGroupsDialog(); return true;
+                    case 2: dialog.dismiss(); openNewTab(true); return true;
+                    case 3: groupFilter = null; fillTabRows(list, dialog, title); return true;
+                    case 4: dialog.dismiss(); confirmCloseAll(); return true;
+                    default: return false;
+                }
+            });
+            popup.show();
+        });
+        more.setTextSize(20);
+        LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(dp(40), dp(40));
+        moreParams.setMargins(dp(4), 0, 0, 0);
+        header.addView(more, moreParams);
+        root.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
         scroll.addView(list, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this)
-            .setTitle(tabsTitle())
-            .setView(scroll)
-            .setPositiveButton("New tab", (d, w) -> openNewTab(false))
-            .setNegativeButton("Done", null);
-        customizeSwitcher(builder);
-        android.app.AlertDialog dialog = builder.create();
-        fillTabRows(list, dialog);
+        root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
+        // Bottom action bar: Done · New tab.
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        actions.setPadding(dp(16), dp(8), dp(16), dp(12));
+        actions.setBackgroundColor(theme.chrome);
+        actions.setElevation(dp(4));
+        TextView done = new TextView(this);
+        done.setText("Done");
+        done.setTextColor(theme.text);
+        done.setTextSize(15);
+        done.setGravity(Gravity.CENTER);
+        done.setPadding(dp(18), 0, dp(18), 0);
+        done.setBackground(pressable(dp(22)));
+        done.setOnClickListener(v -> dialog.dismiss());
+        actions.addView(done, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
+        actions.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+        TextView newTab = new TextView(this);
+        newTab.setText("+  New tab");
+        newTab.setTextColor(theme.onAccent);
+        newTab.setTextSize(15);
+        newTab.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        newTab.setGravity(Gravity.CENTER);
+        newTab.setPadding(dp(22), 0, dp(22), 0);
+        newTab.setBackground(rounded(theme.accent, dp(22), 0));
+        newTab.setOnClickListener(v -> { dialog.dismiss(); openNewTab(false); });
+        actions.addView(newTab, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
+        root.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        dialog.setContentView(root);
+        try {
+            android.view.Window window = dialog.getWindow();
+            if (window != null) {
+                window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+                window.setStatusBarColor(theme.ground);
+                window.setNavigationBarColor(theme.chrome);
+                window.setWindowAnimations(android.R.style.Animation_Dialog);
+            }
+        } catch (Throwable ignored) {}
+        ImeInsetsHelper.apply(root);
+        fillTabRows(list, dialog, title);
         dialog.show();
     }
 
-    /** Hook for later stages: extra switcher buttons (groups). */
-    private void customizeSwitcher(android.app.AlertDialog.Builder builder) {
-        builder.setNeutralButton("Groups", (d, w) -> showGroupsDialog());
+    private TextView segmentChip(String label) {
+        TextView chip = new TextView(this);
+        chip.setText(label);
+        chip.setTextSize(13);
+        chip.setGravity(Gravity.CENTER);
+        chip.setPadding(dp(12), 0, dp(12), 0);
+        return chip;
+    }
+
+    private void styleChip(TextView chip, boolean selected) {
+        chip.setBackground(selected ? rounded(theme.chrome, dp(15), theme.border) : null);
+        chip.setTextColor(selected ? theme.text : theme.muted);
+        chip.setTypeface(selected ? android.graphics.Typeface.DEFAULT_BOLD : android.graphics.Typeface.DEFAULT);
+    }
+
+    private void confirmCloseAll() {
+        dialogBuilder()
+            .setTitle("Close all tabs?")
+            .setMessage(tabs.size() + " tabs will be closed.")
+            .setPositiveButton("Close all", (d, w) -> {
+                for (BrowserTab tab : new ArrayList<>(tabs)) { deleteThumb(tab); destroyTabView(tab); }
+                tabs.clear();
+                current = null;
+                saveSession();
+                finish();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
     }
 
     private String tabsTitle() {
@@ -628,77 +842,266 @@ public final class RemoteBrowserActivity extends Activity {
         return group == null ? count : group.name + " · " + visibleTabs().size() + " of " + count;
     }
 
-    private void fillTabRows(LinearLayout list, android.app.AlertDialog dialog) {
+    private void fillTabRows(LinearLayout list, android.app.Dialog dialog, TextView title) {
         list.removeAllViews();
+        boolean grid = !"list".equals(store.tabLayout());
         List<BrowserTab> shown = visibleTabs();
         if (groupFilter != null) {
-            for (BrowserTab tab : shown) list.addView(tabRow(tab, list, dialog));
+            addTabViews(list, shown, grid, dialog, title);
         } else {
             // Ungrouped tabs first, then each group under a collapsible header.
-            for (BrowserTab tab : shown) if (findGroup(tab.groupId) == null) list.addView(tabRow(tab, list, dialog));
+            List<BrowserTab> loose = new ArrayList<>();
+            for (BrowserTab tab : shown) if (findGroup(tab.groupId) == null) loose.add(tab);
+            addTabViews(list, loose, grid, dialog, title);
             for (BrowserStore.Group group : store.groups()) {
                 List<BrowserTab> members = new ArrayList<>();
                 for (BrowserTab tab : shown) if (group.id.equals(tab.groupId)) members.add(tab);
                 if (members.isEmpty()) continue;
-                list.addView(groupHeader(group, members.size(), list, dialog));
+                list.addView(groupHeader(group, members.size(), list, dialog, title));
                 if (collapsedGroups.contains(group.id)) continue;
-                for (BrowserTab tab : members) list.addView(tabRow(tab, list, dialog));
+                addTabViews(list, members, grid, dialog, title);
             }
         }
-        dialog.setTitle(tabsTitle());
+        title.setText(tabsTitle());
     }
 
-    private View tabRow(final BrowserTab tab, final LinearLayout list, final android.app.AlertDialog dialog) {
+    private void addTabViews(LinearLayout list, List<BrowserTab> items, boolean grid, android.app.Dialog dialog, TextView title) {
+        if (!grid) {
+            for (BrowserTab tab : items) list.addView(tabRow(tab, list, dialog, title));
+            return;
+        }
+        for (int i = 0; i < items.size(); i += 2) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            for (int k = 0; k < 2; k++) {
+                LinearLayout.LayoutParams cell = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+                cell.setMargins(dp(5), dp(5), dp(5), dp(5));
+                if (i + k < items.size()) row.addView(tabCard(items.get(i + k), list, dialog, title), cell);
+                else row.addView(new View(this), cell);
+            }
+            list.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+    }
+
+    /** Grid card: favicon letter + title + close, then the page preview. */
+    private View tabCard(final BrowserTab tab, final LinearLayout list, final android.app.Dialog dialog, final TextView title) {
+        boolean active = tab == current;
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(3), dp(3), dp(3), dp(3));
+        card.setBackground(rounded(tab.incognito ? BrowserTheme.blend(theme.surface, theme.incognito, 0.25f) : theme.surface, dp(16),
+            active ? theme.accent : theme.border));
+        if (active) ((android.graphics.drawable.GradientDrawable) card.getBackground()).setStroke(dp(2), theme.accent);
+        card.setElevation(active ? dp(3) : dp(1));
+
+        LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setPadding(dp(8), dp(2), 0, dp(2));
+        top.addView(faviconBadge(tab, dp(18)), new LinearLayout.LayoutParams(dp(18), dp(18)));
+        TextView name = new TextView(this);
+        name.setText(tab.label());
+        name.setTextColor(theme.text);
+        name.setTextSize(12.5f);
+        name.setSingleLine(true);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        name.setPadding(dp(6), 0, dp(2), 0);
+        top.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button close = chromeButton("\u2715", "Close tab", v -> closeFromSwitcher(tab, list, dialog, title));
+        close.setTextSize(12);
+        close.setTextColor(theme.muted);
+        top.addView(close, new LinearLayout.LayoutParams(dp(30), dp(30)));
+        card.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        card.addView(previewView(tab, 1.25f), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(196)));
+        String info = tabExtraInfo(tab);
+        if (info != null) {
+            TextView meta = new TextView(this);
+            meta.setText(info);
+            meta.setTextColor(theme.muted);
+            meta.setTextSize(11);
+            meta.setPadding(dp(8), dp(4), dp(8), dp(3));
+            card.addView(meta);
+        }
+        card.setContentDescription(tab.label() + (active ? ", current tab" : ""));
+        card.setOnClickListener(v -> { dialog.dismiss(); if (tab != current) showTab(tab, false); });
+        card.setOnLongClickListener(v -> { onTabLongPress(tab, list, dialog, title); return true; });
+        return card;
+    }
+
+    /** List row: small preview, title, host, close. */
+    private View tabRow(final BrowserTab tab, final LinearLayout list, final android.app.Dialog dialog, final TextView title) {
+        boolean active = tab == current;
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(10), dp(8), dp(6), dp(8));
-        int ground = tab == current ? Color.argb(70, 59, 130, 246) : Color.argb(28, 148, 163, 184);
-        row.setBackground(rounded(ground, dp(12), tab == current ? Color.rgb(59, 130, 246) : 0));
-        TextView text = new TextView(this);
+        row.setPadding(dp(8), dp(8), dp(4), dp(8));
+        row.setBackground(rounded(active ? BrowserTheme.alpha(theme.accent, 36) : theme.surface, dp(14), active ? theme.accent : 0));
+        View preview = previewView(tab, 1.4f);
+        LinearLayout.LayoutParams previewParams = new LinearLayout.LayoutParams(dp(54), dp(72));
+        previewParams.setMargins(0, 0, dp(12), 0);
+        row.addView(preview, previewParams);
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        TextView name = new TextView(this);
+        name.setText(tab.label());
+        name.setTextColor(theme.text);
+        name.setTextSize(14.5f);
+        name.setMaxLines(2);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        texts.addView(name);
+        TextView host = new TextView(this);
         String info = tabExtraInfo(tab);
-        String host = tab.url == null ? "" : BrowserLogic.displayHost(tab.url);
-        text.setText(tab.label() + "\n" + host + (info == null ? "" : " \u00b7 " + info));
-        text.setTextSize(14);
-        text.setMaxLines(3);
-        row.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        row.setOnClickListener(view -> {
-            dialog.dismiss();
-            if (tab != current) showTab(tab, false);
-        });
-        row.setOnLongClickListener(view -> { onTabLongPress(tab, list, dialog); return true; });
-        Button close = chromeButton("\u2715", "Close tab", view -> {
-            closeTab(tab);
-            if (tabs.isEmpty() || isFinishing()) { dialog.dismiss(); return; }
-            fillTabRows(list, dialog);
-        });
-        row.addView(close, new LinearLayout.LayoutParams(dp(34), dp(34)));
+        String h = tab.url == null ? "" : BrowserLogic.displayHost(tab.url);
+        host.setText(h + (info == null ? "" : " \u00b7 " + info));
+        host.setTextColor(theme.muted);
+        host.setTextSize(12);
+        host.setSingleLine(true);
+        host.setPadding(0, dp(2), 0, 0);
+        texts.addView(host);
+        row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button close = chromeButton("\u2715", "Close tab", v -> closeFromSwitcher(tab, list, dialog, title));
+        close.setTextSize(13);
+        close.setTextColor(theme.muted);
+        row.addView(close, new LinearLayout.LayoutParams(dp(40), dp(40)));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        params.setMargins(0, dp(4), 0, dp(4));
+        params.setMargins(dp(4), dp(4), dp(4), dp(4));
         row.setLayoutParams(params);
+        row.setContentDescription(tab.label() + (active ? ", current tab" : ""));
+        row.setOnClickListener(v -> { dialog.dismiss(); if (tab != current) showTab(tab, false); });
+        row.setOnLongClickListener(v -> { onTabLongPress(tab, list, dialog, title); return true; });
         return row;
     }
 
-    /** Hook for later stages: long-press on a tab in the switcher. */
-    private void onTabLongPress(BrowserTab tab, LinearLayout list, android.app.AlertDialog dialog) {
-        chooseGroupForTab(tab, () -> { if (dialog.isShowing()) fillTabRows(list, dialog); });
+    private void closeFromSwitcher(BrowserTab tab, LinearLayout list, android.app.Dialog dialog, TextView title) {
+        deleteThumb(tab);
+        closeTab(tab);
+        if (tabs.isEmpty() || isFinishing()) { dialog.dismiss(); return; }
+        fillTabRows(list, dialog, title);
     }
 
-    private View groupHeader(final BrowserStore.Group group, int count, final LinearLayout list, final android.app.AlertDialog dialog) {
+    /**
+     * The page's last view: the snapshot taken when the tab was left (or the
+     * one persisted for a restored tab), top-cropped to the slot's aspect. A
+     * tab that never painted shows its site initial instead of a blank box.
+     */
+    private View previewView(BrowserTab tab, float aspect) {
+        Bitmap thumb = thumbFor(tab);
+        if (thumb != null) {
+            android.widget.ImageView image = new android.widget.ImageView(this);
+            int w = thumb.getWidth();
+            int h = Math.min(thumb.getHeight(), Math.max(1, Math.round(w * aspect)));
+            try { image.setImageBitmap(h < thumb.getHeight() ? Bitmap.createBitmap(thumb, 0, 0, w, h) : thumb); }
+            catch (Throwable error) { image.setImageBitmap(thumb); }
+            image.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+            image.setBackground(rounded(theme.chrome, dp(13), 0));
+            image.setClipToOutline(true);
+            return image;
+        }
+        FrameLayout empty = new FrameLayout(this);
+        empty.setBackground(rounded(theme.surface2, dp(13), 0));
+        View badge = faviconBadge(tab, dp(40));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER);
+        empty.addView(badge, lp);
+        return empty;
+    }
+
+    /** Round site-initial badge tinted from the host name (no network favicon fetch). */
+    private View faviconBadge(BrowserTab tab, int size) {
+        TextView badge = new TextView(this);
+        String host = tab.url == null ? "" : BrowserLogic.displayHost(tab.url);
+        String letter = host.isEmpty() ? (tab.incognito ? "\u25d0" : "+") : host.substring(0, 1).toUpperCase(Locale.ROOT);
+        Object[] accent = BrowserTheme.ACCENTS[Math.abs(host.hashCode()) % BrowserTheme.ACCENTS.length];
+        int color = tab.incognito ? theme.incognito : (Integer) accent[1];
+        badge.setText(letter);
+        badge.setTextColor(Color.WHITE);
+        badge.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        badge.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, size * 0.5f);
+        badge.setGravity(Gravity.CENTER);
+        badge.setIncludeFontPadding(false);
+        badge.setBackground(rounded(color, size / 2, 0));
+        return badge;
+    }
+
+    // ---- page snapshots for previews ----
+
+    /** Scaled snapshot of what the tab shows right now (visible viewport). */
+    private void captureThumb(BrowserTab tab) {
+        if (tab == null || tab.view == null) return;
+        WebView view = tab.view;
+        if (view.getWidth() <= 0 || view.getHeight() <= 0 || view.getParent() == null || view.getVisibility() != View.VISIBLE) return;
+        try {
+            float scale = Math.min(1f, dp(240) / (float) view.getWidth());
+            int w = Math.max(1, Math.round(view.getWidth() * scale));
+            int h = Math.max(1, Math.round(view.getHeight() * scale));
+            Bitmap bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565);
+            android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+            canvas.drawColor(theme.ground);
+            canvas.scale(scale, scale);
+            canvas.translate(-view.getScrollX(), -view.getScrollY());
+            view.draw(canvas);
+            tab.thumb = bitmap;
+            if (!tab.incognito && tab.url != null) persistThumb(tab.url, bitmap);
+        } catch (Throwable ignored) { /* preview is best effort */ }
+    }
+
+    private java.io.File thumbFile(String url) {
+        java.io.File dir = new java.io.File(getCacheDir(), "tab-previews");
+        return new java.io.File(dir, Integer.toHexString(url.hashCode()) + ".jpg");
+    }
+
+    private static final java.util.concurrent.ExecutorService THUMB_IO = java.util.concurrent.Executors.newSingleThreadExecutor();
+
+    private void persistThumb(final String url, final Bitmap bitmap) {
+        final java.io.File file = thumbFile(url);
+        THUMB_IO.execute(() -> {
+            try {
+                java.io.File dir = file.getParentFile();
+                if (dir != null && !dir.exists()) dir.mkdirs();
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 78, out);
+                }
+            } catch (Throwable ignored) {}
+        });
+    }
+
+    private Bitmap thumbFor(BrowserTab tab) {
+        if (tab.thumb != null || tab.incognito || tab.url == null) return tab.thumb;
+        try {
+            java.io.File file = thumbFile(tab.url);
+            if (file.exists()) tab.thumb = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath());
+        } catch (Throwable ignored) {}
+        return tab.thumb;
+    }
+
+    private void deleteThumb(BrowserTab tab) {
+        if (tab == null) return;
+        tab.thumb = null;
+        if (tab.url == null) return;
+        final java.io.File file = thumbFile(tab.url);
+        THUMB_IO.execute(() -> { try { file.delete(); } catch (Throwable ignored) {} });
+    }
+
+    /** Hook for later stages: long-press on a tab in the switcher. */
+    private void onTabLongPress(BrowserTab tab, LinearLayout list, android.app.Dialog dialog, TextView title) {
+        chooseGroupForTab(tab, () -> { if (dialog.isShowing()) fillTabRows(list, dialog, title); });
+    }
+
+    private View groupHeader(final BrowserStore.Group group, int count, final LinearLayout list, final android.app.Dialog dialog, final TextView title) {
         TextView header = new TextView(this);
         boolean collapsed = collapsedGroups.contains(group.id);
-        header.setText((collapsed ? "\u25b8 " : "\u25be ") + group.name + "  (" + count + ")");
+        header.setText((collapsed ? "\u25b8  " : "\u25be  ") + group.name + "  \u00b7  " + count);
         header.setTextColor(Color.WHITE);
         header.setTextSize(14);
-        header.setPadding(dp(12), dp(8), dp(12), dp(8));
-        header.setBackground(rounded(group.color, dp(12), 0));
+        header.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        header.setPadding(dp(14), dp(9), dp(14), dp(9));
+        header.setBackground(rounded(group.color, dp(14), 0));
         header.setOnClickListener(view -> {
             if (!collapsedGroups.remove(group.id)) collapsedGroups.add(group.id);
-            fillTabRows(list, dialog);
+            fillTabRows(list, dialog, title);
         });
-        header.setOnLongClickListener(view -> { dialog.dismiss(); groupFilter = group.id; showTabSwitcher(); return true; });
+        header.setOnLongClickListener(view -> { groupFilter = group.id; fillTabRows(list, dialog, title); return true; });
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        params.setMargins(0, dp(10), 0, dp(2));
+        params.setMargins(dp(5), dp(12), dp(5), dp(4));
         header.setLayoutParams(params);
         return header;
     }
@@ -710,6 +1113,8 @@ public final class RemoteBrowserActivity extends Activity {
     private static final int MENU_INCOGNITO = 14;
     private static final int MENU_ZOOM = 15;
     private static final int MENU_HOME = 16;
+    private static final int MENU_APPEARANCE = 17;
+    private static final int MENU_CLOSE = 18;
     /** Switcher filter: null shows every tab, else only that group's tabs. */
     private String groupFilter;
     private final Set<String> collapsedGroups = new HashSet<>();
@@ -734,7 +1139,7 @@ public final class RemoteBrowserActivity extends Activity {
             rows.add((group.id.equals(groupFilter) ? "\u2713 " : "\u25cf ") + group.name + " (" + groupCount(group.id) + ")");
         }
         rows.add("+ New group");
-        android.app.AlertDialog dialog = new android.app.AlertDialog.Builder(this)
+        android.app.AlertDialog dialog = dialogBuilder()
             .setTitle("Tab groups")
             .setItems(rows.toArray(new String[0]), (d, which) -> {
                 if (which == 0) { groupFilter = null; showTabSwitcher(); }
@@ -771,7 +1176,7 @@ public final class RemoteBrowserActivity extends Activity {
         FrameLayout wrapper = new FrameLayout(this);
         wrapper.setPadding(dp(20), dp(8), dp(20), 0);
         wrapper.addView(input, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        new android.app.AlertDialog.Builder(this)
+        dialogBuilder()
             .setTitle(existing == null ? "New tab group" : "Rename group")
             .setView(wrapper)
             .setNegativeButton("Cancel", null)
@@ -795,7 +1200,7 @@ public final class RemoteBrowserActivity extends Activity {
 
     private void editGroup(final BrowserStore.Group group) {
         String[] actions = { "Rename", "Close all tabs in group", "Ungroup tabs", "Delete group" };
-        new android.app.AlertDialog.Builder(this)
+        dialogBuilder()
             .setTitle(group.name)
             .setItems(actions, (d, which) -> {
                 if (which == 0) { promptGroupName(group, renamed -> showGroupsDialog()); return; }
@@ -827,7 +1232,7 @@ public final class RemoteBrowserActivity extends Activity {
         for (BrowserStore.Group group : groups) rows.add((group.id.equals(tab.groupId) ? "\u2713 " : "\u25cf ") + group.name);
         rows.add("+ New group");
         if (tab.groupId != null) rows.add("Remove from group");
-        new android.app.AlertDialog.Builder(this)
+        dialogBuilder()
             .setTitle("Add \"" + tab.label() + "\" to group")
             .setItems(rows.toArray(new String[0]), (d, which) -> {
                 if (which < groups.size()) { tab.groupId = groups.get(which).id; saveSession(); after.run(); }
@@ -875,7 +1280,7 @@ public final class RemoteBrowserActivity extends Activity {
             "Home page: " + (store.homePage().isEmpty() ? "Not set" : BrowserLogic.displayHost(store.homePage())),
             "Default text size: " + store.textZoom() + "%",
         };
-        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this)
+        android.app.AlertDialog.Builder builder = dialogBuilder()
             .setTitle("Browser settings")
             .setItems(rows, (d, which) -> onSettingPicked(which))
             .setNegativeButton("Close", null);
@@ -884,7 +1289,145 @@ public final class RemoteBrowserActivity extends Activity {
     }
 
     /** Hook for later stages: extra settings buttons. */
-    private void moreSettings(android.app.AlertDialog.Builder builder) { }
+    private void moreSettings(android.app.AlertDialog.Builder builder) {
+        builder.setNeutralButton("Appearance", (d, w) -> showAppearance());
+    }
+
+    // ======================= appearance (user customisation) =======================
+
+    /**
+     * One sheet for everything visual: theme mode, accent colour, start-page
+     * backdrop, tab switcher layout and toolbar position. Every pick is saved
+     * immediately and the shell re-paints live behind the sheet.
+     */
+    private void showAppearance() {
+        final android.app.AlertDialog[] holder = new android.app.AlertDialog[1];
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(20), dp(4), dp(20), dp(8));
+        scroll.addView(body);
+
+        body.addView(sectionLabel("Theme"));
+        String mode = store.themeMode();
+        String[] modeValues = BrowserTheme.MODES;
+        LinearLayout modes = optionRow();
+        for (int i = 0; i < modeValues.length; i++) {
+            final String value = modeValues[i];
+            modes.addView(optionChip(BrowserTheme.MODE_LABELS[i], value.equals(mode), v -> {
+                store.setThemeMode(value); appearanceChanged(holder[0]);
+            }), weighted());
+        }
+        body.addView(modes);
+
+        body.addView(sectionLabel("Accent colour"));
+        LinearLayout accents = optionRow();
+        for (int i = 0; i < BrowserTheme.ACCENTS.length; i++) {
+            final int index = i;
+            Object[] a = BrowserTheme.ACCENTS[i];
+            int color = (Integer) (theme.dark ? a[2] : a[1]);
+            accents.addView(swatch(color, color, (String) a[0], i == store.accentIndex(), v -> {
+                store.setAccentIndex(index); appearanceChanged(holder[0]);
+            }), swatchParams());
+        }
+        body.addView(accents);
+
+        body.addView(sectionLabel("Start page background"));
+        LinearLayout backdrops = optionRow();
+        for (int i = 0; i < BrowserTheme.BACKDROPS.length; i++) {
+            final int index = i;
+            Object[] b = BrowserTheme.BACKDROPS[i];
+            int top = (Integer) b[1] == 0 ? theme.surface : (Integer) b[1];
+            int bottom = (Integer) b[2] == 0 ? theme.surface2 : (Integer) b[2];
+            backdrops.addView(swatch(top, bottom, (String) b[0], i == store.backdropIndex(), v -> {
+                store.setBackdropIndex(index); appearanceChanged(holder[0]);
+            }), swatchParams());
+        }
+        body.addView(backdrops);
+
+        body.addView(sectionLabel("Tab switcher"));
+        LinearLayout layouts = optionRow();
+        boolean grid = !"list".equals(store.tabLayout());
+        layouts.addView(optionChip("\u25a6  Preview grid", grid, v -> { store.setTabLayout("grid"); appearanceChanged(holder[0]); }), weighted());
+        layouts.addView(optionChip("\u2630  Compact list", !grid, v -> { store.setTabLayout("list"); appearanceChanged(holder[0]); }), weighted());
+        body.addView(layouts);
+
+        body.addView(sectionLabel("Toolbar position"));
+        LinearLayout positions = optionRow();
+        boolean bottomBar = "bottom".equals(store.toolbarPosition());
+        positions.addView(optionChip("Top", !bottomBar, v -> { store.setToolbarPosition("top"); appearanceChanged(holder[0]); }), weighted());
+        positions.addView(optionChip("Bottom", bottomBar, v -> { store.setToolbarPosition("bottom"); appearanceChanged(holder[0]); }), weighted());
+        body.addView(positions);
+
+        holder[0] = dialogBuilder()
+            .setTitle("Appearance")
+            .setView(scroll)
+            .setPositiveButton("Done", null)
+            .show();
+    }
+
+    private void appearanceChanged(android.app.AlertDialog sheet) {
+        if (sheet != null) sheet.dismiss();
+        rebuildShell();
+        showAppearance();
+    }
+
+    private TextView sectionLabel(String text) {
+        TextView label = new TextView(this);
+        label.setText(text);
+        label.setTextColor(theme.muted);
+        label.setTextSize(12.5f);
+        label.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        label.setPadding(0, dp(16), 0, dp(8));
+        return label;
+    }
+
+    private LinearLayout optionRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        return row;
+    }
+
+    private LinearLayout.LayoutParams weighted() {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(40), 1);
+        params.setMargins(dp(3), 0, dp(3), 0);
+        return params;
+    }
+
+    private LinearLayout.LayoutParams swatchParams() {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(32), dp(32));
+        params.setMargins(dp(3), 0, dp(3), 0);
+        return params;
+    }
+
+    private TextView optionChip(String label, boolean selected, View.OnClickListener onClick) {
+        TextView chip = new TextView(this);
+        chip.setText(label);
+        chip.setGravity(Gravity.CENTER);
+        chip.setTextSize(13);
+        chip.setSingleLine(true);
+        chip.setTextColor(selected ? theme.onAccent : theme.text);
+        chip.setBackground(rounded(selected ? theme.accent : theme.surface, dp(20), selected ? 0 : theme.border));
+        chip.setOnClickListener(onClick);
+        return chip;
+    }
+
+    private View swatch(int top, int bottom, String name, boolean selected, View.OnClickListener onClick) {
+        TextView dot = new TextView(this);
+        android.graphics.drawable.GradientDrawable fill = new android.graphics.drawable.GradientDrawable(
+            android.graphics.drawable.GradientDrawable.Orientation.TL_BR, new int[] { top, bottom });
+        fill.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        if (selected) fill.setStroke(dp(3), theme.text);
+        dot.setBackground(fill);
+        dot.setGravity(Gravity.CENTER);
+        dot.setText(selected ? "\u2713" : "");
+        dot.setTextColor(Color.WHITE);
+        dot.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        dot.setContentDescription(name + (selected ? ", selected" : ""));
+        dot.setOnClickListener(onClick);
+        return dot;
+    }
 
     private void onSettingPicked(int which) {
         switch (which) {
@@ -906,7 +1449,7 @@ public final class RemoteBrowserActivity extends Activity {
     private void pickDays(String title, final int[] values, String[] labels, int selected, final DaysCallback callback) {
         int checked = values.length - 1;
         for (int i = 0; i < values.length; i++) if (values[i] == selected) checked = i;
-        new android.app.AlertDialog.Builder(this)
+        dialogBuilder()
             .setTitle(title)
             .setSingleChoiceItems(labels, checked, (d, which) -> { d.dismiss(); callback.done(values[which]); showSettings(); })
             .setNegativeButton("Cancel", null)
@@ -921,7 +1464,7 @@ public final class RemoteBrowserActivity extends Activity {
             labels[i] = engines[i][1];
             if (engines[i][0].equals(store.searchEngine())) checked = i;
         }
-        new android.app.AlertDialog.Builder(this)
+        dialogBuilder()
             .setTitle("Search engine")
             .setSingleChoiceItems(labels, checked, (d, which) -> { d.dismiss(); store.setSearchEngine(engines[which][0]); showSettings(); })
             .setNegativeButton("Cancel", null)
@@ -958,7 +1501,7 @@ public final class RemoteBrowserActivity extends Activity {
         FrameLayout wrapper = new FrameLayout(this);
         wrapper.setPadding(dp(20), dp(8), dp(20), 0);
         wrapper.addView(input, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        new android.app.AlertDialog.Builder(this)
+        dialogBuilder()
             .setTitle("Home page")
             .setView(wrapper)
             .setNeutralButton("Clear", (d, w) -> { store.setHomePage(""); toast("Home page cleared"); })
@@ -983,7 +1526,7 @@ public final class RemoteBrowserActivity extends Activity {
             labels[i] = ZOOM_STEPS[i] + "%";
             if (ZOOM_STEPS[i] == now) checked = i;
         }
-        new android.app.AlertDialog.Builder(this)
+        dialogBuilder()
             .setTitle("Zoom (text size)")
             .setSingleChoiceItems(labels, checked, (d, which) -> {
                 d.dismiss();
@@ -1001,13 +1544,13 @@ public final class RemoteBrowserActivity extends Activity {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(SHELL_CHROME);
+        bar.setBackgroundColor(theme.chrome);
         bar.setPadding(dp(8), dp(4), dp(6), dp(6));
         findInput = new EditText(this);
         findInput.setSingleLine(true);
         findInput.setHint("Find in page");
-        findInput.setTextColor(Color.rgb(226, 232, 240));
-        findInput.setHintTextColor(Color.rgb(100, 116, 139));
+        findInput.setTextColor(theme.text);
+        findInput.setHintTextColor(theme.muted);
         findInput.setTextSize(14);
         findInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
         findInput.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
@@ -1027,7 +1570,7 @@ public final class RemoteBrowserActivity extends Activity {
         });
         bar.addView(findInput, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         findCount = new TextView(this);
-        findCount.setTextColor(Color.rgb(148, 163, 184));
+        findCount.setTextColor(theme.muted);
         findCount.setTextSize(12);
         findCount.setPadding(dp(6), 0, dp(6), 0);
         bar.addView(findCount, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -1078,7 +1621,7 @@ public final class RemoteBrowserActivity extends Activity {
             labels[i] = languages[i][1];
             if (languages[i][0].equalsIgnoreCase(saved)) checked = i;
         }
-        new android.app.AlertDialog.Builder(this)
+        dialogBuilder()
             .setTitle("Translate page to")
             .setSingleChoiceItems(labels, checked, (dialog, which) -> {
                 dialog.dismiss();
@@ -1157,7 +1700,7 @@ public final class RemoteBrowserActivity extends Activity {
             String sub = BrowserLogic.displayHost(entry.url) + (bookmarks ? "" : " \u00b7 " + format.format(new java.util.Date(entry.time)));
             rows[i] = name + "\n" + sub;
         }
-        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this)
+        android.app.AlertDialog.Builder builder = dialogBuilder()
             .setTitle(title)
             .setItems(rows, (dialog, which) -> allowAndLoad(entries.get(which).url))
             .setNegativeButton("Close", null);
@@ -1181,14 +1724,14 @@ public final class RemoteBrowserActivity extends Activity {
     // committed frame; identical treatment to the mini-app surface.
     private void installCover() {
         FrameLayout layout = new FrameLayout(this);
-        layout.setBackgroundColor(Color.rgb(7, 17, 31));
+        layout.setBackground(backdrop());
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER);
         box.addView(new ProgressBar(this), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         TextView label = new TextView(this);
         label.setText("Loading page…");
-        label.setTextColor(Color.rgb(148, 163, 184));
+        label.setTextColor(theme.muted);
         label.setTextSize(14);
         label.setPadding(0, dp(14), 0, 0);
         box.addView(label, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -1242,7 +1785,7 @@ public final class RemoteBrowserActivity extends Activity {
         content.addView(webView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         // Pre-paint surface: INVISIBLE under the cover until the first committed
         // frame; dark ground so no sub-frame white can escape.
-        webView.setBackgroundColor(Color.rgb(7, 17, 31));
+        webView.setBackgroundColor(theme.ground);
         if (withCover) {
             revealed = false;
             webView.setVisibility(View.INVISIBLE);
@@ -1409,7 +1952,9 @@ public final class RemoteBrowserActivity extends Activity {
             webView,
             getApplicationContext(),
             agentEnabled,
-            getIntent().getStringExtra(PageAgentHost.EXTRA_LANGUAGE));
+            getIntent().getStringExtra(PageAgentHost.EXTRA_LANGUAGE),
+            theme.dark,
+            BrowserTheme.hex(theme.accent));
         pageAgent = tab.agent;
         if (startUrl != null) webView.loadUrl(startUrl);
     }
@@ -1559,13 +2104,13 @@ public final class RemoteBrowserActivity extends Activity {
         box.setPadding(dp(24), dp(24), dp(24), dp(24));
         TextView heading = new TextView(this);
         heading.setText(title);
-        heading.setTextColor(Color.WHITE);
+        heading.setTextColor(theme.text);
         heading.setTextSize(17);
         heading.setGravity(Gravity.CENTER);
         box.addView(heading, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         TextView body = new TextView(this);
         body.setText(detail);
-        body.setTextColor(Color.rgb(148, 163, 184));
+        body.setTextColor(theme.muted);
         body.setTextSize(13);
         body.setGravity(Gravity.CENTER);
         body.setPadding(0, dp(8), 0, dp(16));
@@ -1678,7 +2223,7 @@ public final class RemoteBrowserActivity extends Activity {
         if (content == null) return;
         TextView text = new TextView(this);
         text.setText(message);
-        text.setTextColor(Color.rgb(30, 41, 59));
+        text.setTextColor(theme.text);
         text.setTextSize(17);
         text.setGravity(Gravity.CENTER);
         text.setPadding(dp(24), dp(24), dp(24), dp(24));
@@ -1720,12 +2265,21 @@ public final class RemoteBrowserActivity extends Activity {
         super.onBackPressed();
     }
 
+    @Override public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // "Follow system" re-paints live when the device switches light/dark.
+        if (shellBuilt && theme != null && store != null && "system".equals(store.themeMode())) {
+            if (BrowserTheme.resolve(this, store).dark != theme.dark) rebuildShell();
+        }
+    }
+
     @Override protected void onResume() {
         super.onResume();
         if (!tabs.isEmpty()) runAutoDelete();
     }
 
     @Override protected void onPause() {
+        captureThumb(current);
         super.onPause();
         saveSession();
     }

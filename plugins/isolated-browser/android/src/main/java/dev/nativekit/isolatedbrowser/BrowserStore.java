@@ -68,6 +68,23 @@ final class BrowserStore {
     void setAskCrossSite(boolean on) { prefs.edit().putBoolean("askCrossSite", on).apply(); }
     boolean blockPopups() { return prefs.getBoolean("blockPopups", true); }
     void setBlockPopups(boolean on) { prefs.edit().putBoolean("blockPopups", on).apply(); }
+    // ---- appearance (user-customisable; no forced dark shell) ----
+    /** "system" | "light" | "dark". */
+    String themeMode() { return prefs.getString("themeMode", "system"); }
+    void setThemeMode(String mode) { prefs.edit().putString("themeMode", mode).apply(); }
+    /** Index into BrowserTheme.ACCENTS. */
+    int accentIndex() { return prefs.getInt("accentIndex", 0); }
+    void setAccentIndex(int index) { prefs.edit().putInt("accentIndex", index).apply(); }
+    /** Index into BrowserTheme.BACKDROPS (start page / loading backdrop). */
+    int backdropIndex() { return prefs.getInt("backdropIndex", 0); }
+    void setBackdropIndex(int index) { prefs.edit().putInt("backdropIndex", index).apply(); }
+    /** Tab switcher layout: "grid" (page previews) | "list" (compact rows with a small preview). */
+    String tabLayout() { return prefs.getString("tabLayout", "grid"); }
+    void setTabLayout(String layout) { prefs.edit().putString("tabLayout", layout).apply(); }
+    /** Toolbar at the "top" or "bottom" (thumb reach) of the screen. */
+    String toolbarPosition() { return prefs.getString("toolbarPosition", "top"); }
+    void setToolbarPosition(String position) { prefs.edit().putString("toolbarPosition", position).apply(); }
+
     boolean darkPages() { return prefs.getBoolean("darkPages", true); }
     void setDarkPages(boolean on) { prefs.edit().putBoolean("darkPages", on).apply(); }
     /** Home page for new tabs and the home action; empty = ask for an address. */
