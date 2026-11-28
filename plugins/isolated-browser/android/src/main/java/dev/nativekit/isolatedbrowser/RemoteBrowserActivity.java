@@ -38,6 +38,7 @@ import android.widget.Toast;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import androidx.webkit.WebViewCompat;
@@ -78,7 +79,14 @@ public final class RemoteBrowserActivity extends Activity {
     // Browser features: bookmarks / history / settings (isolated-process prefs).
     private BrowserStore store;
     private String mobileUa;
-    private boolean desktopMode;
+    // Tabs: every tab owns its WebView (created lazily for restored tabs);
+    // `webView` / `pageAgent` always point at the current tab's.
+    private final List<BrowserTab> tabs = new ArrayList<>();
+    private BrowserTab current;
+    private Button tabsButton;
+    private static final String PROFILE_NORMAL = "nativekit_remote_url_v1";
+    private static final String PROFILE_INCOGNITO = "nativekit_remote_incognito_v1";
+    private static final int MAX_RESTORED_TABS = 40;
     // Find-in-page bar (shown under the toolbar while searching).
     private LinearLayout findBar;
     private EditText findInput;
@@ -126,6 +134,7 @@ public final class RemoteBrowserActivity extends Activity {
             return;
         }
         report("closed", "replaced by another browser-only URL session");
+        saveSession();
         destroyWebView();
         initialize(intent);
     }
@@ -156,7 +165,7 @@ public final class RemoteBrowserActivity extends Activity {
             allowedHosts.addAll(rules);
             if (!isAllowed(start)) throw new IllegalArgumentException("Initial URL host is not allowed");
             buildShell(intent.getStringExtra(EXTRA_TITLE), start.getHost());
-            createWebView(start.toString());
+            startTabs(start.toString());
             report("opened", "");
         } catch (Exception error) {
             buildShell("Browser", "Browser");
@@ -207,7 +216,7 @@ public final class RemoteBrowserActivity extends Activity {
         address.setGravity(Gravity.CENTER_VERTICAL);
         address.setPadding(dp(12), 0, dp(12), 0);
         address.setBackground(rounded(Color.rgb(17, 30, 49), dp(20), 0));
-        address.setOnClickListener(view -> promptForAddress());
+        address.setOnClickListener(view -> promptForAddress(false, false));
         LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(38), 1);
         addressParams.setMargins(dp(2), 0, dp(2), 0);
         toolbar.addView(address, addressParams);
@@ -216,6 +225,13 @@ public final class RemoteBrowserActivity extends Activity {
         // floating bubble inside the page stays visible as well.
         agentButton = chromeButton("\u2728", "AI page agent", view -> toggleAgent());
         toolbar.addView(agentButton, new LinearLayout.LayoutParams(dp(38), dp(40)));
+        tabsButton = chromeButton("1", "Tabs", view -> showTabSwitcher());
+        tabsButton.setTextSize(13);
+        tabsButton.setBackground(rounded(Color.rgb(17, 30, 49), dp(9), Color.rgb(148, 163, 184)));
+        tabsButton.setOnLongClickListener(view -> { promptForAddress(true, false); return true; });
+        LinearLayout.LayoutParams tabsParams = new LinearLayout.LayoutParams(dp(34), dp(34));
+        tabsParams.setMargins(dp(4), 0, dp(2), 0);
+        toolbar.addView(tabsButton, tabsParams);
         menuButton = chromeButton("\u22ee", "More options", view -> showOverflowMenu());
         LinearLayout.LayoutParams menuParams = new LinearLayout.LayoutParams(dp(34), dp(40));
         menuParams.setMargins(dp(2), 0, 0, 0);
@@ -299,14 +315,15 @@ public final class RemoteBrowserActivity extends Activity {
 
     private void goBack() {
         if (webView != null && webView.canGoBack()) { webView.goBack(); syncChrome(); }
+        else if (tabs.size() > 1 && current != null) closeTab(current);
         else finish();
     }
 
     /** The address pill is a real address bar: type an https: page and go. */
-    private void promptForAddress() {
+    private void promptForAddress(final boolean newTab, final boolean incognito) {
         final android.widget.EditText input = new android.widget.EditText(this);
         input.setSingleLine(true);
-        input.setText(lastUrl == null ? "" : lastUrl);
+        input.setText(newTab || lastUrl == null ? "" : lastUrl);
         input.setSelection(input.getText().length());
         input.setInputType(android.text.InputType.TYPE_TEXT_VARIATION_URI);
         input.setHint("Search or type a web address");
@@ -314,7 +331,7 @@ public final class RemoteBrowserActivity extends Activity {
         wrapper.setPadding(dp(20), dp(8), dp(20), 0);
         wrapper.addView(input, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         new android.app.AlertDialog.Builder(this)
-            .setTitle("Open address")
+            .setTitle(newTab ? (incognito ? "New incognito tab" : "New tab") : "Open address")
             .setView(wrapper)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Open", (dialog, which) -> {
@@ -333,7 +350,8 @@ public final class RemoteBrowserActivity extends Activity {
                 String site = registrableSite(host);
                 if (site != null) { allowedHosts.add(site + ":443"); allowedHosts.add("*." + site + ":443"); }
                 report("addressTyped", host);
-                if (webView != null) webView.loadUrl(target.toString());
+                if (newTab || webView == null) openTab(target.toString(), incognito);
+                else webView.loadUrl(target.toString());
             })
             .show();
     }
@@ -350,11 +368,20 @@ public final class RemoteBrowserActivity extends Activity {
     private static final int MENU_BOOKMARKS = 8;
     private static final int MENU_HISTORY = 9;
 
-    /** Hook for later stages: extra entries at the top of the ⋮ menu. */
-    private void addExtraMenuItems(Menu menu) { }
+    /** Extra entries at the top of the ⋮ menu (tabs and later features). */
+    private void addExtraMenuItems(Menu menu) {
+        menu.add(Menu.NONE, MENU_NEW_TAB, 1, "New tab");
+        menu.add(Menu.NONE, MENU_TABS, 2, "Tabs (" + tabs.size() + ")");
+    }
 
-    /** Hook for later stages: handles the extra entries; true when handled. */
-    private boolean onExtraMenuItem(int id) { return false; }
+    /** Handles the extra entries; true when handled. */
+    private boolean onExtraMenuItem(int id) {
+        switch (id) {
+            case MENU_NEW_TAB: promptForAddress(true, false); return true;
+            case MENU_TABS: showTabSwitcher(); return true;
+            default: return false;
+        }
+    }
 
     private void showOverflowMenu() {
         if (menuButton == null) return;
@@ -365,7 +392,7 @@ public final class RemoteBrowserActivity extends Activity {
         menu.add(Menu.NONE, MENU_TRANSLATE, 21, "Translate page");
         menu.add(Menu.NONE, MENU_SHARE, 22, "Share");
         menu.add(Menu.NONE, MENU_RELOAD, 23, "Reload");
-        menu.add(Menu.NONE, MENU_DESKTOP, 24, "Desktop site").setCheckable(true).setChecked(desktopMode);
+        menu.add(Menu.NONE, MENU_DESKTOP, 24, "Desktop site").setCheckable(true).setChecked(current != null && current.desktop);
         menu.add(Menu.NONE, MENU_READER, 25, "Reader mode");
         boolean marked = store != null && store.isBookmarked(lastUrl);
         menu.add(Menu.NONE, MENU_BOOKMARK, 26, marked ? "Remove bookmark" : "Add bookmark");
@@ -424,6 +451,198 @@ public final class RemoteBrowserActivity extends Activity {
         String site = registrableSite(host);
         if (site != null) { allowedHosts.add(site + ":443"); allowedHosts.add("*." + site + ":443"); }
     }
+
+    // ======================= tabs =======================
+
+    private static final int MENU_NEW_TAB = 10;
+    private static final int MENU_TABS = 11;
+
+    /** First tab of a session: the requested URL, plus the saved tabs (lazy). */
+    private void startTabs(String startUrl) {
+        tabs.clear();
+        current = null;
+        if (store.restoreTabs()) restoreSavedTabs(startUrl);
+        BrowserTab first = new BrowserTab(startUrl, false);
+        tabs.add(first);
+        showTab(first, true);
+    }
+
+    private void restoreSavedTabs(String startUrl) {
+        long now = System.currentTimeMillis();
+        for (BrowserStore.SavedTab saved : store.savedTabs()) {
+            if (tabs.size() >= MAX_RESTORED_TABS) break;
+            if (saved.url == null || saved.url.equals(startUrl) || !saved.url.startsWith("https://")) continue;
+            BrowserTab tab = new BrowserTab(saved.url, false);
+            tab.title = saved.title == null ? "" : saved.title;
+            tab.groupId = saved.groupId;
+            tab.lastActive = saved.lastActive > 0 ? saved.lastActive : now;
+            tabs.add(tab);
+        }
+    }
+
+    private void saveSession() {
+        if (store == null) return;
+        List<BrowserStore.SavedTab> out = new ArrayList<>();
+        for (BrowserTab tab : tabs) {
+            if (tab.incognito || tab.url == null || !tab.url.startsWith("https://")) continue;
+            out.add(new BrowserStore.SavedTab(tab.url, tab.title, tab.groupId, tab.lastActive));
+        }
+        store.saveTabs(out);
+    }
+
+    /** Opens url in a new tab right after the current one and switches to it. */
+    private BrowserTab openTab(String url, boolean incognito) {
+        BrowserTab tab = new BrowserTab(url, incognito);
+        if (current != null) tab.groupId = incognito ? null : current.groupId;
+        int at = current == null ? tabs.size() : tabs.indexOf(current) + 1;
+        if (at <= 0 || at > tabs.size()) at = tabs.size();
+        tabs.add(at, tab);
+        showTab(tab, false);
+        return tab;
+    }
+
+    private void showTab(BrowserTab tab, boolean withCover) {
+        if (tab == null || content == null) return;
+        hideFindBar();
+        exitCustomView();
+        cancelLoadTimeout();
+        if (current != null && current != tab && current.view != null) {
+            try { current.view.onPause(); } catch (Throwable ignored) {}
+        }
+        tab.lastActive = System.currentTimeMillis();
+        lastUrl = tab.url;
+        if (tab.view == null) {
+            if (tab.url != null) {
+                Uri target = Uri.parse(tab.url);
+                allowSite(target.getHost(), target.getPort());
+            }
+            createWebView(tab, tab.url, withCover);
+        } else {
+            current = tab;
+            webView = tab.view;
+            pageAgent = tab.agent;
+            content.removeAllViews();
+            cover = null;
+            revealed = true;
+            tab.view.setVisibility(View.VISIBLE);
+            tab.view.setAlpha(1f);
+            content.addView(tab.view, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            try { tab.view.onResume(); } catch (Throwable ignored) {}
+            if (progress != null) progress.setVisibility(tab.loading ? View.VISIBLE : View.INVISIBLE);
+        }
+        syncChrome();
+        updateTabBadge();
+    }
+
+    private void closeTab(BrowserTab tab) {
+        int index = tabs.indexOf(tab);
+        if (index < 0) return;
+        boolean wasCurrent = tab == current;
+        if (wasCurrent) { hideFindBar(); exitCustomView(); cancelLoadTimeout(); }
+        tabs.remove(index);
+        destroyTabView(tab);
+        if (tabs.isEmpty()) { current = null; finish(); return; }
+        if (wasCurrent) {
+            current = null;
+            showTab(tabs.get(Math.min(index, tabs.size() - 1)), false);
+        }
+        updateTabBadge();
+    }
+
+    private boolean hasOtherIncognito(BrowserTab except) {
+        for (BrowserTab tab : tabs) if (tab != except && tab.incognito && tab.view != null) return true;
+        return false;
+    }
+
+    /** Clears cookies and site storage of the incognito profile. */
+    private void wipeIncognitoProfile(WebView view) {
+        if (view == null || !WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) return;
+        try {
+            androidx.webkit.Profile profile = WebViewCompat.getProfile(view);
+            if (profile == null || !PROFILE_INCOGNITO.equals(profile.getName())) return;
+            profile.getCookieManager().removeAllCookies(null);
+            profile.getWebStorage().deleteAllData();
+        } catch (Throwable ignored) {}
+    }
+
+    private void updateTabBadge() {
+        if (tabsButton == null) return;
+        int count = tabs.size();
+        tabsButton.setText(count > 99 ? "99+" : String.valueOf(Math.max(1, count)));
+        boolean incognito = current != null && current.incognito;
+        tabsButton.setBackground(rounded(incognito ? Color.rgb(76, 29, 149) : Color.rgb(17, 30, 49), dp(9), Color.rgb(148, 163, 184)));
+        tabsButton.setContentDescription(count + (count == 1 ? " tab" : " tabs"));
+    }
+
+    /** Hook for later stages: which tabs the switcher lists. */
+    private List<BrowserTab> visibleTabs() { return new ArrayList<>(tabs); }
+
+    /** Hook for later stages: extra line under a tab's title in the switcher. */
+    private String tabExtraInfo(BrowserTab tab) { return tab.incognito ? "Incognito" : null; }
+
+    private void showTabSwitcher() {
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(12), dp(6), dp(12), dp(6));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this)
+            .setTitle(tabsTitle())
+            .setView(scroll)
+            .setPositiveButton("New tab", (d, w) -> promptForAddress(true, false))
+            .setNegativeButton("Done", null);
+        customizeSwitcher(builder);
+        android.app.AlertDialog dialog = builder.create();
+        fillTabRows(list, dialog);
+        dialog.show();
+    }
+
+    /** Hook for later stages: extra switcher buttons (groups). */
+    private void customizeSwitcher(android.app.AlertDialog.Builder builder) { }
+
+    private String tabsTitle() {
+        return tabs.size() == 1 ? "1 tab" : tabs.size() + " tabs";
+    }
+
+    private void fillTabRows(LinearLayout list, android.app.AlertDialog dialog) {
+        list.removeAllViews();
+        for (BrowserTab tab : visibleTabs()) list.addView(tabRow(tab, list, dialog));
+        dialog.setTitle(tabsTitle());
+    }
+
+    private View tabRow(final BrowserTab tab, final LinearLayout list, final android.app.AlertDialog dialog) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(10), dp(8), dp(6), dp(8));
+        int ground = tab == current ? Color.argb(70, 59, 130, 246) : Color.argb(28, 148, 163, 184);
+        row.setBackground(rounded(ground, dp(12), tab == current ? Color.rgb(59, 130, 246) : 0));
+        TextView text = new TextView(this);
+        String info = tabExtraInfo(tab);
+        String host = tab.url == null ? "" : BrowserLogic.displayHost(tab.url);
+        text.setText(tab.label() + "\n" + host + (info == null ? "" : " \u00b7 " + info));
+        text.setTextSize(14);
+        text.setMaxLines(3);
+        row.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        row.setOnClickListener(view -> {
+            dialog.dismiss();
+            if (tab != current) showTab(tab, false);
+        });
+        row.setOnLongClickListener(view -> { onTabLongPress(tab, list, dialog); return true; });
+        Button close = chromeButton("\u2715", "Close tab", view -> {
+            closeTab(tab);
+            if (tabs.isEmpty() || isFinishing()) { dialog.dismiss(); return; }
+            fillTabRows(list, dialog);
+        });
+        row.addView(close, new LinearLayout.LayoutParams(dp(34), dp(34)));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.setMargins(0, dp(4), 0, dp(4));
+        row.setLayoutParams(params);
+        return row;
+    }
+
+    /** Hook for later stages: long-press on a tab in the switcher. */
+    private void onTabLongPress(BrowserTab tab, LinearLayout list, android.app.AlertDialog dialog) { }
 
     // ---------- find in page ----------
     private LinearLayout buildFindBar() {
@@ -553,10 +772,11 @@ public final class RemoteBrowserActivity extends Activity {
     }
 
     private void toggleDesktopMode() {
-        desktopMode = !desktopMode;
-        applyDesktopMode(webView, desktopMode);
+        if (current == null) return;
+        current.desktop = !current.desktop;
+        applyDesktopMode(webView, current.desktop);
         if (webView != null) webView.reload();
-        toast(desktopMode ? "Desktop site on" : "Desktop site off");
+        toast(current.desktop ? "Desktop site on" : "Desktop site off");
     }
 
     // ---------- reader mode ----------
@@ -667,20 +887,33 @@ public final class RemoteBrowserActivity extends Activity {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private void createWebView(String startUrl) {
-        revealed = false;
-        webView = new WebView(this);
+    /** Creates the tab's WebView, makes it the visible current tab and loads startUrl. */
+    private void createWebView(final BrowserTab tab, String startUrl, boolean withCover) {
+        final WebView webView = new WebView(this);
+        tab.view = webView;
         if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
-            try { WebViewCompat.setProfile(webView, "nativekit_remote_url_v1"); }
+            try { WebViewCompat.setProfile(webView, tab.incognito ? PROFILE_INCOGNITO : PROFILE_NORMAL); }
             catch (Exception error) { report("partitionFallback", "remote URL profile partition is unavailable"); }
         }
+        // Fresh incognito session: wipe anything an earlier one left behind.
+        if (tab.incognito && !hasOtherIncognito(tab)) wipeIncognitoProfile(webView);
+        current = tab;
+        this.webView = webView;
         content.removeAllViews();
+        cover = null;
         content.addView(webView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         // Pre-paint surface: INVISIBLE under the cover until the first committed
         // frame; dark ground so no sub-frame white can escape.
         webView.setBackgroundColor(Color.rgb(7, 17, 31));
-        webView.setVisibility(View.INVISIBLE);
-        webView.setAlpha(0f);
+        if (withCover) {
+            revealed = false;
+            webView.setVisibility(View.INVISIBLE);
+            webView.setAlpha(0f);
+        } else {
+            revealed = true;
+            webView.setVisibility(View.VISIBLE);
+            webView.setAlpha(1f);
+        }
         if (Build.VERSION.SDK_INT >= 26) {
             try { webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true); }
             catch (Throwable ignored) {}
@@ -694,11 +927,14 @@ public final class RemoteBrowserActivity extends Activity {
             settings.setUserAgentString(defaultUa.replace("; wv", ""));
         }
         mobileUa = settings.getUserAgentString();
-        applyDesktopMode(webView, desktopMode);
+        tab.mobileUa = mobileUa;
+        applyDesktopMode(webView, tab.desktop);
+        settings.setTextZoom(store.textZoom());
         settings.setSupportZoom(true);
         settings.setBuiltInZoomControls(true);
         settings.setDisplayZoomControls(false);
         webView.setFindListener((activeMatch, matches, done) -> {
+            if (tab != current) return;
             if (findCount != null) findCount.setText(matches == 0 ? "0/0" : (activeMatch + 1) + "/" + matches);
         });
         settings.setDomStorageEnabled(true);
@@ -726,9 +962,11 @@ public final class RemoteBrowserActivity extends Activity {
             @Override public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) { callback.invoke(origin, false, false); }
             @Override public boolean onShowFileChooser(WebView view, android.webkit.ValueCallback<Uri[]> callback, FileChooserParams params) { callback.onReceiveValue(null); return true; }
             @Override public void onReceivedTitle(WebView view, String title) {
-                if (store != null) store.updateHistoryTitle(view.getUrl(), title);
+                if (title != null) tab.title = title;
+                if (store != null && !tab.incognito) store.updateHistoryTitle(view.getUrl(), title);
             }
             @Override public void onProgressChanged(WebView view, int newProgress) {
+                if (tab != current) return;
                 ProgressBar bar = progress;
                 if (bar == null) return;
                 bar.setProgress(Math.max(0, Math.min(100, newProgress)));
@@ -762,6 +1000,7 @@ public final class RemoteBrowserActivity extends Activity {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (!request.isForMainFrame()) return !isAllowed(request.getUrl());
                 if (!isAllowed(request.getUrl())) {
+                    if (tab != current) return true;
                     // Cross-site hop (e.g. LinkedIn -> Microsoft sign-in): the user
                     // decides — a silent blank page helps nobody and hides attacks.
                     report("prompted", "cross-site navigation awaiting user approval");
@@ -771,6 +1010,9 @@ public final class RemoteBrowserActivity extends Activity {
                 return false;
             }
             @Override public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                tab.url = url;
+                tab.loading = true;
+                if (tab != current) return;
                 lastUrl = url;
                 dismissHttpBanner();
                 syncChrome();
@@ -778,19 +1020,25 @@ public final class RemoteBrowserActivity extends Activity {
             }
             @Override public void onPageCommitVisible(WebView view, String url) {
                 // Earliest point guaranteed to draw the NEW page — reveal + fade in.
+                if (tab != current) return;
                 cancelLoadTimeout();
                 reveal();
             }
             @Override public void onPageFinished(WebView view, String url) {
                 // Fallback: never leave the user stuck on the loading cover.
+                tab.url = url;
+                tab.loading = false;
+                String pageTitle = view.getTitle();
+                if (pageTitle != null) tab.title = pageTitle;
+                if (store != null && !tab.incognito) store.addHistory(url, pageTitle);
+                if (tab != current) return;
                 lastUrl = url;
-                if (store != null) store.addHistory(url, view.getTitle());
                 cancelLoadTimeout();
                 syncChrome();
                 reveal();
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (!request.isForMainFrame()) return; // subresource failures are normal
+                if (!request.isForMainFrame() || tab != current) return; // subresource failures are normal
                 CharSequence raw = error == null ? null : error.getDescription();
                 String description = raw == null ? "network error" : raw.toString();
                 if (description.contains("ERR_ABORTED")) return; // user navigated away mid-load
@@ -800,30 +1048,32 @@ public final class RemoteBrowserActivity extends Activity {
                 showLoadError("This page could not load", reason + " — the network, DNS or the site itself refused the connection.");
             }
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
-                if (!request.isForMainFrame()) return; // assets 404 constantly; ignore
+                if (!request.isForMainFrame() || tab != current) return; // assets 404 constantly; ignore
                 int code = response == null ? 0 : response.getStatusCode();
                 if (code < 400) return;
                 String phrase = response != null && response.getReasonPhrase() != null ? " " + response.getReasonPhrase() : "";
                 report("httpError", "HTTP " + code);
                 showHttpBanner("HTTP " + code + phrase + " — the site may block in-app browsers or this region.");
             }
-            @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) { handler.cancel(); report("blocked", "TLS certificate error"); showLoadError("Secure connection failed", "The TLS certificate of this site is not trusted (blocked)."); }
+            @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) { handler.cancel(); if (tab != current) return; report("blocked", "TLS certificate error"); showLoadError("Secure connection failed", "The TLS certificate of this site is not trusted (blocked)."); }
             @Override public void onSafeBrowsingHit(WebView view, WebResourceRequest request, int threatType, SafeBrowsingResponse callback) {
                 // Never a silent bounce-back: the user decides, eyes open.
+                if (tab != current) { try { callback.backToSafety(true); } catch (Throwable ignored) {} return; }
                 report("safeBrowsingPrompted", "threat " + threatType);
                 showSafeBrowsingPrompt(threatType, callback);
             }
         });
-        installCover();
+        if (withCover) installCover();
         // In-page agent on every remote page ("url open korlew jeno agent browser
         // thake"): the bundle is injected at document start and its model calls
         // are relayed natively — the page's own CSP cannot break it.
-        pageAgent = PageAgentHost.install(
+        tab.agent = PageAgentHost.install(
             webView,
             getApplicationContext(),
             agentEnabled,
             getIntent().getStringExtra(PageAgentHost.EXTRA_LANGUAGE));
-        webView.loadUrl(startUrl);
+        pageAgent = tab.agent;
+        if (startUrl != null) webView.loadUrl(startUrl);
     }
 
     private boolean isAllowed(Uri uri) {
@@ -988,8 +1238,11 @@ public final class RemoteBrowserActivity extends Activity {
         retry.setOnClickListener(view -> {
             String again = lastUrl;
             if (again == null) return;
-            destroyWebView();
-            createWebView(again);
+            BrowserTab tab = current;
+            if (tab == null) return;
+            destroyTabView(tab);
+            tab.url = again;
+            showTab(tab, true);
         });
         box.addView(retry, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         Button close = new Button(this);
@@ -1095,26 +1348,48 @@ public final class RemoteBrowserActivity extends Activity {
         content.addView(text, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
+    /** Destroys every tab's WebView (session end / replacement). */
     private void destroyWebView() {
         cancelLoadTimeout();
         exitCustomView();
-        WebView current = webView;
+        for (BrowserTab tab : new ArrayList<>(tabs)) destroyTabView(tab);
+        tabs.clear();
+        current = null;
         webView = null;
-        if (current == null) return;
-        try { current.stopLoading(); } catch (Exception ignored) {}
-        try { current.loadUrl("about:blank"); } catch (Exception ignored) {}
-        if (current.getParent() instanceof ViewGroup) ((ViewGroup) current.getParent()).removeView(current);
-        try { current.destroy(); } catch (Exception ignored) {}
+        pageAgent = null;
+    }
+
+    private void destroyTabView(BrowserTab tab) {
+        WebView view = tab == null ? null : tab.view;
+        if (view == null) return;
+        tab.view = null;
+        tab.agent = null;
+        if (view == webView) { webView = null; pageAgent = null; }
+        if (tab.incognito) {
+            try { view.clearHistory(); view.clearCache(true); view.clearFormData(); } catch (Exception ignored) {}
+        }
+        try { view.stopLoading(); } catch (Exception ignored) {}
+        try { view.loadUrl("about:blank"); } catch (Exception ignored) {}
+        if (view.getParent() instanceof ViewGroup) ((ViewGroup) view.getParent()).removeView(view);
+        if (tab.incognito && !hasOtherIncognito(tab)) wipeIncognitoProfile(view);
+        try { view.destroy(); } catch (Exception ignored) {}
     }
 
     @Override public void onBackPressed() {
         if (customView != null) { exitCustomView(); return; }
         if (webView != null && webView.canGoBack()) { webView.goBack(); syncChrome(); return; }
+        if (tabs.size() > 1 && current != null) { closeTab(current); return; }
         super.onBackPressed();
+    }
+
+    @Override protected void onPause() {
+        super.onPause();
+        saveSession();
     }
 
     @Override protected void onDestroy() {
         report("closed", "browser-only URL session closed");
+        saveSession();
         destroyWebView();
         super.onDestroy();
     }
