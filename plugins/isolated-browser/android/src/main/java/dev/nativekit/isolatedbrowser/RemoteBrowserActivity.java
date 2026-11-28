@@ -372,6 +372,8 @@ public final class RemoteBrowserActivity extends Activity {
     private void addExtraMenuItems(Menu menu) {
         menu.add(Menu.NONE, MENU_NEW_TAB, 1, "New tab");
         menu.add(Menu.NONE, MENU_TABS, 2, "Tabs (" + tabs.size() + ")");
+        menu.add(Menu.NONE, MENU_GROUPS, 3, "Tab groups");
+        menu.add(Menu.NONE, MENU_SETTINGS, 90, "Browser settings");
     }
 
     /** Handles the extra entries; true when handled. */
@@ -379,6 +381,8 @@ public final class RemoteBrowserActivity extends Activity {
         switch (id) {
             case MENU_NEW_TAB: promptForAddress(true, false); return true;
             case MENU_TABS: showTabSwitcher(); return true;
+            case MENU_GROUPS: showGroupsDialog(); return true;
+            case MENU_SETTINGS: showSettings(); return true;
             default: return false;
         }
     }
@@ -461,10 +465,12 @@ public final class RemoteBrowserActivity extends Activity {
     private void startTabs(String startUrl) {
         tabs.clear();
         current = null;
+        store.pruneHistory(System.currentTimeMillis());
         if (store.restoreTabs()) restoreSavedTabs(startUrl);
         BrowserTab first = new BrowserTab(startUrl, false);
         tabs.add(first);
         showTab(first, true);
+        runAutoDelete();
     }
 
     private void restoreSavedTabs(String startUrl) {
@@ -472,6 +478,8 @@ public final class RemoteBrowserActivity extends Activity {
         for (BrowserStore.SavedTab saved : store.savedTabs()) {
             if (tabs.size() >= MAX_RESTORED_TABS) break;
             if (saved.url == null || saved.url.equals(startUrl) || !saved.url.startsWith("https://")) continue;
+            int days = store.autoCloseTabsDays();
+            if (days > 0 && saved.lastActive > 0 && BrowserLogic.isExpired(saved.lastActive, now, days)) continue;
             BrowserTab tab = new BrowserTab(saved.url, false);
             tab.title = saved.title == null ? "" : saved.title;
             tab.groupId = saved.groupId;
@@ -575,10 +583,19 @@ public final class RemoteBrowserActivity extends Activity {
     }
 
     /** Hook for later stages: which tabs the switcher lists. */
-    private List<BrowserTab> visibleTabs() { return new ArrayList<>(tabs); }
+    private List<BrowserTab> visibleTabs() {
+        if (groupFilter == null || findGroup(groupFilter) == null) { groupFilter = null; return new ArrayList<>(tabs); }
+        List<BrowserTab> out = new ArrayList<>();
+        for (BrowserTab tab : tabs) if (groupFilter.equals(tab.groupId)) out.add(tab);
+        return out;
+    }
 
     /** Hook for later stages: extra line under a tab's title in the switcher. */
-    private String tabExtraInfo(BrowserTab tab) { return tab.incognito ? "Incognito" : null; }
+    private String tabExtraInfo(BrowserTab tab) {
+        if (tab.incognito) return "Incognito";
+        BrowserStore.Group group = findGroup(tab.groupId);
+        return group == null ? null : group.name;
+    }
 
     private void showTabSwitcher() {
         LinearLayout list = new LinearLayout(this);
@@ -598,15 +615,33 @@ public final class RemoteBrowserActivity extends Activity {
     }
 
     /** Hook for later stages: extra switcher buttons (groups). */
-    private void customizeSwitcher(android.app.AlertDialog.Builder builder) { }
+    private void customizeSwitcher(android.app.AlertDialog.Builder builder) {
+        builder.setNeutralButton("Groups", (d, w) -> showGroupsDialog());
+    }
 
     private String tabsTitle() {
-        return tabs.size() == 1 ? "1 tab" : tabs.size() + " tabs";
+        String count = tabs.size() == 1 ? "1 tab" : tabs.size() + " tabs";
+        BrowserStore.Group group = findGroup(groupFilter);
+        return group == null ? count : group.name + " · " + visibleTabs().size() + " of " + count;
     }
 
     private void fillTabRows(LinearLayout list, android.app.AlertDialog dialog) {
         list.removeAllViews();
-        for (BrowserTab tab : visibleTabs()) list.addView(tabRow(tab, list, dialog));
+        List<BrowserTab> shown = visibleTabs();
+        if (groupFilter != null) {
+            for (BrowserTab tab : shown) list.addView(tabRow(tab, list, dialog));
+        } else {
+            // Ungrouped tabs first, then each group under a collapsible header.
+            for (BrowserTab tab : shown) if (findGroup(tab.groupId) == null) list.addView(tabRow(tab, list, dialog));
+            for (BrowserStore.Group group : store.groups()) {
+                List<BrowserTab> members = new ArrayList<>();
+                for (BrowserTab tab : shown) if (group.id.equals(tab.groupId)) members.add(tab);
+                if (members.isEmpty()) continue;
+                list.addView(groupHeader(group, members.size(), list, dialog));
+                if (collapsedGroups.contains(group.id)) continue;
+                for (BrowserTab tab : members) list.addView(tabRow(tab, list, dialog));
+            }
+        }
         dialog.setTitle(tabsTitle());
     }
 
@@ -642,7 +677,246 @@ public final class RemoteBrowserActivity extends Activity {
     }
 
     /** Hook for later stages: long-press on a tab in the switcher. */
-    private void onTabLongPress(BrowserTab tab, LinearLayout list, android.app.AlertDialog dialog) { }
+    private void onTabLongPress(BrowserTab tab, LinearLayout list, android.app.AlertDialog dialog) {
+        chooseGroupForTab(tab, () -> { if (dialog.isShowing()) fillTabRows(list, dialog); });
+    }
+
+    private View groupHeader(final BrowserStore.Group group, int count, final LinearLayout list, final android.app.AlertDialog dialog) {
+        TextView header = new TextView(this);
+        boolean collapsed = collapsedGroups.contains(group.id);
+        header.setText((collapsed ? "\u25b8 " : "\u25be ") + group.name + "  (" + count + ")");
+        header.setTextColor(Color.WHITE);
+        header.setTextSize(14);
+        header.setPadding(dp(12), dp(8), dp(12), dp(8));
+        header.setBackground(rounded(group.color, dp(12), 0));
+        header.setOnClickListener(view -> {
+            if (!collapsedGroups.remove(group.id)) collapsedGroups.add(group.id);
+            fillTabRows(list, dialog);
+        });
+        header.setOnLongClickListener(view -> { dialog.dismiss(); groupFilter = group.id; showTabSwitcher(); return true; });
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.setMargins(0, dp(10), 0, dp(2));
+        header.setLayoutParams(params);
+        return header;
+    }
+
+    // ======================= tab groups =======================
+
+    private static final int MENU_GROUPS = 12;
+    private static final int MENU_SETTINGS = 13;
+    /** Switcher filter: null shows every tab, else only that group's tabs. */
+    private String groupFilter;
+    private final Set<String> collapsedGroups = new HashSet<>();
+
+    private BrowserStore.Group findGroup(String id) {
+        if (id == null) return null;
+        for (BrowserStore.Group group : store.groups()) if (group.id.equals(id)) return group;
+        return null;
+    }
+
+    private int groupCount(String id) {
+        int count = 0;
+        for (BrowserTab tab : tabs) if (id.equals(tab.groupId)) count++;
+        return count;
+    }
+
+    private void showGroupsDialog() {
+        final List<BrowserStore.Group> groups = store.groups();
+        List<String> rows = new ArrayList<>();
+        rows.add((groupFilter == null ? "\u2713 " : "") + "All tabs (" + tabs.size() + ")");
+        for (BrowserStore.Group group : groups) {
+            rows.add((group.id.equals(groupFilter) ? "\u2713 " : "\u25cf ") + group.name + " (" + groupCount(group.id) + ")");
+        }
+        rows.add("+ New group");
+        android.app.AlertDialog dialog = new android.app.AlertDialog.Builder(this)
+            .setTitle("Tab groups")
+            .setItems(rows.toArray(new String[0]), (d, which) -> {
+                if (which == 0) { groupFilter = null; showTabSwitcher(); }
+                else if (which <= groups.size()) { groupFilter = groups.get(which - 1).id; showTabSwitcher(); }
+                else promptGroupName(null, created -> {
+                    if (current != null && !current.incognito) current.groupId = created.id;
+                    groupFilter = created.id;
+                    showTabSwitcher();
+                });
+            })
+            .setNegativeButton("Close", null)
+            .create();
+        dialog.setOnShowListener(shown -> {
+            android.widget.ListView list = dialog.getListView();
+            if (list == null) return;
+            list.setOnItemLongClickListener((parent, view, position, id) -> {
+                if (position < 1 || position > groups.size()) return false;
+                dialog.dismiss();
+                editGroup(groups.get(position - 1));
+                return true;
+            });
+        });
+        dialog.show();
+    }
+
+    private interface GroupCallback { void done(BrowserStore.Group group); }
+
+    /** Creates a group (existing == null) or renames one. */
+    private void promptGroupName(final BrowserStore.Group existing, final GroupCallback callback) {
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setHint("Group name");
+        if (existing != null) { input.setText(existing.name); input.setSelection(input.getText().length()); }
+        FrameLayout wrapper = new FrameLayout(this);
+        wrapper.setPadding(dp(20), dp(8), dp(20), 0);
+        wrapper.addView(input, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(existing == null ? "New tab group" : "Rename group")
+            .setView(wrapper)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton(existing == null ? "Create" : "Save", (d, w) -> {
+                String name = input.getText() == null ? "" : input.getText().toString().trim();
+                if (name.isEmpty()) name = "Group";
+                List<BrowserStore.Group> groups = store.groups();
+                BrowserStore.Group result = null;
+                if (existing == null) {
+                    int color = BrowserStore.GROUP_COLORS[groups.size() % BrowserStore.GROUP_COLORS.length];
+                    result = new BrowserStore.Group(java.util.UUID.randomUUID().toString(), name, color);
+                    groups.add(result);
+                } else {
+                    for (BrowserStore.Group group : groups) if (group.id.equals(existing.id)) { group.name = name; result = group; }
+                }
+                store.saveGroups(groups);
+                if (result != null && callback != null) callback.done(result);
+            })
+            .show();
+    }
+
+    private void editGroup(final BrowserStore.Group group) {
+        String[] actions = { "Rename", "Close all tabs in group", "Ungroup tabs", "Delete group" };
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(group.name)
+            .setItems(actions, (d, which) -> {
+                if (which == 0) { promptGroupName(group, renamed -> showGroupsDialog()); return; }
+                if (which == 1) {
+                    for (BrowserTab tab : new ArrayList<>(tabs)) if (group.id.equals(tab.groupId)) closeTab(tab);
+                    if (isFinishing()) return;
+                }
+                if (which >= 2) {
+                    for (BrowserTab tab : tabs) if (group.id.equals(tab.groupId)) tab.groupId = null;
+                }
+                if (which == 3) {
+                    List<BrowserStore.Group> groups = store.groups();
+                    for (java.util.Iterator<BrowserStore.Group> it = groups.iterator(); it.hasNext();) if (it.next().id.equals(group.id)) it.remove();
+                    store.saveGroups(groups);
+                    if (group.id.equals(groupFilter)) groupFilter = null;
+                }
+                saveSession();
+                showGroupsDialog();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    /** Long-press on a tab in the switcher: move it into a group. */
+    private void chooseGroupForTab(final BrowserTab tab, final Runnable after) {
+        if (tab.incognito) { toast("Incognito tabs can't join a group"); return; }
+        final List<BrowserStore.Group> groups = store.groups();
+        List<String> rows = new ArrayList<>();
+        for (BrowserStore.Group group : groups) rows.add((group.id.equals(tab.groupId) ? "\u2713 " : "\u25cf ") + group.name);
+        rows.add("+ New group");
+        if (tab.groupId != null) rows.add("Remove from group");
+        new android.app.AlertDialog.Builder(this)
+            .setTitle("Add \"" + tab.label() + "\" to group")
+            .setItems(rows.toArray(new String[0]), (d, which) -> {
+                if (which < groups.size()) { tab.groupId = groups.get(which).id; saveSession(); after.run(); }
+                else if (which == groups.size()) promptGroupName(null, created -> { tab.groupId = created.id; saveSession(); after.run(); });
+                else { tab.groupId = null; saveSession(); after.run(); }
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    // ======================= auto-delete & settings =======================
+
+    /** Auto-delete, run on start and on resume: closes tabs unused for the
+     *  chosen window and prunes history older than its retention window. */
+    private void runAutoDelete() {
+        if (store == null) return;
+        long now = System.currentTimeMillis();
+        store.pruneHistory(now);
+        int days = store.autoCloseTabsDays();
+        if (days <= 0) return;
+        int closed = 0;
+        for (BrowserTab tab : new ArrayList<>(tabs)) {
+            if (tab == current || tabs.size() <= 1) continue;
+            if (BrowserLogic.isExpired(tab.lastActive, now, days)) { closeTab(tab); closed++; }
+        }
+        if (closed > 0) { saveSession(); toast(closed == 1 ? "Closed 1 unused tab" : "Closed " + closed + " unused tabs"); }
+    }
+
+    private static String daysLabel(int days, String never) {
+        if (days <= 0) return never;
+        if (days == 1) return "1 day";
+        if (days == 7) return "1 week";
+        if (days == 30) return "30 days";
+        return days + " days";
+    }
+
+    private void showSettings() {
+        String engineName = BrowserLogic.engine(store.searchEngine())[1];
+        String[] rows = {
+            "Auto-close unused tabs: " + daysLabel(store.autoCloseTabsDays(), "Never"),
+            "Keep history: " + daysLabel(store.historyDays(), "Forever"),
+            "Clear history on exit: " + (store.clearOnExit() ? "On" : "Off"),
+            "Restore tabs on start: " + (store.restoreTabs() ? "On" : "Off"),
+            "Search engine: " + engineName,
+        };
+        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this)
+            .setTitle("Browser settings")
+            .setItems(rows, (d, which) -> onSettingPicked(which))
+            .setNegativeButton("Close", null);
+        moreSettings(builder);
+        builder.show();
+    }
+
+    /** Hook for later stages: extra settings buttons. */
+    private void moreSettings(android.app.AlertDialog.Builder builder) { }
+
+    private void onSettingPicked(int which) {
+        switch (which) {
+            case 0: pickDays("Auto-close tabs not used for", new int[] { 1, 7, 30, 0 }, new String[] { "1 day", "1 week", "30 days", "Never" },
+                store.autoCloseTabsDays(), days -> { store.setAutoCloseTabsDays(days); runAutoDelete(); }); break;
+            case 1: pickDays("Delete history older than", new int[] { 1, 7, 30, 0 }, new String[] { "1 day", "1 week", "30 days", "Never (keep forever)" },
+                store.historyDays(), days -> { store.setHistoryDays(days); store.pruneHistory(System.currentTimeMillis()); }); break;
+            case 2: store.setClearOnExit(!store.clearOnExit()); showSettings(); break;
+            case 3: store.setRestoreTabs(!store.restoreTabs()); showSettings(); break;
+            case 4: pickSearchEngine(); break;
+            default: break;
+        }
+    }
+
+    private interface DaysCallback { void done(int days); }
+
+    private void pickDays(String title, final int[] values, String[] labels, int selected, final DaysCallback callback) {
+        int checked = values.length - 1;
+        for (int i = 0; i < values.length; i++) if (values[i] == selected) checked = i;
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setSingleChoiceItems(labels, checked, (d, which) -> { d.dismiss(); callback.done(values[which]); showSettings(); })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void pickSearchEngine() {
+        final String[][] engines = BrowserLogic.SEARCH_ENGINES;
+        String[] labels = new String[engines.length];
+        int checked = 0;
+        for (int i = 0; i < engines.length; i++) {
+            labels[i] = engines[i][1];
+            if (engines[i][0].equals(store.searchEngine())) checked = i;
+        }
+        new android.app.AlertDialog.Builder(this)
+            .setTitle("Search engine")
+            .setSingleChoiceItems(labels, checked, (d, which) -> { d.dismiss(); store.setSearchEngine(engines[which][0]); showSettings(); })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
 
     // ---------- find in page ----------
     private LinearLayout buildFindBar() {
@@ -1382,6 +1656,11 @@ public final class RemoteBrowserActivity extends Activity {
         super.onBackPressed();
     }
 
+    @Override protected void onResume() {
+        super.onResume();
+        if (!tabs.isEmpty()) runAutoDelete();
+    }
+
     @Override protected void onPause() {
         super.onPause();
         saveSession();
@@ -1390,6 +1669,10 @@ public final class RemoteBrowserActivity extends Activity {
     @Override protected void onDestroy() {
         report("closed", "browser-only URL session closed");
         saveSession();
+        if (isFinishing() && store != null && store.clearOnExit()) {
+            store.clearHistory();
+            for (BrowserTab tab : tabs) if (tab.view != null) { try { tab.view.clearHistory(); } catch (Throwable ignored) {} }
+        }
         destroyWebView();
         super.onDestroy();
     }
