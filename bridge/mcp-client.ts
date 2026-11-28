@@ -472,7 +472,10 @@ export class McpClient {
 export interface AgentLike {
   startMcp(toolsJson: string): Promise<unknown>;
   respondToMcpTool(toolCallId: string, resultJson: string, isError?: boolean): Promise<unknown>;
-  addListener?(event: string, handler: (payload: any) => void): { remove?: () => void } | void;
+  addListener?(
+    event: string,
+    handler: (payload: any) => void,
+  ): { remove?: () => unknown } | Promise<{ remove?: () => unknown }> | void;
 }
 
 export interface McpServerConfig {
@@ -712,7 +715,13 @@ export async function connectMcpServers(
       return client.callTool(tool, args);
     },
     async dispose() {
-      (listener as { remove?: () => void } | undefined)?.remove?.();
+      // Capacitor's addListener returns a Promise of the handle. Calling
+      // `.remove` on the Promise itself did nothing, so every reconnect left the
+      // old listener alive and each device tool call ran once per stale listener.
+      try {
+        const handle = await Promise.resolve(listener as { remove?: () => unknown } | undefined);
+        await handle?.remove?.();
+      } catch { /* already removed */ }
       await Promise.all(clients.map((c) => c.close().catch(() => undefined)));
     },
   };
