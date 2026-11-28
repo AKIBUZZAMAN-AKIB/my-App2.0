@@ -1409,3 +1409,13 @@ describe('robustness', () => {
     expect(deviceServerConfig()).toMatchObject({ name: DEVICE_SERVER_NAME, protocolVersion: 'auto' });
   });
 });
+
+describe('home widget kind resolution', () => {
+  it('redirects an undeclared kind to the declared home-screen widget', async () => {
+    const { resolveHomeWidgetKind } = await import('../bridge/device-tools');
+    expect(resolveHomeWidgetKind('stopwatch-widget', { homeWidgetKinds: ['nativekit-widget'] }).kind).toBe('nativekit-widget');
+    expect(resolveHomeWidgetKind('nativekit-widget', { homeWidgetKinds: ['nativekit-widget'] })).toEqual({ kind: 'nativekit-widget', note: '' });
+    expect(resolveHomeWidgetKind('anything', {}).kind).toBe('anything');
+    expect(resolveHomeWidgetKind('x', { homeWidgetKinds: ['nativekit-miniapp-slot-01'] }).kind).toBe('x');
+  });
+});

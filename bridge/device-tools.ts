@@ -215,6 +215,12 @@ export interface DeviceToolDeps {
     requestPin(options: { kind: string }): Promise<{ requested?: boolean; hint?: string }>;
   };
   /**
+   * Home-screen widget kinds declared in app.config.json (widget.homeScreen.kinds).
+   * Android only has a widget provider for these ids, so a config written under any
+   * other kind is stored but can never be shown or pinned.
+   */
+  homeWidgetKinds?: string[];
+  /**
    * UI-artifact surface (the Store's Floating UI / Home widget / Mini UI store).
    *
    * A raw widget.showFloating() call paints a live overlay but never PUBLISHES
@@ -501,6 +507,24 @@ export interface WebSearchResult {
  * or with 'cancelled' when `signal` aborts. The work itself is not stopped (the native HTTP
  * client cannot be aborted); its late result is ignored.
  */
+/** Upper bound for one native widget call made by a device tool. */
+export const WIDGET_NATIVE_TIMEOUT_MS = 12_000;
+
+/**
+ * Maps a requested widget kind to one Android can actually render. Only kinds
+ * declared in app.config.json have a generated AppWidgetProvider; a config
+ * saved under any other id was stored but never appeared on the home screen.
+ */
+export function resolveHomeWidgetKind(kind: string, deps: Pick<DeviceToolDeps, 'homeWidgetKinds'>): { kind: string; note: string } {
+  const declared = (deps.homeWidgetKinds ?? []).filter((id) => typeof id === 'string' && id && !id.startsWith('nativekit-miniapp-slot-'));
+  if (!declared.length || declared.includes(kind)) return { kind, note: '' };
+  const target = declared[0];
+  return {
+    kind: target,
+    note: ` '${kind}' is not a home-screen widget kind this app declares, so it was written to the app's widget '${target}'.`,
+  };
+}
+
 export function withDeadline<T>(work: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => finish(() => reject(new Error('cancelled')));
@@ -1588,7 +1612,7 @@ const TOOL_SPECS: DeviceToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        kind: { type: 'string', description: "Widget kind id (letters, digits, '-', '_'; e.g. 'agent-dashboard')." },
+        kind: { type: 'string', description: "Widget kind id (letters, digits, '-', '_'). Use the app's declared home-screen widget kind (usually 'nativekit-widget'); any other id is redirected to it, because Android can only show declared kinds." },
         title: { type: 'string', description: 'Native style: heading above the value.' },
         value: { type: 'string', description: 'Native style: big headline text (a count, time, temperature...).' },
         subtitle: { type: 'string', description: 'Native style: supporting line.' },
@@ -1607,6 +1631,7 @@ const TOOL_SPECS: DeviceToolSpec[] = [
       if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(kind)) {
         return errorResult("'kind' may only contain letters, digits, '-' and '_'.");
       }
+      const { kind: target, note } = resolveHomeWidgetKind(kind, deps);
       const html = typeof args.html === 'string' ? args.html : undefined;
       if (html !== undefined && html.length > 100_000) return errorResult("'html' exceeds the 100 KB limit.");
       const value = optionalString(args, 'value', 120);
@@ -1636,11 +1661,17 @@ const TOOL_SPECS: DeviceToolSpec[] = [
         if (optionalString(args, 'accentColor', 9)) config.accentColor = optionalString(args, 'accentColor', 9);
       }
       try {
-        await deps.widget.setConfig({ kind, config });
-        await deps.widget.reload({ kind });
+        // Bounded so a stuck native call returns a clear error to the model
+        // instead of the engine's generic 30 s "MCP tool timed out".
+        await withDeadline(Promise.resolve(deps.widget.setConfig({ kind: target, config })), WIDGET_NATIVE_TIMEOUT_MS);
+        const reloaded = await withDeadline(Promise.resolve(deps.widget.reload({ kind: target })), WIDGET_NATIVE_TIMEOUT_MS);
+        const updated = typeof reloaded?.updated === 'number' ? reloaded.updated : undefined;
         return textResult(
-          `Widget '${kind}' updated${html ? ' (HTML snapshot)' : ''}. It appears on widgets the user has already pinned; new pins need requestPin.`,
-          { kind },
+          `Widget '${target}' updated${html ? ' (HTML snapshot)' : ''}.${note}` +
+            (updated === 0
+              ? ` No '${target}' widget is on the home screen yet; call pin_widget with kind '${target}' so the user can add it.`
+              : ' It appears on widgets the user has already pinned; new pins need pin_widget.'),
+          { kind: target },
         );
       } catch (error) {
         return errorResult(`Widget update failed: ${String((error as Error)?.message ?? error)}`);
@@ -1659,10 +1690,11 @@ const TOOL_SPECS: DeviceToolSpec[] = [
     },
     feature: 'widget',
     run: async (args, deps) => {
-      const kind = requiredString(args, 'kind', 64);
-      if (!kind) return errorResult("'kind' is required.");
+      const requested = requiredString(args, 'kind', 64);
+      if (!requested) return errorResult("'kind' is required.");
+      const { kind } = resolveHomeWidgetKind(requested, deps);
       try {
-        const result = await deps.widget.requestPin({ kind });
+        const result = await withDeadline(Promise.resolve(deps.widget.requestPin({ kind })), WIDGET_NATIVE_TIMEOUT_MS);
         return textResult(
           result?.requested
             ? `Pin request shown for widget '${kind}'; the user confirms on the home screen.`
