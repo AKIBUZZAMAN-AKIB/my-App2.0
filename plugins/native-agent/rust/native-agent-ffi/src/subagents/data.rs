@@ -352,6 +352,9 @@ impl SubagentManager {
         if everything {
             self.records.lock().unwrap().retain(|r| r.id != id);
             out["record"] = json!(true);
+            // Plan §3 / stage 7: the parent's `agent/<id>` node is tombstoned
+            // with the agent, so the tree never points at a deleted agent.
+            self.forget_in_parent_tree(&rec);
         }
         self.persist();
         out

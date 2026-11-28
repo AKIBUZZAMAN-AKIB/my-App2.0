@@ -424,6 +424,9 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall
             "maxSteps": 2,
             "tokenBudget": max_tokens,
             "context": "fresh",
+            // Stage 7: a temp sub-agent is deleted by the engine once its
+            // report is back; its answer is copied into this tree as agent/<id>.
+            "lifetime": "temp",
         });
         return Ok(ok_text(
             "summarize",
@@ -441,12 +444,11 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall
                 "maxTokens": max_tokens,
                 "focus": focus,
                 "tokens": tokens,
-                // A summarising child is meant to exist for one call. The engine
-                // has no `lifetime` field yet (see the plan's stage 7), so this is
-                // the promise, not the implementation: `hidden` keeps it out of the
-                // agent list, and the parent stops it (`stop_subagent`) afterwards.
+                // A summarising child exists for one call: `lifetime: temp` in the
+                // spawn request makes the engine delete it once its report is back
+                // (`subagent.deleted {reason: "temp_done"}`), and `hidden` keeps it
+                // out of the agent list meanwhile.
                 "subagentLifetime": "temp",
-                "deleteAfter": format!("stop_subagent {{id}} once the answer is stored"),
             }),
         ));
     }
@@ -494,6 +496,8 @@ fn turn_number(node: &super::model::Node) -> Option<u32> {
 fn node_body(conn: &rusqlite::Connection, env: &CtxEnv<'_>, node: &Node, recall: &dyn Recall) -> Option<String> {
     match node.kind {
         super::model::NodeKind::Note => store::load_note(conn, env.session_key, node.id.as_str()).ok().flatten(),
+        // A sub-agent's report copied in by `wiring::record_subagent_report`.
+        super::model::NodeKind::Subagent => store::load_note(conn, env.session_key, node.id.as_str()).ok().flatten().or_else(|| node.note.clone()),
         super::model::NodeKind::TempSummary => store::load_temp_summary(conn, env.session_key, node.id.as_str()).ok().flatten(),
         super::model::NodeKind::Turn => turn_number(node).and_then(|t| recall.turn(t)),
         super::model::NodeKind::Result => node.provenance.locator.as_deref().and_then(|r| recall.result(r)),
@@ -1001,6 +1005,7 @@ mod tests {
         assert_eq!(spawn["hidden"], true, "it is not one of the user's agents");
         assert_eq!(spawn["wait"], true, "the parent needs the answer in this turn");
         assert_eq!(spawn["tokenBudget"], 300);
+        assert_eq!(spawn["lifetime"], "temp", "the engine deletes it when its report is back");
         let task = spawn["task"].as_str().unwrap();
         assert!(task.contains("at most 300 tokens"), "{task}");
         assert!(task.contains("Focus on: the build"), "{task}");

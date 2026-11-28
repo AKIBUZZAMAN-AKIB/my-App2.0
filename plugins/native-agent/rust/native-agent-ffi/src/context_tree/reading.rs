@@ -195,9 +195,11 @@ impl IndexPlan {
 }
 
 /// The kinds whose content the tree owns. These survive their source, and a
-/// re-index never deletes them.
+/// re-index never deletes them. A sub-agent's report (`agent/<id>`, stage 7) is
+/// one: it is copied in when the report comes back and lives until the agent
+/// is deleted, whatever the chat's material says.
 pub fn is_model_authored(kind: NodeKind) -> bool {
-    matches!(kind, NodeKind::Note | NodeKind::TempSummary | NodeKind::Strategy)
+    matches!(kind, NodeKind::Note | NodeKind::TempSummary | NodeKind::Strategy | NodeKind::Subagent)
 }
 
 /// Compare the tree with the material and say what to do about it.

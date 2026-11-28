@@ -562,7 +562,15 @@ pub fn handle_tool(db_path: &str, session_key: &str, workspace: &str, args: &ser
     let mut env = CtxEnv::new(session_key, now_ms, model, budget);
     env.redact_paths = true;
     let recall = EngineRecall { conn: &conn, session_key, workspace };
-    dispatch::handle(&conn, &env, args, &recall)
+    let answer = dispatch::handle(&conn, &env, args, &recall);
+    // Mirrors follow a commit (plan §7): a call that changed the tree rewrites
+    // strategy.md and the note files. A failed write never fails the call.
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let ok = answer.get("ok").and_then(|v| v.as_bool()) != Some(false) && answer.get("error").is_none();
+    if ok && matches!(action, "note" | "strategy" | "set" | "summarize" | "category") {
+        let _ = super::gc::sync_mirrors(&conn, session_key, workspace);
+    }
+    answer
 }
 
 /// Answer a `ctx` call for the agent loop: the text the model reads and whether
@@ -587,6 +595,132 @@ pub fn disabled_answer() -> (String, bool) {
         .to_string(),
         true,
     )
+}
+
+/// The user deleted a sub-agent: tombstone its `agent/<id>` node and drop the
+/// copied report, so the tree never offers a deleted agent's work.
+pub fn forget_subagent(db_path: &str, session_key: &str, subagent_id: &str, now_ms: i64) {
+    let Ok(conn) = open(db_path) else { return };
+    if super::store::schema_version(&conn).is_none() {
+        return;
+    }
+    let id = format!("agent/{subagent_id}");
+    let n = conn
+        .execute(
+            "UPDATE ctx_nodes SET deleted = 1, state = 'out', node_rev = node_rev + 1, last_used_at = ?3
+              WHERE session_key = ?1 AND id = ?2 AND deleted = 0",
+            rusqlite::params![session_key, id, now_ms],
+        )
+        .unwrap_or(0);
+    let _ = conn.execute("DELETE FROM ctx_notes WHERE session_key = ?1 AND id = ?2", rusqlite::params![session_key, id]);
+    if n > 0 {
+        let _ = store::bump_rev(&conn, session_key, now_ms);
+    }
+}
+
+/// Housekeeping at a turn boundary, before the request is built (plan §7/§8):
+/// the GC when it is due (first request of the session since the app started,
+/// then every 50 turns), and the mirrors brought in line with the DB (rebuilt
+/// when missing or edited by hand). Never fails the turn. Returns what the GC
+/// did when it ran and did something, for the caller's event.
+pub fn maintain(db_path: &str, session_key: &str, workspace: &str, now_turn: u32, now_ms: i64) -> Option<super::gc::Cleanup> {
+    let conn = open(db_path).ok()?;
+    if !enabled_on(&conn, session_key).unwrap_or(false) {
+        return None;
+    }
+    store::ensure_session(&conn, session_key, now_ms).ok()?;
+    let ran = super::gc::maybe_run(&conn, session_key, now_turn, now_ms);
+    if ran.is_some() {
+        // A GC pass is also when the mirrors are checked against the DB.
+        let _ = super::gc::sync_mirrors(&conn, session_key, workspace);
+    }
+    ran.filter(|c| c.did_anything())
+}
+
+/// Most characters of a sub-agent report the `agent/<id>` node's note keeps.
+pub const SUBAGENT_NOTE_CHARS: usize = 600;
+
+/// Copy a sub-agent's report into its parent's tree as `agent/<id>` (plan §10:
+/// "result copied to parent tree"). The full report is kept in `ctx_notes` so
+/// `ctx recall agent/<id>` gives it back; the node itself starts in `note`,
+/// so what every request carries is a short note, not the whole report. A
+/// render_in_chat answer the user already sees starts `out`: the model can
+/// still recall it. Written once: a later copy (a reused agent's next report)
+/// updates the text but never undoes what the model chose for the node.
+/// Does nothing when the tree is off. Never fails the caller.
+#[allow(clippy::too_many_arguments)]
+pub fn record_subagent_report(
+    db_path: &str,
+    session_key: &str,
+    subagent_id: &str,
+    title: &str,
+    status: &str,
+    report: &str,
+    render_in_chat: bool,
+    lifetime: &str,
+    now_ms: i64,
+) {
+    use super::model::{safe_title, ItemState, NodeId, NodeKind, Owner, Pin, Provenance};
+    let Ok(conn) = open(db_path) else { return };
+    if !enabled_on(&conn, session_key).unwrap_or(false) {
+        return;
+    }
+    if store::ensure_session(&conn, session_key, now_ms).is_err() {
+        return;
+    }
+    let safe_id: String = subagent_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').take(64).collect();
+    if safe_id.is_empty() {
+        return;
+    }
+    let Ok(id) = NodeId::parse(&format!("agent/{safe_id}")) else { return };
+    let report = report.trim();
+    let note: String = {
+        let head: String = report.chars().take(SUBAGENT_NOTE_CHARS).collect();
+        if head.chars().count() < report.chars().count() { format!("{head} …(ctx recall {} for all of it)", id.as_str()) } else { head }
+    };
+    let title = safe_title(&format!("{title} ({})", status.replace('_', " ")));
+    if store::put_note(&conn, session_key, id.as_str(), &title, report, "agents", ItemState::Note, now_ms).is_err() {
+        return;
+    }
+    let existing = store::load_node(&conn, session_key, id.as_str()).ok().flatten();
+    let tokens_full = super::render::estimate_tokens(report) as u32;
+    let tokens_note = super::render::estimate_tokens(&note) as u32;
+    let node = match existing {
+        Some(mut n) => {
+            n.title = title;
+            n.note = Some(note);
+            n.tokens_full = tokens_full;
+            n.tokens_note = tokens_note;
+            n.last_used_at = Some(now_ms);
+            n
+        }
+        None => super::model::Node {
+            id: id.clone(),
+            session_key: session_key.to_string(),
+            kind: NodeKind::Subagent,
+            parent: "agents".to_string(),
+            tags: Vec::new(),
+            order: 0,
+            title,
+            state: if render_in_chat { ItemState::Out } else { ItemState::Note },
+            pin: Pin::None,
+            owner: Owner::Subagent(safe_id.clone()),
+            tokens_full,
+            tokens_note,
+            token_model: String::new(),
+            note: Some(note),
+            provenance: Provenance { source: "subagent".into(), locator: Some(safe_id.clone()), range: Some(format!("lifetime:{lifetime}")), ..Default::default() },
+            created_at: now_ms,
+            last_used_at: Some(now_ms),
+            loaded_at: None,
+            turn: None,
+            rev: 1,
+            deleted: false,
+        },
+    };
+    if store::upsert_node(&conn, &node).is_ok() {
+        let _ = store::bump_rev(&conn, session_key, now_ms);
+    }
 }
 
 /// Turn `ctx` on for one database and seed the built-in categories. Used by tests

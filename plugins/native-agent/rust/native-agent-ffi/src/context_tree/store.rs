@@ -25,7 +25,7 @@ pub const CTX_SCHEMA_VERSION: i64 = 1;
 
 /// The categories every session starts with. `sys` and `ess` are locked homes:
 /// the model may look at them, never remove them.
-pub const BUILTIN_CATEGORIES: [(&str, &str, &str); 7] = [
+pub const BUILTIN_CATEGORIES: [(&str, &str, &str); 8] = [
     ("sys", "System prompt", "system"),
     ("ess", "Essentials", "system"),
     ("turns", "Conversation", "system"),
@@ -33,6 +33,8 @@ pub const BUILTIN_CATEGORIES: [(&str, &str, &str); 7] = [
     ("results", "Tool output", "system"),
     ("notes", "Notebook", "system"),
     ("strategy", "Strategy", "system"),
+    // Stage 7: reports of finished sub-agents (`agent/<id>`).
+    ("agents", "Sub-agents", "system"),
 ];
 
 /// Default per-session caps. Per-kind trimming keeps long chats alive: one global

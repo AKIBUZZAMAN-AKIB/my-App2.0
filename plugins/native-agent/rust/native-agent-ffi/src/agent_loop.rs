@@ -267,6 +267,14 @@ pub async fn run_agent_turn(
     if let Some(t) = ctx.subagents.as_ref().and_then(|sub| sub.manager.temperature_for(&ctx.session_key)) {
         runtime_config.temperature = t;
     }
+    // Sub-agent lifetimes (plan §10): reports handed back are copied into this
+    // chat's context tree, and the temp/standby sweep runs at each turn start.
+    if let Some(sub) = ctx.subagents.as_ref() {
+        sub.manager.set_tree_db(&ctx.config.db_path);
+        if !ctx.session_key.starts_with("subagent:") {
+            sub.manager.gc_lifetimes();
+        }
+    }
 
     let requested_provider = ctx
         .params
@@ -629,6 +637,21 @@ pub async fn run_agent_turn(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
+            // GC / crash repair / mirror check, when due (first request of the
+            // session since the app started, then every 50 turns).
+            if let Some(done) = crate::context_tree::wiring::maintain(
+                &ctx.config.db_path,
+                &ctx.session_key,
+                &ctx.config.workspace_path,
+                tree_turns_total,
+                now_ms,
+            ) {
+                event_bus::emit(
+                    ctx.callback.as_deref(),
+                    "context.tree_gc",
+                    &serde_json::json!({"sessionKey": ctx.session_key, "result": done.to_json()}),
+                );
+            }
             if let Some(parts) = crate::context_tree::wiring::before_request(
                 &ctx.config.db_path,
                 &ctx.session_key,

@@ -54,6 +54,7 @@ mod channels;
 mod compact;
 mod swarm;
 mod team;
+mod lifetimes;
 pub use channels::{CommsConfig, COMMS_TOOL_NAMES, PATTERNS};
 pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
 pub use data::{parse_parts, TrackedFile, DATA_PARTS};
@@ -170,6 +171,13 @@ pub struct SubagentSettings {
     /// Version of the token-budget rules the saved file was written with.
     /// Files without it come from when 200k was the default cap (see `load`).
     pub token_budget_schema: u32,
+    /// How long a `standby` sub-agent may sit unused before the GC deletes it
+    /// (plan §10). 1 day; clamp 5 min .. 30 days. A sub-agent's own
+    /// `ttl_secs` wins over this.
+    pub standby_ttl_default_secs: u64,
+    /// How long a finished `temp` sub-agent is kept after its report was
+    /// handed back, before it is deleted. 0 = at once; clamp 0 .. 1 h.
+    pub temp_keep_secs_after_finish: u64,
 }
 
 /// The old default per-run cap. Settings, records and templates written
@@ -219,6 +227,8 @@ impl Default for SubagentSettings {
             comms_paused: false,
             peer_rate_limit_per_min: 20,
             token_budget_schema: TOKEN_BUDGET_SCHEMA,
+            standby_ttl_default_secs: lifetimes::STANDBY_TTL_DEFAULT_SECS,
+            temp_keep_secs_after_finish: 0,
         }
     }
 }
@@ -230,6 +240,8 @@ impl SubagentSettings {
         self.topology = team::normalize_topology(&self.topology);
         self.default_token_budget = clamp_token_budget(self.default_token_budget);
         self.token_budget_schema = TOKEN_BUDGET_SCHEMA;
+        self.standby_ttl_default_secs = self.standby_ttl_default_secs.clamp(lifetimes::STANDBY_TTL_MIN_SECS, lifetimes::STANDBY_TTL_MAX_SECS);
+        self.temp_keep_secs_after_finish = self.temp_keep_secs_after_finish.min(lifetimes::TEMP_KEEP_MAX_SECS);
         self.default_max_steps = self.default_max_steps.clamp(1, 200);
         self.timeout_seconds = self.timeout_seconds.clamp(5, 3_600);
         self.default_memory = MemoryMode::parse(&self.default_memory)
@@ -551,6 +563,24 @@ pub struct SubagentRecord {
     /// Swarm handoff: the peer that handed this task to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handed_from: Option<String>,
+    /// `temp`, `reusable` or `standby` (plan §10). None = reusable, which is
+    /// how every record written before lifetimes behaves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime: Option<String>,
+    /// Own standby TTL in seconds; None = the settings default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_secs: Option<u64>,
+    /// Its final answer is shown to the user directly, as a message
+    /// "from <name>"; the parent only gets a short note of it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub render_in_chat: bool,
+    /// Its final report was handed back to the parent (or it can no longer
+    /// be: the app restarted). A temp sub-agent is only deleted after this.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reported: bool,
+    /// Last time it ran or was reused (ms); the standby clock starts here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<i64>,
 }
 
 impl SubagentRecord {
@@ -883,6 +913,13 @@ pub struct SpawnSpec {
     pub comms_role: Option<String>,
     #[serde(alias = "canBroadcast", deserialize_with = "lenient::opt_bool")]
     pub can_broadcast: Option<bool>,
+    /// temp | reusable | standby.
+    pub lifetime: Option<String>,
+    /// Standby TTL in seconds.
+    #[serde(alias = "ttlSecs", alias = "ttl", alias = "ttl_seconds", deserialize_with = "lenient::opt_num")]
+    pub ttl_secs: Option<u64>,
+    #[serde(alias = "renderInChat", deserialize_with = "lenient::opt_bool")]
+    pub render_in_chat: Option<bool>,
 }
 
 /// Tool arguments from small models are often stringly typed ("true", "3",
@@ -994,6 +1031,12 @@ pub struct SubagentManager {
     workspace: StdMutex<Option<String>>,
     /// Deletes asked for while a run was still stopping: (parts, everything).
     deferred_deletes: StdMutex<HashMap<String, (Vec<&'static str>, bool)>>,
+    /// The chat database, so a report handed back can be copied into the
+    /// parent's context tree (plan §10). Set by the agent loop.
+    tree_db: StdMutex<Option<String>>,
+    /// The latest app callback seen, so lifetime GC (which runs from
+    /// `persist`, outside any run) can still send `subagent.deleted`.
+    last_app: StdMutex<Option<Arc<dyn NativeEventCallback>>>,
     /// "Always allow" answers scoped to one chat: chat session key -> tools.
     session_allows: StdMutex<HashMap<String, Vec<String>>>,
     /// Attachments (JSON, as `SendMessageParams::attachments_json`) for the
@@ -1118,6 +1161,11 @@ impl SubagentManager {
             r.finished_at = Some(now_ms());
             changed = true;
         }
+        // A temp sub-agent nobody can wait for any more (the parent's turn
+        // ended with the app) may go now: the next sweep deletes it.
+        if lifetimes::release_orphaned_temps(&mut records) {
+            changed = true;
+        }
         let mgr = Arc::new(Self {
             state_dir,
             runner,
@@ -1133,6 +1181,8 @@ impl SubagentManager {
             user_ask_aborts: StdMutex::new(HashMap::new()),
             workspace: StdMutex::new(None),
             deferred_deletes: StdMutex::new(HashMap::new()),
+            tree_db: StdMutex::new(None),
+            last_app: StdMutex::new(None),
             session_allows: StdMutex::new(fs_read_json(&state_dir_allows).unwrap_or_default()),
             next_attachments: StdMutex::new(HashMap::new()),
             followups: StdMutex::new(HashMap::new()),
@@ -1373,9 +1423,26 @@ impl SubagentManager {
     }
 
     fn persist(&self) {
-        let max_kept = self.settings.lock().unwrap().max_kept as usize;
-        let snapshot = {
+        let settings = self.settings.lock().unwrap().clone();
+        let max_kept = settings.max_kept as usize;
+        let busy: std::collections::HashSet<String> = {
+            let mut ids: std::collections::HashSet<String> = self.live.lock().unwrap().keys().cloned().collect();
+            ids.extend(self.pending.lock().unwrap().keys().cloned());
+            ids
+        };
+        let (snapshot, retired) = {
             let mut recs = self.records.lock().unwrap();
+            // Plan §10 / §1.4: the temp and standby GC runs *before* the
+            // max_kept prune, so a temp agent is never pruned without its
+            // `subagent.deleted {reason: "temp_done"}` bookkeeping.
+            let retired = lifetimes::sweep(&mut recs, &settings, now_ms(), &busy);
+            for (old, _) in &retired {
+                if old.session_key.starts_with("subagent:") {
+                    self.runner.clear(&old.session_key);
+                }
+                self.remove_log(&old.id);
+                self.remove_branches(&old.id);
+            }
             while recs.len() > max_kept {
                 match recs.iter().position(|r| !r.is_active()) {
                     Some(i) => {
@@ -1387,9 +1454,12 @@ impl SubagentManager {
                     None => break,
                 }
             }
-            recs.clone()
+            (recs.clone(), retired)
         };
         fs_write_json(&self.state_dir.join("registry.json"), &snapshot);
+        if !retired.is_empty() {
+            self.after_retire(&retired, &snapshot);
+        }
     }
 
     // ── Tool definitions and prompts ─────────────────────────────────────
@@ -1435,7 +1505,10 @@ impl SubagentManager {
                         "rounds": {"type": "integer", "minimum": 1, "maximum": 5, "description": "With mode review: most review rounds (default 3)."},
                         "topology": {"type": "string", "enum": ["tree", "star", "mesh", "ring", "chain", "bus", "hierarchical", "swarm", "custom"], "description": "Who it (or the batch) may message: tree up/down, star via hub, mesh anyone, ring/chain neighbours, bus topics+blackboard, hierarchical sub-teams, swarm decentralised, custom user edges. Default: yours, else the chat's."},
                         "hub": {"description": "With `tasks`: index or name of the star hub / hierarchical lead.", "anyOf": [{"type": "integer"}, {"type": "string"}]},
-                        "comms_role": {"type": "string", "enum": ["hub", "lead", "member"]}
+                        "comms_role": {"type": "string", "enum": ["hub", "lead", "member"]},
+                        "lifetime": {"type": "string", "enum": ["temp", "reusable", "standby"], "description": "temp: deleted once its report is back (one-off helpers, summaries). reusable (default): kept until the user deletes it or the kept-agents limit is reached. standby: kept for reuse, deleted after `ttl_secs` without use."},
+                        "ttl_secs": {"type": "integer", "minimum": 300, "description": "With lifetime standby: seconds it may sit unused before it is deleted (default: the user's setting, 1 day)."},
+                        "render_in_chat": {"type": "boolean", "description": "true: its final answer is shown to the user directly as a message from it, and you get only a short note of it. Do not repeat that answer."}
                     },
                     "required": ["task"]
                 }),
@@ -1514,7 +1587,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             "You are \"{}\"{}, a sub-agent. Another agent delegated one task to you.\n\
 - Work only on that task, using your tools. You cannot see the other agent's conversation and you cannot ask the user questions. If something is missing, make a reasonable assumption and say so in your report.\n\
 - Be efficient: you have at most {} steps{}.\n\
-- Finish with a final report in plain text: what you found or did, the key details (file paths, values, commands), and anything left open. The report is all the other agent will see.",
+- Finish with a final report in plain text: what you found or did, the key details (file paths, values, commands), and anything left open. The report is all the other agent will see.{}",
             rec.name,
             role,
             rec.max_steps,
@@ -1522,7 +1595,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 ". When your context nears your model's window, older parts are compacted automatically".to_string()
             } else {
                 format!(" and {} tokens", rec.token_budget)
-            }
+            },
+            if rec.render_in_chat { lifetimes::RENDER_IN_CHAT_PROMPT } else { "" }
         );
         if let Some(extra) = rec.system_prompt.as_deref().filter(|s| !s.trim().is_empty()) {
             p.push_str("\n\n## Instructions from the delegating agent\n");
@@ -1715,6 +1789,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             can_broadcast: spec.can_broadcast,
             handed_to: None,
             handed_from: None,
+            lifetime: spec.lifetime.as_deref().and_then(lifetimes::normalize_lifetime),
+            ttl_secs: spec.ttl_secs.map(lifetimes::clamp_ttl),
+            render_in_chat: spec.render_in_chat.unwrap_or(false),
+            reported: false,
+            last_used_at: Some(now),
         };
         self.records.lock().unwrap().push(rec.clone());
         self.persist();
@@ -1918,6 +1997,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             r.result = Some(result);
             r.error = error.or_else(|| note.map(|n| n.to_string()));
             r.finished_at = Some(now_ms());
+            r.last_used_at = r.finished_at;
         });
         self.persist();
         let live = self.live.lock().unwrap().remove(id);
@@ -1927,7 +2007,19 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 "error" => "subagent.error",
                 _ => "subagent.cancelled",
             };
-            self.emit(app, event, &rec, json!({ "report": truncate_chars(rec.result.as_deref().unwrap_or(""), 2_000) }));
+            // render_in_chat: the app shows the whole answer as a message
+            // "from <name>", so the event carries it in full (capped).
+            let cap = if rec.render_in_chat { lifetimes::RENDER_IN_CHAT_MAX_CHARS } else { 2_000 };
+            self.emit(
+                app,
+                event,
+                &rec,
+                json!({
+                    "report": truncate_chars(rec.result.as_deref().unwrap_or(""), cap),
+                    "renderInChat": rec.render_in_chat,
+                    "lifetime": lifetimes::lifetime_of(&rec),
+                }),
+            );
         }
         // A delete asked for while it ran: its transcript is saved by now.
         self.run_deferred_delete(id, app);
@@ -2028,6 +2120,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             self.append_log(&rec.id, event, rec, &extra);
         }
         let Some(cb) = cb else { return };
+        *self.last_app.lock().unwrap() = Some(cb.clone());
         let mut payload = json!({
             "id": rec.id,
             "name": rec.name,
@@ -2209,6 +2302,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             r.error = None;
             r.finished_at = None;
             r.runs += 1;
+            // Reuse resets the standby clock, and a reused temp agent owes a
+            // new report before it may go.
+            r.last_used_at = Some(now_ms());
+            r.reported = false;
             if reset_counters {
                 r.input_tokens = 0;
                 r.output_tokens = 0;
@@ -2644,6 +2741,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         }
         let mut parts = Vec::new();
         let mut all_failed = true;
+        let mut delivered: Vec<String> = Vec::new();
         for id in ids {
             let Some(r) = self.get(id) else {
                 parts.push(format!("No sub-agent with id {}.", id));
@@ -2682,8 +2780,18 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 s.push_str(&format!("\nNote: {}", e));
             }
             let report = r.result.as_deref().unwrap_or("").trim();
-            s.push_str("\nReport:\n");
-            s.push_str(if report.is_empty() { "(no report)" } else { report });
+            if r.render_in_chat && !report.is_empty() {
+                // The user already sees the whole answer as a message from it:
+                // the parent gets a note, not a second copy to repeat.
+                s.push_str(&lifetimes::render_in_chat_note(&r.name, report));
+            } else {
+                s.push_str("\nReport:\n");
+                s.push_str(if report.is_empty() { "(no report)" } else { report });
+            }
+            // The report is handed back: copy it into the parent's context
+            // tree (when it has one) and let a temp agent go.
+            self.note_in_parent_tree(&r);
+            delivered.push(r.id.clone());
             if let Some(t) = handed.iter().find(|h| &h.0 == id).and_then(|h| self.get(&h.1)) {
                 let tr = t.result.as_deref().unwrap_or("").trim();
                 if t.is_active() {
@@ -2698,6 +2806,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             }
             parts.push(truncate_chars(&s, REPORT_CAP));
         }
+        self.mark_reported(&delivered);
         (parts.join("\n\n---\n\n"), all_failed)
     }
 
