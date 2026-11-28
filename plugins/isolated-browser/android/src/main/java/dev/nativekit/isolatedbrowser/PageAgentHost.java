@@ -94,7 +94,11 @@ public final class PageAgentHost {
     // page asks it back to resume in-flight work. See bootstrap.js.
     private String sessionTask;
     private String sessionStatus;
+    private String sessionResult;
     private String sessionHistory;
+    // Shell appearance mirrored into the agent panel (Light/Dark + accent).
+    private volatile boolean themeDark = true;
+    private volatile String themeAccent = "#60A5FA";
 
     private PageAgentHost(int maxCalls) {
         this.maxCalls = maxCalls;
@@ -112,11 +116,18 @@ public final class PageAgentHost {
      * unsupported — callers treat that as a no-op.
      */
     public static PageAgentHost install(WebView webView, Context context, boolean enabled, String language) {
+        return install(webView, context, enabled, language, true, "#60A5FA");
+    }
+
+    /** As above, painting the agent panel in the browser's current theme. */
+    public static PageAgentHost install(WebView webView, Context context, boolean enabled, String language, boolean dark, String accent) {
         if (webView == null || !enabled || !supported()) return null;
         try {
             String injection = cachedInjection(context);
             if (injection == null) return null;
             PageAgentHost host = new PageAgentHost(MAX_CALLS_DEFAULT);
+            host.themeDark = dark;
+            host.themeAccent = accent == null ? "#60A5FA" : accent;
             JSONObject cfg = new JSONObject();
             cfg.put("bridge", JS_OBJECT);
             cfg.put("token", host.token);
@@ -131,6 +142,8 @@ public final class PageAgentHost {
             // "the agent is always in the way" complaint.
             cfg.put("dock", "side");
             cfg.put("autoShow", false);
+            cfg.put("dark", dark);
+            cfg.put("accent", host.themeAccent);
             String configScript = "window.__NATIVEKIT_PAGE_AGENT__=" + cfg.toString() + ";";
             // Origin rules "*" is safe here: the relay additionally requires the
             // main frame, the per-session token, the fixed endpoint and the call
@@ -152,6 +165,20 @@ public final class PageAgentHost {
      * One-way native -> page call into the bootstrap's own host bridge; the
      * page gains no channel back into native code from this.
      */
+    /** Live re-theme of the agent panel on an open page. */
+    public void setTheme(boolean dark, String accent) {
+        themeDark = dark;
+        if (accent != null && accent.matches("#[0-9A-Fa-f]{6}")) themeAccent = accent;
+    }
+
+    public static void applyTheme(WebView webView, boolean dark, String accent) {
+        if (webView == null || accent == null || !accent.matches("#[0-9A-Fa-f]{6}")) return;
+        try {
+            webView.evaluateJavascript(
+                "(function(){var p=window.__nativekitAgentPanel;return p&&p.setTheme?p.setTheme(" + dark + ",'" + accent + "'):null;})()", null);
+        } catch (Throwable ignored) { /* page not ready */ }
+    }
+
     public static void togglePanel(WebView webView) {
         if (webView == null) return;
         try {
@@ -210,6 +237,8 @@ public final class PageAgentHost {
         if (task != null) sessionTask = task.length() > 2000 ? task.substring(0, 2000) : task;
         String status = request.optString("status", null);
         if (status != null) sessionStatus = status.length() > 40 ? status.substring(0, 40) : status;
+        String result = request.optString("result", null);
+        if (result != null) sessionResult = result.length() > 4000 ? result.substring(0, 4000) : result;
     }
 
     private void handleHistory(JSONObject request) {
@@ -225,7 +254,13 @@ public final class PageAgentHost {
             response.put("kind", "state-resp");
             response.put("task", sessionTask == null ? "" : sessionTask);
             response.put("status", sessionStatus == null ? "" : sessionStatus);
+            response.put("result", sessionResult == null ? "" : sessionResult);
             response.put("history", sessionHistory == null ? "" : sessionHistory);
+            // Current shell appearance, so a freshly navigated page paints the
+            // agent panel in the user's theme (the document-start config only
+            // carries the theme from when the tab was created).
+            response.put("dark", themeDark);
+            response.put("accent", themeAccent);
             reply(proxy, response.toString());
         } catch (Throwable error) {
             reply(proxy, errorResponse("", "restore failed"));
