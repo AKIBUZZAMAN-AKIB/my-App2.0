@@ -328,3 +328,170 @@ export function describeCatalog(): Record<string, unknown> {
     return [id, { description: info.description, sizes: info.sizes, defaultSize: info.defaultSize, config: info.config }];
   }));
 }
+
+// ── Agent control of the Home screen ─────────────────────────────────────────
+// Everything the user can do on Home, the agent can do too. Settings and widget
+// state live in localStorage next to the layout, so a change lands even when
+// Home is not open; actions that only make sense on a visible page (open an app,
+// enter edit mode, open the add sheet) go through a one-shot command that an
+// open Home page runs at once and a closed one runs the next time it is shown.
+
+export const HOME_PREFS_KEY = 'myapp.home.prefs.v1';
+export const HOME_COMMAND_KEY = 'myapp.home.command.v1';
+export const HOME_STOPWATCH_KEY = 'myapp.home.stopwatch.v1';
+export const HOME_COMMAND_EVENT = 'myapp:home-command';
+
+export type HomeTheme = 'system' | 'light' | 'dark';
+export type HomeTextSize = 'compact' | 'default' | 'large';
+export type HomeDensity = 'comfortable' | 'compact';
+
+export interface HomePrefs {
+  theme: HomeTheme;
+  textSize: HomeTextSize;
+  density: HomeDensity;
+  /** hex accent used for buttons and highlights; empty = the agent app's neutral primary */
+  accent: string;
+  /** show the "Ask the agent" bar under the greeting */
+  showAskBar: boolean;
+  greeting: string;
+}
+
+export const DEFAULT_HOME_PREFS: HomePrefs = { theme: 'system', textSize: 'default', density: 'comfortable', accent: '', showAskBar: true, greeting: '' };
+
+export const HOME_APP_IDS = ['agent', 'calendar', 'browser', 'notes', 'reminder', 'habits', 'academic', 'store', 'more'] as const;
+
+/** Every action home_control accepts, with what it needs. Shown to the model in the tool description. */
+export const HOME_CONTROL_ACTIONS = {
+  get_state: 'Read Home settings, the layout summary and each stopwatch/timer state.',
+  set_theme: 'value: "system" | "light" | "dark".',
+  set_text_size: 'value: "compact" | "default" | "large" — scales every font on Home.',
+  set_density: 'value: "comfortable" | "compact" — spacing between and inside widgets.',
+  set_accent: 'value: hex colour like "#6366f1", or "" for the default neutral accent.',
+  set_greeting: 'value: custom greeting line (max 40 chars), or "" for the time-of-day greeting.',
+  show_ask_bar: 'value: true | false — the "Ask the agent" bar at the top of Home.',
+  stopwatch_start: 'id: stopwatch widget id (optional when Home has one stopwatch).',
+  stopwatch_pause: 'id: stopwatch widget id (optional).',
+  stopwatch_reset: 'id: stopwatch widget id (optional).',
+  stopwatch_lap: 'id: stopwatch widget id (optional); only while running.',
+  check_item: 'id: notes widget id (optional when one checklist), index: 0-based item, done: true|false (omit to toggle).',
+  open_app: 'value: one of ' + HOME_APP_IDS.join(', ') + ' — opens that screen from Home.',
+  edit_mode: 'value: true | false — the wobbling rearrange mode.',
+  open_add_sheet: 'Open the "Add a widget" sheet.',
+  refresh: 'Reload live data (weather, battery, alarms, agent status).',
+  scroll_to: 'id: widget id to scroll into view and highlight.',
+} as const;
+export type HomeControlAction = keyof typeof HOME_CONTROL_ACTIONS;
+export const HOME_CONTROL_ACTION_IDS = Object.keys(HOME_CONTROL_ACTIONS) as HomeControlAction[];
+
+/** Actions that need a visible Home page; they are queued as a command. */
+export const HOME_PAGE_ACTIONS: readonly HomeControlAction[] = ['open_app', 'edit_mode', 'open_add_sheet', 'refresh', 'scroll_to'];
+
+export interface HomeCommand { id: string; action: HomeControlAction; args: Record<string, unknown>; at: number }
+
+export interface StopwatchState { run: boolean; start: number; acc: number; laps: number[]; done: boolean }
+
+export interface HomeStateStore {
+  readPrefs(): string | null;
+  writePrefs(json: string): void;
+  readStopwatches(): string | null;
+  writeStopwatches(json: string): void;
+  sendCommand(json: string): void;
+}
+
+export function parseHomePrefs(json: string | null | undefined): HomePrefs {
+  let raw: any = null;
+  try { raw = json ? JSON.parse(json) : null; } catch { raw = null; }
+  const p = { ...DEFAULT_HOME_PREFS };
+  if (!raw || typeof raw !== 'object') return p;
+  if (['system', 'light', 'dark'].includes(raw.theme)) p.theme = raw.theme;
+  if (['compact', 'default', 'large'].includes(raw.textSize)) p.textSize = raw.textSize;
+  if (['comfortable', 'compact'].includes(raw.density)) p.density = raw.density;
+  if (typeof raw.accent === 'string' && (raw.accent === '' || /^#[0-9a-f]{6}$/i.test(raw.accent))) p.accent = raw.accent;
+  if (typeof raw.showAskBar === 'boolean') p.showAskBar = raw.showAskBar;
+  if (typeof raw.greeting === 'string') p.greeting = raw.greeting.slice(0, 40);
+  return p;
+}
+
+export function applyPref(prefs: HomePrefs, action: HomeControlAction, value: unknown): HomePrefs {
+  const next = { ...prefs };
+  const pick = <T extends string>(allowed: readonly T[], label: string): T => {
+    if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value)) throw new Error(`${label} must be one of ${allowed.join(', ')}.`);
+    return value as T;
+  };
+  switch (action) {
+    case 'set_theme': next.theme = pick(['system', 'light', 'dark'] as const, 'value'); break;
+    case 'set_text_size': next.textSize = pick(['compact', 'default', 'large'] as const, 'value'); break;
+    case 'set_density': next.density = pick(['comfortable', 'compact'] as const, 'value'); break;
+    case 'set_accent': {
+      const v = typeof value === 'string' ? value.trim() : '';
+      if (v !== '' && !/^#[0-9a-f]{6}$/i.test(v)) throw new Error('value must be a hex colour like #6366f1, or "" for the default.');
+      next.accent = v; break;
+    }
+    case 'set_greeting': next.greeting = typeof value === 'string' ? value.trim().slice(0, 40) : ''; break;
+    case 'show_ask_bar': next.showAskBar = value !== false && value !== 'false'; break;
+    default: throw new Error(`${action} is not a setting.`);
+  }
+  return next;
+}
+
+function pickWidget(layout: HomeLayout, type: HomeWidgetType, id: unknown): HomeWidget {
+  if (id !== undefined && id !== null && id !== '') {
+    const w = layout.widgets.find((x) => x.id === id);
+    if (!w) throw new Error(`No widget with id "${id}" on Home. Call home_get_layout to see the ids.`);
+    if (w.type !== type) throw new Error(`Widget "${id}" is a ${w.type}, not a ${type}.`);
+    return w;
+  }
+  const all = layout.widgets.filter((x) => x.type === type);
+  if (all.length === 1) return all[0];
+  if (!all.length) throw new Error(`Home has no ${type} widget. Add one with home_add_widget first.`);
+  throw new Error(`Home has ${all.length} ${type} widgets (${all.map((x) => x.id).join(', ')}); pass id.`);
+}
+
+export function parseStopwatches(json: string | null | undefined): Record<string, StopwatchState> {
+  try { const v = json ? JSON.parse(json) : {}; return v && typeof v === 'object' ? v : {}; } catch { return {}; }
+}
+
+export function stopwatchAction(layout: HomeLayout, all: Record<string, StopwatchState>, action: HomeControlAction, id: unknown, now = Date.now()): { all: Record<string, StopwatchState>; widget: HomeWidget; state: StopwatchState } {
+  const widget = pickWidget(layout, 'stopwatch', id);
+  const s: StopwatchState = Object.assign({ run: false, start: 0, acc: 0, laps: [], done: false }, all[widget.id] || {});
+  const elapsed = () => s.acc + (s.run ? now - s.start : 0);
+  if (action === 'stopwatch_start' && !s.run) { s.start = now; s.run = true; s.done = false; }
+  if (action === 'stopwatch_pause' && s.run) { s.acc = elapsed(); s.run = false; }
+  if (action === 'stopwatch_reset') Object.assign(s, { run: false, start: 0, acc: 0, laps: [], done: false });
+  if (action === 'stopwatch_lap') { if (!s.run) throw new Error('The stopwatch is not running; start it first.'); s.laps = [...s.laps, elapsed()]; }
+  return { all: { ...all, [widget.id]: s }, widget, state: s };
+}
+
+export function checkItem(layout: HomeLayout, id: unknown, index: unknown, done: unknown, now = Date.now()): { layout: HomeLayout; widget: HomeWidget; item: { text: string; done: boolean } } {
+  const candidates = id ? [pickWidget(layout, 'notes', id)] : layout.widgets.filter((w) => w.type === 'notes' && Array.isArray(w.config.items) && (w.config.items as unknown[]).length);
+  if (candidates.length !== 1) throw new Error(candidates.length ? 'Home has several checklists; pass id.' : 'Home has no checklist. Add a notes widget with config.items first.');
+  const widget = candidates[0];
+  const items = (Array.isArray(widget.config.items) ? widget.config.items : []).map((it: any) => typeof it === 'string' ? { text: it, done: false } : { text: String(it?.text ?? ''), done: !!it?.done });
+  const i = Number(index);
+  if (!Number.isInteger(i) || i < 0 || i >= items.length) throw new Error(`index must be 0..${items.length - 1}.`);
+  items[i] = { ...items[i], done: typeof done === 'boolean' ? done : !items[i].done };
+  const next = { ...widget, config: { ...widget.config, items } };
+  const widgets = layout.widgets.map((w) => (w.id === widget.id ? next : w));
+  return { layout: { ...layout, widgets, updatedAt: now, updatedBy: 'agent' }, widget: next, item: items[i] };
+}
+
+export function makeCommand(action: HomeControlAction, args: Record<string, unknown>, now = Date.now()): HomeCommand {
+  if (action === 'open_app' && !(HOME_APP_IDS as readonly string[]).includes(String(args.value))) throw new Error(`value must be one of ${HOME_APP_IDS.join(', ')}.`);
+  return { id: `cmd-${now.toString(36)}-${Math.random().toString(36).slice(2, 6)}`, action, args, at: now };
+}
+
+/** localStorage adapter for prefs, stopwatch state and page commands. */
+export function localHomeStateStore(): HomeStateStore {
+  const get = (k: string) => { try { return globalThis.localStorage?.getItem(k) ?? null; } catch { return null; } };
+  const set = (k: string, v: string, event: string) => {
+    globalThis.localStorage?.setItem(k, v);
+    try { globalThis.dispatchEvent?.(new CustomEvent(event)); } catch { /* no DOM */ }
+  };
+  return {
+    readPrefs: () => get(HOME_PREFS_KEY),
+    writePrefs: (json) => set(HOME_PREFS_KEY, json, HOME_LAYOUT_EVENT),
+    readStopwatches: () => get(HOME_STOPWATCH_KEY),
+    writeStopwatches: (json) => set(HOME_STOPWATCH_KEY, json, HOME_LAYOUT_EVENT),
+    sendCommand: (json) => set(HOME_COMMAND_KEY, json, HOME_COMMAND_EVENT),
+  };
+}

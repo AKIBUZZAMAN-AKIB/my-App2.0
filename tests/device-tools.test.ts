@@ -299,7 +299,7 @@ describe('device tools catalogue', () => {
       'network_status', 'schedule_alarm', 'list_alarms', 'cancel_alarm', 'open_url',
       'web_search', 'search_images', 'geocode_location', 'get_weather', 'get_route', 'download_file', 'upload_file', 'toast', 'app_info', 'stop_ringing',
       'show_floating_ui', 'update_floating_ui', 'hide_floating_ui', 'set_widget', 'pin_widget',
-      'home_get_layout', 'home_add_widget', 'home_update_widget', 'home_remove_widget', 'home_move_widget', 'home_set_layout',
+      'home_get_layout', 'home_add_widget', 'home_update_widget', 'home_remove_widget', 'home_move_widget', 'home_set_layout', 'home_control',
       'speak', 'stop_speaking', 'listen', 'scan_qr', 'dial_phone', 'compose_sms', 'torch',
       'battery_status', 'pick_file',
       'ask_user', 'zip_files', 'unzip_file', 'sql_query',
@@ -1499,7 +1499,7 @@ describe('home_* tools', () => {
 
   it('are listed and run without an approval prompt', () => {
     const names = deviceToolNames();
-    for (const name of ['home_get_layout', 'home_add_widget', 'home_update_widget', 'home_remove_widget', 'home_move_widget', 'home_set_layout']) {
+    for (const name of ['home_get_layout', 'home_add_widget', 'home_update_widget', 'home_remove_widget', 'home_move_widget', 'home_set_layout', 'home_control']) {
       expect(names).toContain(name);
       expect(deviceServerConfig().toolApprovalPolicies[name]).toBe('always_allow');
     }
@@ -1547,5 +1547,41 @@ describe('home_* tools', () => {
     expect(layout().widgets.map((w: any) => w.type)).toEqual(['clock', 'list']);
     await callTool(deps, 'home_set_layout', { reset: true });
     expect(layout().widgets[0].id).toBe('clock-main');
+  });
+
+  it('home_control changes settings, runs the stopwatch, ticks items and queues page actions', async () => {
+    let stored: string | null = null;
+    const kv: Record<string, string | null> = { prefs: null, sw: null, cmd: null };
+    const { deps } = fakeDeps({
+      home: { read: () => stored, write: (json) => { stored = json; } },
+      homeState: {
+        readPrefs: () => kv.prefs, writePrefs: (j) => { kv.prefs = j; },
+        readStopwatches: () => kv.sw, writeStopwatches: (j) => { kv.sw = j; },
+        sendCommand: (j) => { kv.cmd = j; },
+      },
+    });
+    expect((await callTool(deps, 'home_control', { action: 'set_theme', value: 'dark' })).isError).toBeFalsy();
+    expect(JSON.parse(kv.prefs!).theme).toBe('dark');
+    expect((await callTool(deps, 'home_control', { action: 'set_text_size', value: 'huge' })).isError).toBe(true);
+    await callTool(deps, 'home_control', { action: 'set_accent', value: '#6366f1' });
+    expect(JSON.parse(kv.prefs!)).toMatchObject({ theme: 'dark', accent: '#6366f1' });
+
+    await callTool(deps, 'home_control', { action: 'stopwatch_start' });
+    expect(JSON.parse(kv.sw!)['stopwatch-main'].run).toBe(true);
+    await callTool(deps, 'home_control', { action: 'stopwatch_pause', id: 'stopwatch-main' });
+    expect(JSON.parse(kv.sw!)['stopwatch-main'].run).toBe(false);
+
+    await callTool(deps, 'home_control', { action: 'check_item', index: 1, done: true });
+    const notes = JSON.parse(stored!).widgets.find((w: any) => w.id === 'notes-main');
+    expect(notes.config.items[1].done).toBe(true);
+
+    await callTool(deps, 'home_control', { action: 'open_app', value: 'calendar' });
+    expect(JSON.parse(kv.cmd!)).toMatchObject({ action: 'open_app', args: { value: 'calendar' } });
+    expect((await callTool(deps, 'home_control', { action: 'open_app', value: 'nowhere' })).isError).toBe(true);
+    expect((await callTool(deps, 'home_control', { action: 'fly' })).isError).toBe(true);
+
+    const text = textOf(await callTool(deps, 'home_control', { action: 'get_state' }));
+    const state = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+    expect(state.prefs.theme).toBe('dark');
   });
 });

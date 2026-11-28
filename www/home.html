@@ -4,8 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#f2f3f7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#07080b" media="(prefers-color-scheme: dark)">
+<script>
+// Apply the saved Home theme / text size before first paint (same idea as the Agent app).
+(function () {
+  var p = {}; try { p = JSON.parse(localStorage.getItem('myapp.home.prefs.v1') || '{}') || {}; } catch (e) {}
+  var t = p.theme || 'system', r = document.documentElement;
+  r.dataset.theme = t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  if (p.textSize) r.dataset.text = p.textSize; if (p.density) r.dataset.density = p.density;
+})();
+</script>
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
 <meta name="description" content="Home: large, glanceable widgets that you and the agent arrange.">
 <title>Home</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%235b5bf0'/%3E%3Cg fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'%3E%3Crect x='8' y='8' width='7' height='7' rx='2'/%3E%3Crect x='17' y='8' width='7' height='7' rx='2'/%3E%3Crect x='8' y='17' width='16' height='7' rx='2'/%3E%3C/g%3E%3C/svg%3E">
@@ -13,17 +22,34 @@
 /* Home — follows the system light/dark setting. Layout model: bridge/home-layout.ts
    (shared with the agent's home_* tools through localStorage 'myapp.home.layout.v2'). */
 :root {
-  color-scheme: light dark;
-  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Bengali", Arial, sans-serif, "Noto Color Emoji";
-  --bg: #f2f3f7; --bg2: #e9ebf2; --card: #ffffff; --card2: #f6f7fb; --text: #0b0d12; --muted: #5f6675; --faint: #9aa1ae;
-  --line: rgba(15, 18, 30, .07); --shadow: 0 1px 2px rgba(16,24,40,.05), 0 8px 24px -10px rgba(16,24,40,.14);
-  --accent: #5b5bf0; --ok: #16a34a; --warn: #d97706; --bad: #dc2626;
-  --gap: 14px; --pad: 18px; --r: 28px;
+  /* Design tokens: the same zinc palette, font stack and type scale as the Agent app (www/agent.html). */
+  color-scheme: light;
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", "Noto Sans Bengali", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --bg: oklch(0.985 0 0); --bg2: oklch(0.967 0.001 286.375); --card: oklch(1 0 0); --card2: oklch(0.967 0.001 286.375);
+  --text: oklch(0.141 0.005 285.823); --muted: oklch(0.51 0.016 285.938); --faint: oklch(0.705 0.015 286.067);
+  --line: oklch(0.92 0.004 286.32); --ring: oklch(0.705 0.015 286.067);
+  --shadow: 0 1px 2px oklch(0 0 0 / 4%), 0 8px 24px -12px oklch(0 0 0 / 10%);
+  --shadow-pop: 0 4px 6px -1px oklch(0 0 0 / 8%), 0 10px 30px -10px oklch(0 0 0 / 18%);
+  --primary: oklch(0.21 0.006 285.885); --primary-fg: oklch(0.985 0 0);
+  --accent: var(--user-accent, var(--primary)); --accent-fg: var(--user-accent-fg, var(--primary-fg));
+  --ok: oklch(0.6 0.15 155); --warn: oklch(0.65 0.15 70); --bad: oklch(0.577 0.245 27.325); --live: oklch(0.55 0.2 260);
+  --fs: 1; --gap: 12px; --pad: 16px; --r: 20px; --wpad: 16px;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
 }
-@media (prefers-color-scheme: dark) {
-  :root { --bg: #07080b; --bg2: #0d0f14; --card: #15171d; --card2: #1c1f27; --text: #f4f5f8; --muted: #a3a9b6; --faint: #6b7280;
-    --line: rgba(255,255,255,.07); --shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 10px 30px -12px rgba(0,0,0,.6); --accent: #8b8cff; }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: oklch(0.141 0.005 285.823); --bg2: oklch(0.18 0.006 285.885); --card: oklch(0.21 0.006 285.885); --card2: oklch(0.274 0.006 286.033);
+  --text: oklch(0.985 0 0); --muted: oklch(0.705 0.015 286.067); --faint: oklch(0.552 0.016 285.938);
+  --line: oklch(1 0 0 / 10%); --ring: oklch(0.552 0.016 285.938);
+  --shadow: 0 1px 2px oklch(0 0 0 / 30%), 0 8px 24px -12px oklch(0 0 0 / 50%);
+  --shadow-pop: 0 4px 6px -1px oklch(0 0 0 / 30%), 0 10px 30px -10px oklch(0 0 0 / 60%);
+  --primary: oklch(0.92 0.004 286.32); --primary-fg: oklch(0.21 0.006 285.885);
+  --ok: oklch(0.72 0.17 155); --warn: oklch(0.82 0.13 80); --bad: oklch(0.704 0.191 22.216); --live: oklch(0.72 0.15 255);
 }
+:root[data-text="compact"] { --fs: .9; }
+:root[data-text="large"] { --fs: 1.14; }
+:root[data-density="compact"] { --gap: 8px; --wpad: 13px; --r: 16px; }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent; }
 body { min-height: 100dvh; padding: calc(env(safe-area-inset-top, 0px) + 20px) var(--pad) calc(var(--mn-bar-space, 4rem) + 28px); }
@@ -169,16 +195,116 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 .toast { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 14px); transform: translate(-50%, -150%); background: var(--text); color: var(--bg); padding: 12px 18px; border-radius: 16px; font-size: 15px; font-weight: 600; z-index: 60; transition: transform .25s; max-width: 90vw; }
 .toast.show { transform: translate(-50%, 0); }
 @media (prefers-reduced-motion: reduce) { .edit .w { animation: none; } * { transition: none !important; } }
+
+/* ==========================================================================
+   Agent-app design layer — typography, surfaces and controls match www/agent.html.
+   Every size is multiplied by --fs so the user (or the agent) can scale Home.
+   ========================================================================== */
+html, body { font-size: calc(14px * var(--fs)); line-height: 1.5; }
+body { padding-top: calc(env(safe-area-inset-top, 0px) + 12px); }
+.wrap { max-width: 44rem; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* Top bar: brand + agent status + actions, like the Agent app's topbar */
+.bar-top { display: flex; align-items: center; gap: 10px; height: 44px; margin: 0 2px 10px; }
+.brand { display: flex; align-items: center; gap: 10px; font-size: calc(14px * var(--fs)); font-weight: 600; min-width: 0; }
+.brand-mark { width: 28px; height: 28px; border-radius: 8px; background: var(--primary); color: var(--primary-fg); display: grid; place-items: center; font-size: 15px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--muted); font-size: calc(12px * var(--fs)); font-weight: 500; white-space: nowrap; }
+.bar-top .sp { flex: 1; }
+.icon-btn { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; color: var(--muted); font-size: 18px; border: 1px solid var(--line); background: var(--card); transition: background .15s, color .15s; }
+.icon-btn:hover { color: var(--text); background: var(--card2); }
+.icon-btn.on { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+.top { margin: 6px 2px 14px; display: block; }
+.hello { font-size: calc(13px * var(--fs)); font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.today { font-size: calc(24px * var(--fs)); line-height: 1.25; font-weight: 600; letter-spacing: -0.025em; margin-top: 2px; text-wrap: balance; }
+/* Ask bar: the Agent app's composer, one tap from Home */
+.ask { margin: 0 0 12px; }
+.ask form { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 14px; border-radius: 16px; border: 1px solid var(--line); background: var(--card); box-shadow: var(--shadow); transition: border-color .15s, box-shadow .15s; }
+.ask form:focus-within { border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 25%, transparent); }
+.ask .spark { color: var(--muted); font-size: 18px; display: grid; }
+.ask input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: calc(15px * var(--fs)); height: 36px; }
+.ask input::placeholder { color: var(--faint); }
+.send { width: 36px; height: 36px; border-radius: 10px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; font-size: 17px; flex: none; }
+.suggest { display: flex; gap: 8px; overflow-x: auto; padding: 10px 2px 2px; scrollbar-width: none; }
+.suggest::-webkit-scrollbar { display: none; }
+.suggest button { flex: none; height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--muted); font-size: calc(13px * var(--fs)); font-weight: 500; white-space: nowrap; transition: color .15s, background .15s; }
+.suggest button:hover { color: var(--text); background: var(--card2); }
+.no-ask .ask { display: none; }
+.section-label { display: flex; align-items: center; justify-content: space-between; margin: 6px 4px 10px; font-size: calc(12px * var(--fs)); font-weight: 500; color: var(--muted); }
+.section-label button { font-size: calc(12px * var(--fs)); color: var(--muted); font-weight: 500; }
+/* Widgets: bordered cards, quieter shadow, agent type scale */
+.w { border: 1px solid var(--line); border-radius: var(--r); padding: var(--wpad); box-shadow: var(--shadow); }
+.w:active { transform: scale(.99); }
+.wh { gap: 8px; min-height: 26px; }
+.chip { width: 26px; height: 26px; border-radius: 8px; font-size: 15px; background: color-mix(in oklab, var(--hue) 12%, transparent); }
+.wt { font-size: calc(13px * var(--fs)); font-weight: 500; letter-spacing: 0; }
+.wh .tag { font-size: calc(12px * var(--fs)); font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
+.big { font-size: calc(36px * var(--fs)); font-weight: 600; letter-spacing: -0.03em; }
+.huge { font-size: calc(52px * var(--fs)); font-weight: 600; letter-spacing: -0.04em; }
+.sub { font-size: calc(13px * var(--fs)); margin-top: 4px; }
+.sub b { font-weight: 600; }
+.empty { font-size: calc(13px * var(--fs)); }
+.btn { height: 36px; padding: 0 14px; border-radius: 10px; font-size: calc(14px * var(--fs)); font-weight: 500; border: 1px solid var(--line); background: var(--card); }
+.btn.pri { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+.round { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); box-shadow: none; font-size: 18px; }
+.round.on { background: var(--accent); color: var(--accent-fg); }
+.clock .ampm { font-size: calc(18px * var(--fs)); font-weight: 500; }
+.weather { border-color: transparent; background: linear-gradient(160deg, oklch(0.62 0.15 250) 0%, oklch(0.7 0.13 220) 100%); }
+.weather.night { background: linear-gradient(160deg, oklch(0.3 0.04 260) 0%, oklch(0.33 0.09 280) 100%); }
+.weather .wx { font-size: calc(36px * var(--fs)); }
+.hours div { font-size: calc(12px * var(--fs)); } .hours b { font-size: calc(14px * var(--fs)); font-weight: 600; }
+.days { font-size: calc(13px * var(--fs)); }
+.cal-day { font-size: calc(12px * var(--fs)); font-weight: 600; letter-spacing: .06em; }
+.week span { font-size: calc(11px * var(--fs)); font-weight: 500; }
+.week b { height: 32px; border-radius: 9px; font-size: calc(14px * var(--fs)); font-weight: 500; }
+.month b { height: 28px; font-size: calc(12px * var(--fs)); }
+.ev { font-size: calc(14px * var(--fs)); } .ev small { font-size: calc(12px * var(--fs)); }
+.ring { width: 84px; height: 84px; } .ring::before { width: 70px; height: 70px; }
+.ring b { font-size: calc(20px * var(--fs)); font-weight: 600; }
+.alist div { font-size: calc(14px * var(--fs)); padding: 9px 12px; border-radius: 10px; }
+.note-text { font-size: calc(15px * var(--fs)); line-height: 1.5; }
+.check { font-size: calc(15px * var(--fs)); min-height: 36px; gap: 10px; }
+.check i { width: 20px; height: 20px; border-radius: 6px; border-width: 1.5px; font-size: 12px; }
+.sw-ctrl .round { width: 40px; height: 40px; font-size: 18px; border: 1px solid var(--line); }
+.sw-ctrl .round.go { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+.laps { font-size: calc(12px * var(--fs)); font-family: var(--mono); }
+.agent { background: var(--card); }
+.agent .chip { background: var(--primary); color: var(--primary-fg); }
+.quote { font-size: calc(15px * var(--fs)); font-weight: 400; line-height: 1.5; }
+.stats { font-size: calc(12px * var(--fs)); } .stats b { font-size: calc(18px * var(--fs)); font-weight: 600; }
+.dot.live { background: var(--ok); }
+.app { font-size: calc(12px * var(--fs)); font-weight: 500; }
+.app i { width: 52px; height: 52px; border-radius: 14px; font-size: 24px; box-shadow: inset 0 0 0 1px oklch(1 0 0 / 12%); }
+.stat .unit { font-size: calc(16px * var(--fs)); font-weight: 500; }
+.prog { height: 6px; border-radius: 3px; } .prog i { border-radius: 3px; }
+.trend { font-size: calc(12px * var(--fs)); font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.list li { font-size: calc(14px * var(--fs)); padding: 7px 0; } .list li small { font-size: calc(12px * var(--fs)); }
+.tools button { height: 34px; min-width: 34px; border-radius: 10px; font-size: calc(13px * var(--fs)); font-weight: 600; }
+.dock .btn { height: 44px; border-radius: 12px; padding: 0 18px; box-shadow: var(--shadow-pop); }
+.dock .btn.pri { background: var(--accent); color: var(--accent-fg); }
+.sheet { border-radius: 20px 20px 0 0; border-top: 1px solid var(--line); }
+.sheet h2 { font-size: calc(18px * var(--fs)); font-weight: 600; }
+.cat button { border: 1px solid var(--line); border-radius: 14px; box-shadow: none; padding: 12px; }
+.cat b { font-size: calc(14px * var(--fs)); font-weight: 600; } .cat small { font-size: calc(12px * var(--fs)); }
+.toast { border-radius: 12px; font-size: calc(14px * var(--fs)); font-weight: 500; box-shadow: var(--shadow-pop); }
+.flash { animation: flash 1.2s var(--ease); }
+@keyframes flash { 0%, 100% { box-shadow: var(--shadow); } 30% { box-shadow: 0 0 0 3px var(--ring), var(--shadow); } }
 </style>
 </head>
 <body>
 <div class="wrap" id="wrap">
-  <header class="top">
-    <div><div class="hello" id="hello">Hello</div><div class="today" id="today"></div></div>
-    <div class="top-actions">
-      <button class="round" id="editBtn" aria-label="Edit Home"></button>
-    </div>
-  </header>
+  <div class="bar-top">
+    <div class="brand"><span class="brand-mark" id="brandMark"></span><span>Home</span></div>
+    <span class="pill" id="agentPill" data-agent-action="open_app:agent"><span class="dot"></span>Agent</span>
+    <span class="sp"></span>
+    <button class="icon-btn" id="themeBtn" aria-label="Switch light or dark" data-agent-action="set_theme"></button>
+    <button class="icon-btn" id="editBtn" aria-label="Edit Home" data-agent-action="edit_mode"></button>
+  </div>
+  <header class="top"><div class="hello" id="hello">Hello</div><div class="today" id="today"></div></header>
+  <section class="ask" aria-label="Ask the agent">
+    <form id="askForm" autocomplete="off"><span class="spark" id="askSpark"></span><input id="askInput" name="ask" placeholder="Ask the agent to do anything on Home…" aria-label="Ask the agent" enterkeyhint="send"><button class="send" id="askSend" type="submit" aria-label="Send to the agent"></button></form>
+    <div class="suggest" id="suggest"></div>
+  </section>
+  <div class="section-label"><span>Widgets</span><button id="addInline" data-agent-action="open_add_sheet">+ Add</button></div>
   <main class="grid" id="grid" aria-live="polite"></main>
 </div>
 <div class="dock"><button class="btn" id="addBtn"></button><button class="btn pri" id="doneBtn">Done</button></div>
@@ -225,6 +351,8 @@ const P = {
   globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.5 3.5 5.5 3.5 8.5s-1 6-3.5 8.5c-2.5-2.5-3.5-5.5-3.5-8.5s1-6 3.5-8.5z"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   bag: '<path d="M5 8h14l-1 12.5H6zM9 8V6.5a3 3 0 0 1 6 0V8"/>',
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
+  send: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>', down: '<path d="M12 5v14M6 13l6 6 6-6"/>', x: '<path d="M6 6l12 12M18 6 6 18"/>', size: '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>',
 };
 const ic = (n) => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || ''}</svg>`;
@@ -480,8 +608,8 @@ R.list = (w) => {
   return head(w, 'List', 'list') + `<div class="wb">${items.length ? `<${tag}>${items.map((i) => `<li>${i.url ? `<a href="${esc(i.url)}">${esc(i.text)}</a>` : esc(i.text)}${i.detail ? `<small>${esc(i.detail)}</small>` : ''}</li>`).join('')}</${tag}>` : '<div class="empty">Empty list. The agent can fill it.</div>'}</div>`;
 };
 R.html = (w) => {
-  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
-  const base = `<style>html,body{margin:0;height:100%;font-family:system-ui,sans-serif;color:${dark ? '#f4f5f8' : '#0b0d12'};background:transparent}body{padding:18px;box-sizing:border-box}</style>`;
+  const dark = document.documentElement.dataset.theme === 'dark';
+  const base = `<style>html,body{margin:0;height:100%;font-family:system-ui,sans-serif;color:${dark ? '#fafafa' : '#09090b'};background:transparent}body{padding:18px;box-sizing:border-box}</style>`;
   return `<iframe sandbox="allow-scripts" title="${esc(w.title || 'Custom widget')}" srcdoc="${esc(base + (w.config.html || '<p>Empty custom widget</p>'))}"></iframe>`;
 };
 
@@ -494,6 +622,11 @@ function card(w, i) {
   if (w.accent) el.style.setProperty('--hue', w.accent);
   el.setAttribute('aria-label', w.title || TYPES[w.type].label);
   try { el.innerHTML = R[w.type](w, el); } catch (e) { el.innerHTML = `<div class="empty">This widget could not draw: ${esc(e.message)}</div>`; }
+  // Every control a finger can press is also named for the agent (home_control / window.MyAppHome).
+  el.dataset.agentWidget = `${w.type}:${w.id}`;
+  el.querySelectorAll('[data-sw]').forEach((b) => { b.dataset.agentAction = b.dataset.sw === 'toggle' ? (swOf(w.id).run ? 'stopwatch_pause' : 'stopwatch_start') : `stopwatch_${b.dataset.sw}`; });
+  el.querySelectorAll('[data-check]').forEach((b) => { b.dataset.agentAction = `check_item:${b.dataset.check}`; });
+  el.querySelectorAll('a.app').forEach((a) => { const id = Object.keys(APPS).find((k) => a.getAttribute('href') === APPS[k].href); if (id) a.dataset.agentAction = `open_app:${id}`; });
   const t = TYPES[w.type];
   el.insertAdjacentHTML('beforeend', `<div class="tools">${t.sizes.length > 1 ? `<button data-act="size" aria-label="Resize">${w.size.toUpperCase()}</button>` : ''}<button data-act="up" aria-label="Move up">${ic('up')}</button><button data-act="down" aria-label="Move down">${ic('down')}</button><button class="del" data-act="del" aria-label="Remove">${ic('x')}</button></div>`);
   return el;
@@ -508,12 +641,13 @@ function paintType(type) {
 }
 function header() {
   const h = new Date().getHours();
-  $('#hello').textContent = h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+  $('#hello').textContent = prefs.greeting || (h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening');
   $('#today').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 }
 $('#editBtn').innerHTML = ic('edit');
 $('#addBtn').innerHTML = `${ic('plus')} Add widget`;
 function setEdit(on) { editing = on; document.body.classList.toggle('edit-on', on); grid.classList.toggle('edit', on); $('#editBtn').classList.toggle('on', on); $('#editBtn').innerHTML = ic(on ? 'check' : 'edit'); }
+$('#addInline').onclick = () => { setEdit(true); openSheet(true); };
 $('#editBtn').onclick = () => setEdit(!editing);
 $('#doneBtn').onclick = () => setEdit(false);
 const openSheet = (on) => document.body.classList.toggle('sheet-open', on);
@@ -559,6 +693,106 @@ grid.addEventListener('pointerdown', (e) => { if (editing || !e.target.closest('
 ['pointerup', 'pointercancel', 'pointerleave', 'pointermove'].forEach((n) => grid.addEventListener(n, (e) => { if (n === 'pointermove' && Math.abs(e.movementY) + Math.abs(e.movementX) < 3) return; clearTimeout(pressT); }));
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { openSheet(false); setEdit(false); } });
 
+
+/* ---------- Home settings (theme, text size, density, accent, greeting, Ask bar) ---------- */
+const PREFS_KEY = 'myapp.home.prefs.v1';
+const CMD_KEY = 'myapp.home.command.v1';
+const CMD_EVENT = 'myapp:home-command';
+const ASK_KEY = 'myapp.home.ask';
+const PREF_DEFAULTS = { theme: 'system', textSize: 'default', density: 'comfortable', accent: '', showAskBar: true, greeting: '' };
+function readPrefs() { const raw = (() => { try { return localStorage.getItem(PREFS_KEY); } catch { return null; } })(); return { raw, value: { ...PREF_DEFAULTS, ...(parse(raw, {}) || {}) } }; }
+let { raw: lastPrefs, value: prefs } = readPrefs();
+const darkMq = matchMedia('(prefers-color-scheme: dark)');
+function applyPrefs() {
+  const r = document.documentElement;
+  const dark = prefs.theme === 'dark' || (prefs.theme !== 'light' && darkMq.matches);
+  r.dataset.theme = dark ? 'dark' : 'light'; r.dataset.text = prefs.textSize; r.dataset.density = prefs.density;
+  if (/^#[0-9a-f]{6}$/i.test(prefs.accent || '')) { r.style.setProperty('--user-accent', prefs.accent); r.style.setProperty('--user-accent-fg', '#fff'); }
+  else { r.style.removeProperty('--user-accent'); r.style.removeProperty('--user-accent-fg'); }
+  document.body.classList.toggle('no-ask', prefs.showAskBar === false);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#09090b' : '#fafafa');
+  $('#themeBtn').innerHTML = ic(dark ? 'sun' : 'moon');
+  $('#themeBtn').setAttribute('aria-label', dark ? 'Switch to light' : 'Switch to dark');
+}
+function savePrefs() { lastPrefs = JSON.stringify(prefs); try { localStorage.setItem(PREFS_KEY, lastPrefs); } catch {} applyPrefs(); header(); paintType('html'); }
+darkMq.addEventListener?.('change', () => { if (prefs.theme === 'system') { applyPrefs(); paintType('html'); } });
+$('#themeBtn').onclick = () => { prefs.theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; savePrefs(); };
+$('#brandMark').innerHTML = ic('grid');
+
+/* ---------- Ask the agent: hands the request to the Agent app's composer ---------- */
+const SUGGEST = ['Plan my day', 'Set an alarm for 6:30 AM', 'Add a London clock', 'Make Home dark', 'Bigger text', 'Start the stopwatch'];
+$('#askSpark').innerHTML = ic('spark'); $('#askSend').innerHTML = ic('send');
+$('#suggest').innerHTML = SUGGEST.map((t) => `<button type="button" data-ask="${esc(t)}">${esc(t)}</button>`).join('');
+function askAgent(text) {
+  text = String(text || '').trim(); if (!text) { $('#askInput').focus(); return; }
+  try { localStorage.setItem(ASK_KEY, JSON.stringify({ text, at: Date.now() })); } catch {}
+  location.href = './agent.html';
+}
+$('#askForm').onsubmit = (e) => { e.preventDefault(); askAgent($('#askInput').value); };
+$('#suggest').onclick = (e) => { const b = e.target.closest('[data-ask]'); if (b) askAgent(b.dataset.ask); };
+$('#agentPill').onclick = () => { location.href = './agent.html'; };
+function paintPill() {
+  const a = live.agent, on = DEMO || a?.ready;
+  $('#agentPill').innerHTML = `<span class="dot ${on ? 'live' : ''}"></span>${!kit() && !DEMO ? 'Preview' : on ? 'Agent online' : 'Agent idle'}`;
+}
+
+/* ---------- Agent control: one dispatcher for home_control commands and window.MyAppHome ---------- */
+const ACTIONS = ['get_state', 'set_theme', 'set_text_size', 'set_density', 'set_accent', 'set_greeting', 'show_ask_bar', 'stopwatch_start', 'stopwatch_pause', 'stopwatch_reset', 'stopwatch_lap', 'check_item', 'open_app', 'edit_mode', 'open_add_sheet', 'refresh', 'scroll_to'];
+function only(type, id) { const all = layout.widgets.filter((w) => w.type === type); const w = id ? all.find((x) => x.id === id) : all.length === 1 ? all[0] : null; if (!w) throw new Error(`No single ${type} widget${id ? ` with id ${id}` : ''}.`); return w; }
+function runAction(action, a = {}) {
+  const v = a.value;
+  switch (action) {
+    case 'get_state': return { prefs, editing, widgets: layout.widgets.map((w) => ({ id: w.id, type: w.type, size: w.size, title: w.title })), stopwatches: swAll, actions: ACTIONS };
+    case 'set_theme': if (!['system', 'light', 'dark'].includes(v)) throw new Error('theme: system|light|dark'); prefs.theme = v; break;
+    case 'set_text_size': if (!['compact', 'default', 'large'].includes(v)) throw new Error('text size: compact|default|large'); prefs.textSize = v; break;
+    case 'set_density': if (!['comfortable', 'compact'].includes(v)) throw new Error('density: comfortable|compact'); prefs.density = v; break;
+    case 'set_accent': if (v && !/^#[0-9a-f]{6}$/i.test(v)) throw new Error('accent: #rrggbb'); prefs.accent = v || ''; break;
+    case 'set_greeting': prefs.greeting = String(v || '').slice(0, 40); break;
+    case 'show_ask_bar': prefs.showAskBar = v !== false && v !== 'false'; break;
+    case 'stopwatch_start': case 'stopwatch_pause': case 'stopwatch_reset': case 'stopwatch_lap': {
+      const w = only('stopwatch', a.id), s = swOf(w.id);
+      if (action === 'stopwatch_start' && !s.run) { s.start = Date.now(); s.run = true; s.done = false; }
+      if (action === 'stopwatch_pause' && s.run) { s.acc += Date.now() - s.start; s.run = false; }
+      if (action === 'stopwatch_reset') Object.assign(s, { run: false, start: 0, acc: 0, laps: [], done: false });
+      if (action === 'stopwatch_lap' && s.run) s.laps.push(swMs(s));
+      swSave(); paintType('stopwatch'); return { id: w.id, state: s };
+    }
+    case 'check_item': {
+      const w = a.id ? only('notes', a.id) : only('notes'); const items = (w.config.items || []).map((it) => typeof it === 'string' ? { text: it, done: false } : { ...it });
+      const it = items[Number(a.index)]; if (!it) throw new Error('index out of range'); it.done = typeof a.done === 'boolean' ? a.done : !it.done;
+      w.config.items = items; save(); paintType('notes'); return { id: w.id, item: it };
+    }
+    case 'open_app': if (!APPS[v]) throw new Error(`app: ${Object.keys(APPS).join('|')}`); location.href = APPS[v].href; return { opened: v };
+    case 'edit_mode': setEdit(v !== false && v !== 'false'); return { editing };
+    case 'open_add_sheet': setEdit(true); openSheet(true); return { sheet: true };
+    case 'refresh': Object.keys(cache).forEach((k) => { if (cache[k]) cache[k].at = 0; }); refresh(); return { refreshed: true };
+    case 'scroll_to': { const el = grid.querySelector(`[data-id="${CSS.escape(String(a.id || ''))}"]`); if (!el) throw new Error('no widget with that id'); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); return { id: a.id }; }
+    default: throw new Error(`Unknown action ${action}. Use one of ${ACTIONS.join(', ')}.`);
+  }
+  savePrefs(); return { prefs };
+}
+let lastCmd = '';
+function checkCommand() {
+  let raw = null; try { raw = localStorage.getItem(CMD_KEY); } catch {}
+  if (!raw || raw === lastCmd) return; lastCmd = raw;
+  const cmd = parse(raw, null); try { localStorage.removeItem(CMD_KEY); } catch {}
+  if (!cmd?.action || Date.now() - Number(cmd.at || 0) > 10 * 60e3) return;
+  try { runAction(cmd.action, cmd.args || {}); if (cmd.action !== 'open_app') toast('The agent changed your Home'); } catch (e) { toast(String(e.message || e)); }
+}
+function checkState() {
+  const p = readPrefs(); if (p.raw !== lastPrefs) { lastPrefs = p.raw; prefs = p.value; applyPrefs(); header(); paintType('html'); }
+  let raw = null; try { raw = localStorage.getItem(SW_KEY); } catch {}
+  if (raw && raw !== JSON.stringify(swAll)) { const next = parse(raw, {}) || {}; Object.keys(swAll).forEach((k) => delete swAll[k]); Object.assign(swAll, next); paintType('stopwatch'); }
+  checkCommand();
+}
+window.addEventListener('storage', (e) => { if ([PREFS_KEY, SW_KEY, CMD_KEY].includes(e.key)) checkState(); });
+window.addEventListener(CMD_EVENT, checkState);
+window.addEventListener(EVENT, checkState);
+setInterval(() => { if (document.visibilityState === 'visible') checkState(); }, 1000);
+/* In-page agents (generated UI, the floating overlay, tests) drive Home through this one API. */
+window.MyAppHome = Object.freeze({ actions: ACTIONS.slice(), run: (action, args) => runAction(action, args || {}), state: () => runAction('get_state') });
+applyPrefs();
+
 /* ---------- ticking ---------- */
 function tick() {
   layout.widgets.forEach((w) => {
@@ -600,12 +834,14 @@ async function refresh() {
   if (!DEMO) {
     if (types.has('alarms') || types.has('clock')) jobs.push(readAlarms().then(() => { paintType('alarms'); paintType('clock'); }));
     if (types.has('battery')) jobs.push(readBattery().then(() => paintType('battery')));
-    if (types.has('agent')) jobs.push(readAgent().then(() => paintType('agent')));
+    jobs.push(readAgent().then(() => { paintType('agent'); paintPill(); }));
   }
   await Promise.allSettled(jobs);
 }
 render();
+paintPill();
 refresh();
+checkCommand();
 try { localStorage.setItem(SEEN_KEY, String(layout.updatedAt)); } catch {}
 })();
 </script>

@@ -48,7 +48,19 @@ import {
   removeWidget as removeHomeWidget,
   replaceWidgets as replaceHomeWidgets,
   updateWidget as updateHomeWidget,
+  applyPref as applyHomePref,
+  checkItem as checkHomeItem,
+  HOME_CONTROL_ACTIONS,
+  HOME_CONTROL_ACTION_IDS,
+  HOME_PAGE_ACTIONS,
+  localHomeStateStore,
+  makeCommand as makeHomeCommand,
+  parseHomePrefs,
+  parseStopwatches,
+  stopwatchAction,
+  type HomeControlAction,
   type HomeLayout,
+  type HomeStateStore,
   type HomeStore,
 } from './home-layout';
 import {
@@ -113,6 +125,8 @@ export type DeviceToolFeature =
 export interface DeviceToolDeps {
   /** In-app Home layout store (www/home.html). Defaults to the shared localStorage key. */
   home?: HomeStore;
+  /** Home settings, stopwatch state and page commands. Defaults to localStorage. */
+  homeState?: HomeStateStore;
   camera: { getPhoto(options: any): Promise<{ base64String?: string; format?: string }> };
   geolocation: {
     requestPermissions(): Promise<Record<string, string>>;
@@ -1981,6 +1995,71 @@ const TOOL_SPECS: DeviceToolSpec[] = [
     }),
   },
 
+  {
+    name: 'home_control',
+    description:
+      "Control the app's Home screen the way the user does with their fingers: theme, text size, spacing, accent colour, " +
+      'greeting, the Ask bar, start/pause/reset/lap a stopwatch or timer, tick checklist items, open an app screen, edit mode, ' +
+      'the add-widget sheet, refresh and scroll to a widget. Actions: ' +
+      HOME_CONTROL_ACTION_IDS.map((a) => `${a} (${HOME_CONTROL_ACTIONS[a]})`).join('; ') +
+      '. Settings and widget state apply even when Home is closed; page actions run as soon as Home is shown. ' +
+      'Use home_get_layout for widget ids and home_add_widget/home_update_widget to change widgets themselves.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: [...HOME_CONTROL_ACTION_IDS], description: 'What to do.' },
+        value: { description: 'The setting value or app id; see the action list.' },
+        id: { type: 'string', description: 'Widget id, for stopwatch_*, check_item and scroll_to.' },
+        index: { type: 'number', description: 'check_item: 0-based checklist item.' },
+        done: { type: 'boolean', description: 'check_item: true to tick, false to untick; omit to toggle.' },
+      },
+      required: ['action'],
+    },
+    run: async (args, deps) => {
+      const action = String(args.action ?? '') as HomeControlAction;
+      if (!(HOME_CONTROL_ACTION_IDS as readonly string[]).includes(action)) {
+        return errorResult(`Unknown action "${action}". Use one of ${HOME_CONTROL_ACTION_IDS.join(', ')}.`);
+      }
+      const state = deps.homeState ?? localHomeStateStore();
+      try {
+        if (action === 'get_state') {
+          const layout = readHome(deps);
+          const body = {
+            prefs: parseHomePrefs(state.readPrefs()),
+            widgets: layout.widgets.map((w, position) => ({ position, id: w.id, type: w.type, size: w.size, title: w.title })),
+            stopwatches: parseStopwatches(state.readStopwatches()),
+            actions: HOME_CONTROL_ACTION_IDS,
+          };
+          return textResult(JSON.stringify(body), body);
+        }
+        if (action.startsWith('set_') || action === 'show_ask_bar') {
+          const prefs = applyHomePref(parseHomePrefs(state.readPrefs()), action, args.value);
+          state.writePrefs(JSON.stringify(prefs));
+          return textResult(`Home ${action.replace(/^set_/, '').replace(/_/g, ' ')} is now ${JSON.stringify(args.value ?? '')}.`, { prefs });
+        }
+        if (action.startsWith('stopwatch_')) {
+          const { all, widget, state: sw } = stopwatchAction(readHome(deps), parseStopwatches(state.readStopwatches()), action, args.id);
+          state.writeStopwatches(JSON.stringify(all));
+          return textResult(`${widget.id}: ${sw.run ? 'running' : 'stopped'} at ${Math.round(sw.acc / 1000)} s${sw.laps.length ? `, ${sw.laps.length} laps` : ''}.`, { id: widget.id, state: sw });
+        }
+        if (action === 'check_item') {
+          return editHome(deps, (layout) => {
+            const { layout: next, widget, item } = checkHomeItem(layout, args.id, args.index, args.done);
+            return { layout: next, message: `"${item.text}" in ${widget.id} is now ${item.done ? 'done' : 'not done'}.`, data: { id: widget.id, item } };
+          });
+        }
+        if ((HOME_PAGE_ACTIONS as readonly string[]).includes(action)) {
+          const command = makeHomeCommand(action, { value: args.value, id: args.id });
+          state.sendCommand(JSON.stringify(command));
+          return textResult(`Sent ${action} to Home; it runs now if Home is open, otherwise the next time the user opens Home.`, { command });
+        }
+        return errorResult(`Unhandled action ${action}.`);
+      } catch (error) {
+        return errorResult(String((error as Error)?.message ?? error));
+      }
+    },
+  },
+
   // ── Phase 2: speech, scanning and device hardware ─────────────────────────
 
   {
@@ -3537,7 +3616,7 @@ async function cancellableCopy<T>(api: FolderApi, run: RunContext, start: (copyI
 
 /** Folder tools that only read: offered without asking once the user shares a folder. */
 /** Home screen tools only rearrange the app's own Home page; they run without an approval prompt. */
-export const HOME_TOOLS = ['home_get_layout', 'home_add_widget', 'home_update_widget', 'home_remove_widget', 'home_move_widget', 'home_set_layout'] as const;
+export const HOME_TOOLS = ['home_get_layout', 'home_add_widget', 'home_update_widget', 'home_remove_widget', 'home_move_widget', 'home_set_layout', 'home_control'] as const;
 export const FOLDER_READ_TOOLS = ['list_folders', 'folder_list', 'folder_read', 'folder_search'] as const;
 /** Folder tools that change files: always ask by default. */
 export const FOLDER_CHANGE_TOOLS = ['folder_write', 'folder_mkdir', 'folder_move', 'folder_delete', 'folder_copy'] as const;
