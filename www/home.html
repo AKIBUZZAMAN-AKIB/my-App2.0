@@ -207,10 +207,14 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); display: inline-block; }
 .dot.live { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 20%, transparent); }
 /* Apps */
-.apps { --hue: #64748b; }
-.appgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 8px; align-content: center; flex: 1; }
-.app { display: grid; justify-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--muted); text-decoration: none; }
-.app i { width: 58px; height: 58px; border-radius: 18px; display: grid; place-items: center; font-size: 27px; color: #fff; font-style: normal; }
+.apps { --hue: #6366f1; }
+.appgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px 10px; margin-top: 14px; align-content: start; flex: 1; }
+.app { display: grid; justify-items: center; gap: 8px; min-width: 0; font-size: 12.5px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); text-decoration: none; transition: transform 140ms ease; }
+.app > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app:active { transform: scale(0.94); }
+.app i { position: relative; width: 56px; height: 56px; border-radius: 17px; display: grid; place-items: center; font-size: 26px; color: #fff; font-style: normal; box-shadow: 0 6px 14px -6px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.22); }
+.app i::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,0) 55%); pointer-events: none; }
+.wh a.tag { text-decoration: none; color: var(--hue, var(--faint)); }
 /* Stat */
 .stat .unit { font-size: 20px; font-weight: 600; color: var(--muted); margin-left: 4px; letter-spacing: 0; }
 .prog { height: 10px; border-radius: 5px; background: var(--card2); margin-top: 12px; overflow: hidden; }
@@ -797,7 +801,7 @@ R.agent = (w) => {
 };
 R.apps = (w) => {
   const ids = (Array.isArray(w.config.apps) && w.config.apps.length ? w.config.apps : ['agent', 'calendar', 'browser', 'notes', 'reminder', 'habits', 'academic', 'more']).filter((id) => APPS[id]).slice(0, w.size === 'l' ? 12 : 4);
-  return `<div class="appgrid">${ids.map((id) => `<a class="app" href="${APPS[id].href}"><i style="background:${APPS[id].bg}">${ic(APPS[id].icon)}</i>${esc(APPS[id].label)}</a>`).join('')}</div>`;
+  return head(w, 'Apps', 'grid', '<a class="tag" href="./more.html">All apps</a>') + `<div class="appgrid">${ids.map((id) => `<a class="app" href="${APPS[id].href}"><i style="background:${APPS[id].bg}">${ic(APPS[id].icon)}</i><span>${esc(APPS[id].label)}</span></a>`).join('')}</div>`;
 };
 R.stat = (w) => {
   const c = w.config, p = Number(c.progress), tr = c.trend ? String(c.trend) : '';

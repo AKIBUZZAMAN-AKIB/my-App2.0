@@ -75,29 +75,35 @@ svg { display: block; }
 @media (min-width: 30rem) { .apps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
 .app {
-  display: flex; flex-direction: column; gap: 0.625rem;
-  padding: 0.8125rem; border-radius: var(--radius);
+  display: flex; flex-direction: column; gap: 0.75rem; min-height: 8.25rem;
+  padding: 0.9375rem; border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   background: var(--surface); border: 1px solid var(--border);
   text-decoration: none; color: inherit; text-align: left;
   transition: transform 140ms var(--ease), border-color 140ms;
 }
 .app:active { transform: scale(0.975); border-color: var(--border-strong); }
 .app-icon {
-  width: 2.5rem; height: 2.5rem; display: grid; place-items: center;
-  border-radius: 0.8125rem; color: #fff;
-  background: var(--tint, var(--accent));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  width: 2.75rem; height: 2.75rem; display: grid; place-items: center;
+  border-radius: 0.875rem; color: #fff;
+  background: linear-gradient(160deg, color-mix(in oklch, var(--tint, var(--accent)) 82%, white), var(--tint, var(--accent)));
+  box-shadow: 0 6px 14px -8px var(--tint, var(--accent)), inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
+.app-top { display: flex; align-items: flex-start; justify-content: space-between; }
+.app-go { color: var(--faint); }
+.app-go .ico { width: 1rem; height: 1rem; }
+.app-text { display: flex; flex-direction: column; gap: 0.1875rem; }
 .app-icon .ico { width: 1.3125rem; height: 1.3125rem; stroke-width: 1.95; }
-.app-name { font-size: 0.8125rem; font-weight: 620; letter-spacing: -0.01em; }
-.app-desc { font-size: 0.6875rem; color: var(--muted-foreground); margin-top: 0.125rem; }
-.app-file { font-size: 0.625rem; color: var(--faint); margin-top: 0.375rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.app-name { display: block; font-size: 0.9375rem; font-weight: 640; letter-spacing: -0.015em; }
+.app-desc { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; font-size: 0.75rem; line-height: 1.4; color: var(--muted-foreground); }
 
 .rows { border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); background: var(--surface); }
-.row { display: flex; align-items: center; gap: 0.625rem; width: 100%; padding: 0.75rem 0.875rem; border-top: 1px solid var(--border); text-align: left; color: inherit; text-decoration: none; }
+.row { display: flex; align-items: center; gap: 0.75rem; width: 100%; min-height: 3.25rem; padding: 0.75rem 0.9375rem; border-top: 1px solid var(--border); text-align: left; color: inherit; text-decoration: none; }
 .row:first-child { border-top: 0; }
 .row .ico { color: var(--faint); }
-.row-label { font-size: 0.8125rem; font-weight: 550; }
+.row-label { font-size: 0.875rem; font-weight: 560; }
+.row-chev { margin-inline-start: auto; color: var(--faint); }
+.row-chev .ico { width: 1rem; height: 1rem; }
 .row-value { margin-inline-start: auto; font-size: 0.75rem; color: var(--muted-foreground); max-width: 58%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-value[data-tone="ok"] { color: var(--success); }
 .row-value[data-tone="warn"] { color: var(--warning); }
@@ -115,7 +121,7 @@ svg { display: block; }
   <header>
     <p class="eyebrow">My App</p>
     <h1 class="title">More</h1>
-    <p class="sub">Every other app on this device. Each one opens as its own main app page with its own icon, storage and native bridge.</p>
+    <p class="sub">All your apps and tools in one place.</p>
   </header>
 
   <div class="section"><h2>Apps</h2><span id="appCount">7</span></div>
@@ -128,13 +134,12 @@ svg { display: block; }
 
   <div class="section"><h2>About</h2><span></span></div>
   <div class="rows">
-    <button type="button" class="row" data-row="share"><svg class="ico" viewBox="0 0 24 24"><path d="M12 15.5V4M8.5 7.5 12 4l3.5 3.5"/><path d="M5.5 13v6.5A1.5 1.5 0 0 0 7 21h10a1.5 1.5 0 0 0 1.5-1.5V13"/></svg><span class="row-label">Share this app</span></button>
-    <button type="button" class="row" data-row="settings"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M4.9 7.5l1.9 1.1M17.2 15.4l1.9 1.1M4.9 16.5l1.9-1.1M17.2 8.6l1.9-1.1"/></svg><span class="row-label">Open system settings</span></button>
-    <a class="row" href="./home.html"><svg class="ico" viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1z"/></svg><span class="row-label">Back to Home</span></a>
+    <button type="button" class="row" data-row="share"><svg class="ico" viewBox="0 0 24 24"><path d="M12 15.5V4M8.5 7.5 12 4l3.5 3.5"/><path d="M5.5 13v6.5A1.5 1.5 0 0 0 7 21h10a1.5 1.5 0 0 0 1.5-1.5V13"/></svg><span class="row-label">Share this app</span><span class="row-chev"><svg class="ico" viewBox="0 0 24 24"><path d="m9 5.5 6.5 6.5L9 18.5"/></svg></span></button>
+    <button type="button" class="row" data-row="settings"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M4.9 7.5l1.9 1.1M17.2 15.4l1.9 1.1M4.9 16.5l1.9-1.1M17.2 8.6l1.9-1.1"/></svg><span class="row-label">Open system settings</span><span class="row-chev"><svg class="ico" viewBox="0 0 24 24"><path d="m9 5.5 6.5 6.5L9 18.5"/></svg></span></button>
+    <a class="row" href="./home.html"><svg class="ico" viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1z"/></svg><span class="row-label">Back to Home</span><span class="row-chev"><svg class="ico" viewBox="0 0 24 24"><path d="m9 5.5 6.5 6.5L9 18.5"/></svg></span></a>
   </div>
 
-  <p class="foot">Tabs: Home · Academic · Agent · Calendar · More.<br>
-    Every app runs from the bundled build — nothing is downloaded at runtime.</p>
+  <p class="foot">Every app runs on your device. Nothing is downloaded at runtime.</p>
 </div>
 
 <div class="toaster" id="toaster" aria-live="polite" aria-atomic="true"></div>
@@ -158,6 +163,7 @@ const ICONS = {
   wifi: '<path d="M4 9.5a12 12 0 0 1 16 0M6.8 12.8a8 8 0 0 1 10.4 0M9.6 16a4 4 0 0 1 4.8 0"/><circle cx="12" cy="19" r="1.1" fill="currentColor" stroke="none"/>',
   shield: '<path d="M12 3.5 19 6v6c0 4-3 7-7 8.5-4-1.5-7-4.5-7-8.5V6z"/><path d="m9 12 2 2 4-4"/>',
   grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/>',
+  chev: '<path d="m9 5.5 6.5 6.5L9 18.5"/>',
   globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.3 3.8 5.3 3.8 8.5S14.5 18.2 12 20.5C9.5 18.2 8.2 15.2 8.2 12S9.5 5.8 12 3.5z"/>',
 };
 const icon = (name) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.grid}</svg>`;
@@ -185,11 +191,10 @@ function toast(message, tone = 'ok') {
 
 document.getElementById('apps').innerHTML = APPS.map((app) => `
   <a class="app" href="./${app.file}" style="--tint:${app.tint}">
-    <span class="app-icon">${icon(app.icon)}</span>
-    <span>
+    <span class="app-top"><span class="app-icon">${icon(app.icon)}</span><span class="app-go">${icon('chev')}</span></span>
+    <span class="app-text">
       <span class="app-name">${esc(app.name)}</span>
       <span class="app-desc">${esc(app.desc)}</span>
-      <span class="app-file">${esc(app.file)}</span>
     </span>
   </a>`).join('');
 document.getElementById('appCount').textContent = `${APPS.length} apps`;
