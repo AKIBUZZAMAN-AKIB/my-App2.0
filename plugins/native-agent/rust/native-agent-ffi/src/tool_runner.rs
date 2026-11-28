@@ -4332,3 +4332,65 @@ mod schema_snapshot_tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Steer checkpoints (docs/steer/PLAN.bn.md, step 4): every file change a steer
+// drives is committed to a shadow git repository (its own git dir under the
+// agent's data, the workspace as work tree), so it can be retrieved or
+// reverted without touching the user's own repository or index.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "libgit2")]
+pub(crate) fn steer_checkpoint(
+    workspace: &str,
+    git_dir: &std::path::Path,
+    paths: &[String],
+    message: &str,
+) -> Result<String, String> {
+    use git2::{Repository, RepositoryInitOptions, Signature};
+    let repo = if git_dir.join("HEAD").exists() {
+        let r = Repository::open_bare(git_dir).map_err(|e| e.to_string())?;
+        r.set_workdir(std::path::Path::new(workspace), false)
+            .map_err(|e| e.to_string())?;
+        r
+    } else {
+        std::fs::create_dir_all(git_dir).map_err(|e| e.to_string())?;
+        let mut opts = RepositoryInitOptions::new();
+        opts.bare(true);
+        let r = Repository::init_opts(git_dir, &opts).map_err(|e| e.to_string())?;
+        r.set_workdir(std::path::Path::new(workspace), false)
+            .map_err(|e| e.to_string())?;
+        r
+    };
+    let mut index = repo.index().map_err(|e| e.to_string())?;
+    for p in paths {
+        let Ok(abs) = resolve_path(workspace, p) else { continue };
+        let Ok(rel) = abs.strip_prefix(workspace) else { continue };
+        if abs.is_file() {
+            index.add_path(rel).map_err(|e| e.to_string())?;
+        } else {
+            let _ = index.remove_path(rel);
+        }
+    }
+    index.write().map_err(|e| e.to_string())?;
+    let tree_id = index.write_tree().map_err(|e| e.to_string())?;
+    let tree = repo.find_tree(tree_id).map_err(|e| e.to_string())?;
+    let sig = Signature::now("Native Agent (steer)", "steer@native-agent.local")
+        .map_err(|e| e.to_string())?;
+    let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    let parents: Vec<&git2::Commit> = parent.iter().collect();
+    let oid = repo
+        .commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+        .map_err(|e| e.to_string())?;
+    Ok(oid.to_string())
+}
+
+#[cfg(not(feature = "libgit2"))]
+pub(crate) fn steer_checkpoint(
+    _workspace: &str,
+    _git_dir: &std::path::Path,
+    _paths: &[String],
+    _message: &str,
+) -> Result<String, String> {
+    Err(GIT_UNAVAILABLE.to_string())
+}

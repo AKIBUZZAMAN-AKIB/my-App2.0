@@ -331,6 +331,34 @@ impl RouteTextModel {
     }
 }
 
+/// The interpreter's model for steers: the originating agent's own route, as
+/// an owned closure the steer process can keep (it outlives no turn: the next
+/// turn replaces it). It is filed in the request ledger like the summarizer.
+pub(super) fn steer_model(
+    ctx: &AgentLoopContext<'_>,
+    route_plan: &RoutePlan,
+    runtime_config: &AgentRuntimeConfig,
+) -> crate::steer::SteerModel {
+    let rp = route_plan.clone();
+    let rc = runtime_config.clone();
+    let cb = ctx.callback.clone();
+    let wl = ctx.webllm_pending.clone();
+    let key = ctx.session_key.clone();
+    let db = ctx.config.db_path.clone();
+    std::sync::Arc::new(move |system: String, user: String, max: u32| {
+        let model = RouteTextModel::owned(
+            rp.clone(),
+            rc.clone(),
+            cb.clone(),
+            wl.clone(),
+            key.clone(),
+            Abort::Flag(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
+        )
+        .with_ledger(&db);
+        Box::pin(async move { model.complete(&system, user, max).await })
+    })
+}
+
 impl TextModel for RouteTextModel {
     async fn complete(
         &self,

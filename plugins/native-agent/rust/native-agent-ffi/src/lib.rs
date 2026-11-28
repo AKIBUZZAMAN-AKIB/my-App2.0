@@ -26,6 +26,7 @@ pub mod tokens;
 pub mod tool_rules;
 pub mod tool_runner;
 pub mod tool_scheduler;
+pub mod steer;
 pub mod turn_memory;
 pub mod types;
 pub mod workspace;
@@ -300,6 +301,8 @@ pub struct NativeAgentHandle {
     cron_approval_sender: Arc<Mutex<Option<oneshot::Sender<bool>>>>,
     steer_tx: mpsc::UnboundedSender<String>,
     steer_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<String>>>>,
+    /// The steer process, patches and snapshot of the main agent.
+    steer_hub: Arc<steer::SteerHub>,
     mcp_tools: Arc<Mutex<Vec<types::ToolDefinition>>>,
     mcp_pending: Arc<Mutex<HashMap<String, oneshot::Sender<types::McpToolResult>>>>,
     webllm_pending: protocol_drivers::WebLlmPending,
@@ -483,10 +486,87 @@ impl NativeAgentHandle {
     // happened to poll first would consume the user's steer text and the
     // foreground turn would never see it — a race decided by timing alone.
     // Background runs now get their own (never-fed) channel.
+    //
+    // `text` is either plain text or a steer envelope in its wire form
+    // (`steer::SteerEnvelope::encode`: id, text, attachments, at, target, mode).
+    // The steer is recorded in `steer_inbox`, acknowledged with
+    // `steer.accepted`, handed to the steer interpreter, and delivered verbatim
+    // at the running turn's next safe point (`steer.applied`). With no turn
+    // running it is handed back at once as `steer.unapplied` (reason "idle"),
+    // so it never slips into a later, unrelated turn.
     pub fn steer(&self, text: String) -> Result<(), NativeAgentError> {
+        let env = steer::SteerEnvelope::decode(&text);
+        if env.text.trim().is_empty() && env.attachments.is_empty() {
+            return Ok(());
+        }
+        let callback = self.callback_clone();
+        let session_key = self.steer_hub.snapshot().session_key;
+        let running = self
+            .turn_in_flight
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if let Ok(conn) = db::open_db(&self.config.db_path) {
+            let _ = steer::inbox_insert(&conn, &session_key, &env, "accepted");
+        }
+        event_bus::emit(
+            callback.as_deref(),
+            "steer.accepted",
+            &serde_json::json!({
+                "id": env.id,
+                "at": env.at,
+                "target": env.target,
+                "mode": env.mode,
+                "running": running,
+                "sessionKey": session_key,
+            }),
+        );
+        // A steer aimed at a sub-agent goes straight to it (subagents.message).
+        if let Some(target) = env.target.as_deref() {
+            let routed = self.subagents.route_steer(&session_key, target, &env.text);
+            event_bus::emit(
+                callback.as_deref(),
+                "steer.routed",
+                &serde_json::json!({
+                    "ids": [env.id],
+                    "target": target,
+                    "ok": routed.is_ok(),
+                    "error": routed.as_ref().err(),
+                    "sessionKey": session_key,
+                }),
+            );
+            if routed.is_ok() {
+                if let Ok(conn) = db::open_db(&self.config.db_path) {
+                    let _ = steer::inbox_set_status(&conn, &env.id, "applied");
+                }
+                event_bus::emit(
+                    callback.as_deref(),
+                    "steer.applied",
+                    &serde_json::json!({"id": env.id, "point": "routed", "sessionKey": session_key}),
+                );
+                return Ok(());
+            }
+        }
+        if !running {
+            if let Ok(conn) = db::open_db(&self.config.db_path) {
+                let _ = steer::inbox_set_status(&conn, &env.id, "unapplied");
+            }
+            event_bus::emit(
+                callback.as_deref(),
+                "steer.unapplied",
+                &serde_json::json!({
+                    "id": env.id,
+                    "text": env.text,
+                    "reason": "idle",
+                    "sessionKey": session_key,
+                }),
+            );
+            return Ok(());
+        }
         self.steer_tx
-            .send(text)
-            .map_err(|e| NativeAgentError::Agent { msg: e.to_string() })
+            .send(env.encode())
+            .map_err(|e| NativeAgentError::Agent { msg: e.to_string() })?;
+        let _rt = self.runtime.enter();
+        self.steer_hub.submit(env);
+        Ok(())
     }
 
     // ── Approval gate ──────────────────────────────────────────────────────
@@ -970,7 +1050,8 @@ impl NativeAgentHandle {
                 "subagentTeam",
                 "subagentAdvanced",
                 "subagentSwarm",
-                "contextPolicy"
+                "contextPolicy",
+                "steer"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,
@@ -1106,6 +1187,9 @@ impl NativeAgentHandle {
                     agent_loop::sync_own_memory(&conn, key, &self.subagents);
                 }
             }
+        }
+        if let Some(out) = steer_action(&self.config, &self.steer_hub, &req) {
+            return out.map(|v| v.to_string());
         }
         if let Some(out) = memory_request(&self.config, &req) {
             let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
@@ -1515,6 +1599,7 @@ impl NativeAgentHandle {
                 skip_user_echo: true, // Skill kickoff — hide internal instruction from chat
                 session_key: params_for_task.session_key.clone(),
                 subagents: None,
+                steer_hub: None,
             })
             .await;
 
@@ -1856,6 +1941,11 @@ impl NativeAgentHandle {
             }
         }
         context_tree::wiring::rebuild_mirrors(&config.db_path, &config.workspace_path);
+        let steer_hub = Arc::new(steer::SteerHub::new());
+        steer_hub.set_db_path(&config.db_path);
+        if let Ok(conn) = db::open_db(&config.db_path) {
+            let _ = steer::ensure_schema(&conn);
+        }
 
         Ok(Arc::new(Self {
             runtime,
@@ -1875,6 +1965,7 @@ impl NativeAgentHandle {
             active_skills: Arc::new(Mutex::new(HashMap::new())),
             turn_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             subagents: subagent_manager,
+            steer_hub,
         }))
     }
 
@@ -2015,6 +2106,10 @@ impl NativeAgentHandle {
         let run_id_for_task = run_id.clone();
         let turn_in_flight = self.turn_in_flight.clone();
         let subagent_manager = self.subagents.clone();
+        let steer_hub = self.steer_hub.clone();
+        let steer_rx_end = self.steer_rx.clone();
+        steer_hub.begin_turn(&params.session_key);
+        steer_hub.set_callback(callback.clone());
 
         self.runtime.spawn(async move {
             // Released when this task ends, however it ends.
@@ -2040,8 +2135,39 @@ impl NativeAgentHandle {
                     manager: subagent_manager.clone(),
                     depth: 0,
                 }),
+                steer_hub: Some(steer_hub.clone()),
             })
             .await;
+            steer_hub.end_turn();
+            // Steers that reached no safe point (the turn ended first) never go
+            // into the next turn: they are handed back to the user as
+            // unapplied, and the UI sends them as the next message.
+            {
+                let mut leftovers = steer_hub.take_leftovers();
+                if let Some(rx) = steer_rx_end.lock().await.as_mut() {
+                    while let Ok(raw) = rx.try_recv() {
+                        let env = steer::SteerEnvelope::decode(&raw);
+                        if !env.text.trim().is_empty() || !env.attachments.is_empty() {
+                            leftovers.push(env);
+                        }
+                    }
+                }
+                for env in leftovers {
+                    if let Ok(conn) = db::open_db(&config.db_path) {
+                        let _ = steer::inbox_set_status(&conn, &env.id, "unapplied");
+                    }
+                    event_bus::emit(
+                        callback.as_deref(),
+                        "steer.unapplied",
+                        &serde_json::json!({
+                            "id": env.id,
+                            "text": env.text,
+                            "reason": "turn_ended",
+                            "sessionKey": params_for_task.session_key,
+                        }),
+                    );
+                }
+            }
 
             match result {
                 Ok(turn_result) => {
@@ -2287,6 +2413,81 @@ uniffi::setup_scaffolding!();
 /// same channel as `ctx.settings`, and the Context Policies workspace as
 /// `policy.*` (without this prefix here `policy.get` fell through to the
 /// sub-agent manager and failed with `unknown action "policy.get"`).
+/// The steer panel's actions (docs/steer/PLAN.bn.md), through the same
+/// `subagents` entry point as `memory.*` / `ctx.*`:
+/// * `steer.inbox` — steers accepted but never applied (app closed in
+///   between, or the turn ended first); marks them `unapplied`.
+/// * `steer.dismiss` {id} — the user re-sent or dropped one.
+/// * `steer.checklists` — the running turn's per-steer checklists.
+/// * `steer.checklist` {id, active} — turn one on or off (default on).
+/// * `steer.permission` {mode?: "always_allow"|"ask"} — steer-driven file
+///   edits; without `mode` it reads the current one.
+fn steer_action(
+    config: &types::InitConfig,
+    hub: &steer::SteerHub,
+    req: &serde_json::Value,
+) -> Option<Result<serde_json::Value, NativeAgentError>> {
+    let action = req.get("action").and_then(|v| v.as_str())?;
+    if !action.starts_with("steer.") {
+        return None;
+    }
+    let conn = match db::open_db(&config.db_path) {
+        Ok(c) => c,
+        Err(e) => return Some(Err(e)),
+    };
+    let err = |e: rusqlite::Error| NativeAgentError::Agent { msg: e.to_string() };
+    Some(match action {
+        "steer.inbox" => steer::inbox_take_unapplied(&conn)
+            .map(|rows| serde_json::json!({ "steers": rows }))
+            .map_err(err),
+        "steer.dismiss" => {
+            let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            steer::inbox_dismiss(&conn, id)
+                .map(|_| serde_json::json!({ "ok": true }))
+                .map_err(err)
+        }
+        "steer.checklists" => Ok(serde_json::json!({
+            "checklists": hub.checklists().iter().map(|c| serde_json::json!({
+                "steerId": c.steer_id,
+                "active": c.active,
+                "items": c.items.iter().map(|(t, d)| serde_json::json!({"text": t, "done": d})).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>()
+        })),
+        "steer.checklist" => {
+            let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let active = req.get("active").and_then(|v| v.as_bool()).unwrap_or(true);
+            Ok(serde_json::json!({ "ok": hub.set_checklist_active(id, active) }))
+        }
+        "steer.permission" => {
+            let mode = req.get("mode").and_then(|v| v.as_str());
+            if let Some(m) = mode {
+                if !matches!(m, "always_allow" | "ask") {
+                    return Some(Err(NativeAgentError::Agent {
+                        msg: format!("Unknown steer permission '{m}'."),
+                    }));
+                }
+                if let Err(e) = conn.execute(
+                    "INSERT OR REPLACE INTO tool_permissions (tool_name, permission) VALUES (?1, ?2)",
+                    rusqlite::params![steer::STEER_EDIT_PERMISSION, m],
+                ) {
+                    return Some(Err(err(e)));
+                }
+            }
+            let current: String = conn
+                .query_row(
+                    "SELECT permission FROM tool_permissions WHERE tool_name = ?1",
+                    rusqlite::params![steer::STEER_EDIT_PERMISSION],
+                    |r| r.get(0),
+                )
+                .unwrap_or_else(|_| "ask".to_string());
+            Ok(serde_json::json!({ "mode": current }))
+        }
+        other => Err(NativeAgentError::Agent {
+            msg: format!("Unknown steer action '{other}'."),
+        }),
+    })
+}
+
 fn memory_request(
     config: &types::InitConfig,
     req: &serde_json::Value,
@@ -3969,6 +4170,7 @@ mod session_continuity_e2e_tests {
             "uiTools",
             "contextTree",
             "contextPolicy",
+            "steer",
         ] {
             assert!(list.contains(&name), "{name} missing");
         }

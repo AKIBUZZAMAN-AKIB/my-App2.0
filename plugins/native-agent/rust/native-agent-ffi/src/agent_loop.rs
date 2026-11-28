@@ -131,6 +131,9 @@ pub struct AgentLoopContext<'a> {
     /// Sub-agent manager and this loop's delegation depth. `None` for
     /// background runs (cron, heartbeat, skills), which never delegate.
     pub subagents: Option<crate::subagents::SubagentCtx>,
+    /// The steer hub of the main agent (interpreter, patches, snapshot).
+    /// `None` for sub-agents and background runs: their steers go in verbatim.
+    pub steer_hub: Option<Arc<crate::steer::SteerHub>>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -675,7 +678,38 @@ async fn run_agent_turn_inner(
         // A message that arrives mid-turn joins the open turn (see
         // `turn_memory::split_turns`); count only turns it really opens.
         let turns_before_steer = crate::turn_memory::split_turns(&messages).len();
-        apply_steer_messages(&ctx.steer_rx, &mut messages).await;
+        {
+            // SP1: before the model call. Give the interpreter its grace window
+            // when a steer is waiting, then deliver (never lost, never late).
+            let mut d = steer_point(&ctx, crate::steer::SafePoint::BeforeModel, false).await;
+            if let Some(hub) = &ctx.steer_hub {
+                if hub.has_pending() && d.messages.is_empty() {
+                    hub.wait_change(crate::steer::DEFAULT_GRACE_MS).await;
+                    let more = steer_point(&ctx, crate::steer::SafePoint::BeforeModel, false).await;
+                    d.messages.extend(more.messages);
+                    d.patches.extend(more.patches);
+                    d.cancel |= more.cancel;
+                }
+            }
+            apply_steer_patches(&ctx, &d);
+            messages.extend(d.messages);
+            if d.cancel {
+                // A steer asked to stop: end the turn cleanly here, with the
+                // steer kept in the transcript (no model call after it).
+                event_bus::emit(
+                    callback,
+                    "steer.cancelled",
+                    &serde_json::json!({"point": "SP1", "sessionKey": ctx.session_key}),
+                );
+                break;
+            }
+            if let Some(hub) = &ctx.steer_hub {
+                hub.update_snapshot(|s| {
+                    s.step = turn_count as u32;
+                    s.phase = "model".into();
+                });
+            }
+        }
         tree_turns_total += crate::turn_memory::split_turns(&messages)
             .len()
             .saturating_sub(turns_before_steer) as u32;
@@ -757,6 +791,9 @@ async fn run_agent_turn_inner(
         let context_plan = resolve_context_plan(route_plan, &ctx, &runtime_config).await?;
         let route_plan = context_plan.route_plan;
         let effective_max_tokens = context_plan.max_output_tokens;
+        if let Some(hub) = &ctx.steer_hub {
+            hub.set_model(memory_loop::steer_model(&ctx, &route_plan, &runtime_config));
+        }
 
         // `contextCharBudget` is the user-configured cap. The active model's
         // verified token window constrains that cap before system/tool/output
@@ -1386,6 +1423,11 @@ async fn run_agent_turn_inner(
         // Safeguards around the policy step: a panic, a changed tool list or
         // system prompt, or a view as large as the full one sends T7 instead.
         let tools_hash_before = policy_tools_hash(&tools);
+        let steer_lines: Vec<String> = ctx
+            .steer_hub
+            .as_ref()
+            .map(|h| h.task_lines())
+            .unwrap_or_default();
         let step_view = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::context_policy::lifecycle::step_view(
                 &crate::context_policy::lifecycle::StepInput {
@@ -1400,6 +1442,7 @@ async fn run_agent_turn_inner(
                         || ctx.session_key.starts_with("sub:"),
                     step: iteration as u32,
                     now_ms: policy_now_ms(),
+                    steer_lines: &steer_lines,
                 },
             )
         }));
@@ -1897,6 +1940,33 @@ async fn run_agent_turn_inner(
         turn_count += 1;
 
         if response.stop_reason != StopReason::ToolUse || response.tool_calls.is_empty() {
+            // SP3: the model is done, but a steer is waiting. It belongs to
+            // this turn, so continue with it instead of ending the turn (and
+            // never let it slip into the next turn). The grace wait gives the
+            // interpreter its chance; the text goes in verbatim either way.
+            if turn_count < max_turns {
+                let mut waiting = !drain_peek_empty(&ctx.steer_rx).await;
+                if let Some(hub) = &ctx.steer_hub {
+                    let envs = drain_steer_envelopes(&ctx.steer_rx).await;
+                    hub.enqueue(envs);
+                    waiting = hub.has_pending();
+                    if waiting {
+                        hub.wait_change(crate::steer::DEFAULT_GRACE_MS).await;
+                    }
+                }
+                if waiting {
+                    let d = steer_point(&ctx, crate::steer::SafePoint::BeforeBreak, true).await;
+                    if !d.messages.is_empty() && !d.cancel {
+                        apply_steer_patches(&ctx, &d);
+                        messages.extend(d.messages);
+                        continue;
+                    }
+                    if d.cancel {
+                        apply_steer_patches(&ctx, &d);
+                        messages.extend(d.messages);
+                    }
+                }
+            }
             break;
         }
 
@@ -1988,6 +2058,11 @@ async fn run_agent_turn_inner(
                             .map(|a| a.contains(&tc.name))
                             .unwrap_or(true)
                         && !matches!(db_permissions.get(&tc.name), Some((_, false)))
+                        && !(crate::steer::is_file_write_tool(&tc.name)
+                            && ctx
+                                .steer_hub
+                                .as_ref()
+                                .is_some_and(|h| h.direction_changed().is_some()))
                         && {
                             let d = crate::tool_rules::decide(&tool_rules, &tc.name, &tc.input);
                             match d {
@@ -2082,10 +2157,50 @@ async fn run_agent_turn_inner(
             }
         }
 
-        for original_tool_call in &response.tool_calls {
+        // SP2 state: steers delivered between sequential tool calls go in right
+        // after this step's tool results (a tool_result run cannot be split).
+        let mut steer_after_tools: Vec<Message> = Vec::new();
+        let mut steer_stop: Option<String> = None;
+        let mut steer_cancelled = false;
+        if let Some(hub) = &ctx.steer_hub {
+            hub.update_snapshot(|s| {
+                s.phase = "tools".into();
+                s.recent_tools = response.tool_calls.iter().map(|t| t.name.clone()).collect();
+            });
+        }
+        for (call_index, original_tool_call) in response.tool_calls.iter().enumerate() {
             // Owned copy: an approval may replace the arguments (user-edited
             // approval), and every later step must then see the edited input.
             let mut tool_call = original_tool_call.clone();
+            if call_index > 0 && steer_stop.is_none() {
+                let d = steer_point(&ctx, crate::steer::SafePoint::BetweenTools, false).await;
+                apply_steer_patches(&ctx, &d);
+                steer_after_tools.extend(d.messages);
+                if d.cancel {
+                    steer_cancelled = true;
+                    steer_stop = Some("the user asked to stop".to_string());
+                } else if let Some(id) = d.redirect {
+                    steer_stop = Some(format!("the user changed the task (steer {id})"));
+                }
+            }
+            if let Some(why) = &steer_stop {
+                let content = format!(
+                    "Tool call skipped: {why} before it ran. Read the user's steer that follows these results."
+                );
+                event_bus::emit_tool_result(
+                    callback,
+                    &tool_call.name,
+                    &tool_call.id,
+                    &serde_json::json!({ "content": content, "isError": true }),
+                    &ctx.session_key,
+                );
+                tool_results.push(ContentBlock::ToolResult {
+                    tool_use_id: tool_call.id.clone(),
+                    content,
+                    is_error: true,
+                });
+                continue;
+            }
             if timed_out || wall_clock_timeout_reached(&ctx, started_at) {
                 timed_out = true;
                 let content =
@@ -2508,7 +2623,20 @@ async fn run_agent_turn_inner(
                     .get(&tool_call.name)
                     .map(|(p, _)| canonical_permission(p) == "always_allow")
                     .unwrap_or(false);
+            // Steer plan step 4: once a steer changed the task in this turn, a
+            // file edit asks first unless the user set steer file edits to
+            // "always allow" (permission key `steer_file_edits`).
+            let forced_steer_approval = crate::steer::is_file_write_tool(&tool_call.name)
+                && ctx
+                    .steer_hub
+                    .as_ref()
+                    .is_some_and(|h| h.direction_changed().is_some())
+                && !live_permissions
+                    .get(crate::steer::STEER_EDIT_PERMISSION)
+                    .map(|(p, _)| canonical_permission(p) == "always_allow")
+                    .unwrap_or(false);
             if forced_session_approval
+                || forced_steer_approval
                 || (!allowed_by_rule
                     && requires_approval(&tool_call.name, &live_permissions, mcp_approval_policy))
             {
@@ -2540,17 +2668,66 @@ async fn run_agent_turn_inner(
                     });
                     continue;
                 }
-                let approval = wait_for_approval(
-                    callback,
-                    &tool_call.name,
-                    &tool_call.id,
-                    &tool_call.input,
-                    &ctx.approval_senders,
-                    &ctx.abort_flag,
-                    require_biometric,
-                    &ctx.session_key,
-                )
-                .await?;
+                let approval = {
+                    let waiting = wait_for_approval(
+                        callback,
+                        &tool_call.name,
+                        &tool_call.id,
+                        &tool_call.input,
+                        &ctx.approval_senders,
+                        &ctx.abort_flag,
+                        require_biometric,
+                        &ctx.session_key,
+                    );
+                    tokio::pin!(waiting);
+                    match &ctx.steer_hub {
+                        None => waiting.await?,
+                        Some(hub) => {
+                            hub.update_snapshot(|s| s.phase = "approval".into());
+                            // SP4: a steer that stops or redirects the task
+                            // while this call waits withdraws the request; the
+                            // steer itself goes in after this step's results.
+                            loop {
+                                tokio::select! {
+                                    r = &mut waiting => break r?,
+                                    _ = tokio::time::sleep(Duration::from_millis(250)) => {
+                                        let envs = drain_steer_envelopes(&ctx.steer_rx).await;
+                                        hub.enqueue(envs);
+                                        if let Some(id) = hub.redirect_known() {
+                                            ctx.approval_senders.lock().await.remove(&tool_call.id);
+                                            event_bus::emit(
+                                                callback,
+                                                "approval.withdrawn",
+                                                &serde_json::json!({
+                                                    "toolCallId": tool_call.id,
+                                                    "steerId": id,
+                                                    "sessionKey": ctx.session_key,
+                                                }),
+                                            );
+                                            let d = hub.take_deliverable(&crate::steer::SafePoint::Approval, true);
+                                            apply_steer_patches(&ctx, &d);
+                                            steer_after_tools.extend(d.messages);
+                                            if d.cancel {
+                                                steer_cancelled = true;
+                                                steer_stop = Some("the user asked to stop".to_string());
+                                            } else {
+                                                steer_stop = Some(format!("the user changed the task (steer {id})"));
+                                            }
+                                            break crate::types::ApprovalResponse {
+                                                tool_call_id: tool_call.id.clone(),
+                                                approved: false,
+                                                reason: Some(format!(
+                                                    "Approval withdrawn: the user steered the task (steer {id}) while this call waited. It was not run."
+                                                )),
+                                                modified_args: None,
+                                            };
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
 
                 if !approval.approved {
                     let content = approval
@@ -2880,10 +3057,20 @@ async fn run_agent_turn_inner(
             });
         }
 
+        steer_checkpoint_edits(&ctx, &response.tool_calls, &tool_results);
         messages.push(Message {
             role: crate::types::Role::User,
             content: MessageContent::Blocks(tool_results),
         });
+        messages.extend(steer_after_tools);
+        if steer_cancelled {
+            event_bus::emit(
+                callback,
+                "steer.cancelled",
+                &serde_json::json!({"point": "SP2", "sessionKey": ctx.session_key}),
+            );
+            break;
+        }
 
         // A `ctx` call in this step changed the tree. The next step of this loop
         // assembles its request (checklist, dropped turns) from the tree as it is
@@ -3654,21 +3841,178 @@ async fn merged_tool_definitions(
     tools
 }
 
-async fn apply_steer_messages(
+/// Every steer string waiting in the channel, decoded into envelopes (plain
+/// text gets an id of its own, so nothing is dropped).
+async fn drain_steer_envelopes(
     steer_rx: &Arc<Mutex<Option<mpsc::UnboundedReceiver<String>>>>,
-    messages: &mut Vec<Message>,
-) {
+) -> Vec<crate::steer::SteerEnvelope> {
     let mut receiver_guard = steer_rx.lock().await;
     let Some(receiver) = receiver_guard.as_mut() else {
-        return;
+        return Vec::new();
     };
-
+    let mut out = Vec::new();
     while let Ok(text) = receiver.try_recv() {
         if text.trim().is_empty() {
             continue;
         }
-        messages.push(Message::user(&text));
+        let env = crate::steer::SteerEnvelope::decode(&text);
+        if env.text.trim().is_empty() && env.attachments.is_empty() {
+            continue;
+        }
+        out.push(env);
     }
+    out
+}
+
+/// Steer plan step 4: every file change made after a steer changed the task
+/// is committed to the steer checkpoint repository, so the user can get the
+/// earlier version back or revert it. Failed calls are skipped.
+fn steer_checkpoint_edits(
+    ctx: &AgentLoopContext<'_>,
+    calls: &[crate::types::ToolCall],
+    results: &[ContentBlock],
+) {
+    let Some(hub) = &ctx.steer_hub else { return };
+    let Some(steer_id) = hub.direction_changed() else { return };
+    let failed: std::collections::HashSet<&str> = results
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::ToolResult { tool_use_id, is_error: true, .. } => Some(tool_use_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    let paths: Vec<String> = calls
+        .iter()
+        .filter(|c| crate::steer::is_file_write_tool(&c.name) && !failed.contains(c.id.as_str()))
+        .flat_map(|c| crate::steer::paths_of(&c.input))
+        .collect();
+    if paths.is_empty() {
+        return;
+    }
+    let git_dir = crate::steer::checkpoint_dir(&ctx.config.db_path);
+    let msg = format!("steer {steer_id}: {}", paths.join(", "));
+    let res = crate::tool_runner::steer_checkpoint(&ctx.config.workspace_path, &git_dir, &paths, &msg);
+    hub.update_snapshot(|s| {
+        for p in &paths {
+            if !s.files_touched.contains(p) {
+                s.files_touched.push(p.clone());
+            }
+        }
+    });
+    event_bus::emit(
+        ctx.callback.as_deref(),
+        "steer.checkpoint",
+        &serde_json::json!({
+            "steerId": steer_id,
+            "paths": paths,
+            "commit": res.as_ref().ok(),
+            "error": res.as_ref().err(),
+            "sessionKey": ctx.session_key,
+        }),
+    );
+}
+
+/// Whether the steer channel is empty (no hub: SP3 reads it directly).
+async fn drain_peek_empty(
+    steer_rx: &Arc<Mutex<Option<mpsc::UnboundedReceiver<String>>>>,
+) -> bool {
+    let guard = steer_rx.lock().await;
+    guard.as_ref().map(|r| r.is_empty()).unwrap_or(true)
+}
+
+/// Without a steer hub (sub-agents, background runs) every steer goes in
+/// verbatim at once.
+fn deliver_without_hub(
+    envs: Vec<crate::steer::SteerEnvelope>,
+    point: &crate::steer::SafePoint,
+    callback: Option<&dyn NativeEventCallback>,
+    session_key: &str,
+) -> crate::steer::Delivery {
+    let mut d = crate::steer::Delivery::default();
+    for env in envs {
+        d.messages.push(crate::steer::steer_message(&env, None));
+        event_bus::emit(
+            callback,
+            "steer.applied",
+            &serde_json::json!({"id": env.id, "point": point.as_str(), "sessionKey": session_key}),
+        );
+        d.delivered.push(env.id);
+    }
+    d
+}
+
+/// One steer safe point (docs/steer/PLAN.bn.md): read the channel, hand the
+/// envelopes to the hub, and return what goes in now. `force` delivers every
+/// pending steer verbatim (SP3, after the grace wait).
+async fn steer_point(
+    ctx: &AgentLoopContext<'_>,
+    point: crate::steer::SafePoint,
+    force: bool,
+) -> crate::steer::Delivery {
+    let envs = drain_steer_envelopes(&ctx.steer_rx).await;
+    match &ctx.steer_hub {
+        None => deliver_without_hub(envs, &point, ctx.callback.as_deref(), &ctx.session_key),
+        Some(hub) => {
+            hub.enqueue(envs);
+            hub.take_deliverable(&point, force)
+        }
+    }
+}
+
+/// Apply the structured patches a safe point returned. Single writer: only the
+/// loop calls this; each patch is one `BEGIN IMMEDIATE` transaction.
+fn apply_steer_patches(ctx: &AgentLoopContext<'_>, delivery: &crate::steer::Delivery) {
+    let Some(hub) = &ctx.steer_hub else { return };
+    for p in &delivery.patches {
+        if matches!(
+            p.intent,
+            crate::steer::SteerIntent::NewTask | crate::steer::SteerIntent::Question
+        ) {
+            continue;
+        }
+        let outcome = crate::steer::apply_patch_tx(&ctx.config.db_path, &ctx.session_key, p);
+        hub.record_patch(p);
+        if let Some(target) = p.target_agent.as_deref() {
+            route_steer_to_subagent(ctx, target, p);
+        }
+        event_bus::emit(
+            ctx.callback.as_deref(),
+            "steer.patched",
+            &serde_json::json!({
+                "ids": p.steer_ids,
+                "intent": p.intent.as_str(),
+                "source": p.source,
+                "outcome": match &outcome {
+                    Ok(o) => serde_json::to_value(o).unwrap_or_default(),
+                    Err(e) => serde_json::json!({"error": e}),
+                },
+                "sessionKey": ctx.session_key,
+            }),
+        );
+    }
+}
+
+/// Step 5: a patch whose `target_agent` names one of this agent's running
+/// sub-agents is routed to it through `subagents.message`.
+fn route_steer_to_subagent(ctx: &AgentLoopContext<'_>, target: &str, p: &crate::steer::SteerPatch) {
+    let Some(sub) = &ctx.subagents else { return };
+    let text = p
+        .agent_note
+        .clone()
+        .or_else(|| p.goal_edit.clone())
+        .unwrap_or_else(|| p.note());
+    let routed = sub.manager.route_steer(&ctx.session_key, target, &text);
+    event_bus::emit(
+        ctx.callback.as_deref(),
+        "steer.routed",
+        &serde_json::json!({
+            "ids": p.steer_ids,
+            "target": target,
+            "ok": routed.is_ok(),
+            "error": routed.err(),
+            "sessionKey": ctx.session_key,
+        }),
+    );
 }
 
 /// Replace the input of the `tool_use` block with `tool_call_id` in the newest
@@ -5473,11 +5817,13 @@ mod tests {
         tx.send("first".to_string()).unwrap();
         tx.send("second".to_string()).unwrap();
 
-        apply_steer_messages(&steer_rx, &mut messages).await;
+        let envs = drain_steer_envelopes(&steer_rx).await;
+        let d = deliver_without_hub(envs, &crate::steer::SafePoint::BeforeModel, None, "s");
+        messages.extend(d.messages);
 
         assert_eq!(messages.len(), 3);
-        assert_eq!(messages[1].text(), "first");
-        assert_eq!(messages[2].text(), "second");
+        assert_eq!(crate::steer::steer_of(&messages[1]).unwrap().1, "first");
+        assert_eq!(crate::steer::steer_of(&messages[2]).unwrap().1, "second");
     }
 
     #[test]

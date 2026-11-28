@@ -208,6 +208,8 @@ describe('NativeKit.agent.subagents', () => {
       ...arms('lib.rs', /pub\(crate\) fn memory_action/, ['memory.', 'ctx.', 'agents.', 'social.']),
       // memory_action hands every `policy.*` action to context_policy::bridge::action.
       ...arms('context_policy/bridge.rs', /pub fn action/, ['policy.']),
+      // steer_action answers the steer panel's `steer.*` actions.
+      ...arms('lib.rs', /^fn steer_action/m, ['steer.']),
       'ask', 'memory.get',
     ]);
     // Sub-operations matched inside those handlers (queue ops, bulk filters) are not actions.
@@ -225,7 +227,7 @@ describe('NativeKit.agent.subagents', () => {
     for (const m of page.matchAll(/\b(?:call|csCall|run|act|subCall)\(\s*(?:ctx,\s*)?'([A-Za-z]+(?:\.[A-Za-z]+)?)'/g)) sentByPage.add(m[1]);
     for (const m of page.matchAll(/subagents\(\{\s*action:\s*'([A-Za-z.]+)'/g)) sentByPage.add(m[1]);
     // Panels that pass the action in a variable (the Context panel's send('ctx.tree')) name it as a dotted literal.
-    for (const m of page.matchAll(/'((?:memory|ctx|agents|social|policy)\.[A-Za-z]+)'/g)) sentByPage.add(m[1]);
+    for (const m of page.matchAll(/'((?:memory|ctx|agents|social|policy|steer)\.[A-Za-z]+)'/g)) sentByPage.add(m[1]);
     // The Policy tab builds `policy.${a}` for approve / reject.
     for (const m of page.matchAll(/`policy\.\$\{a\}`/g)) { void m; sentByPage.add('policy.approve'); sentByPage.add('policy.reject'); }
     expect(sentByPage.has('policy.get'), 'the Policy tab sends policy.get').toBe(true);
@@ -279,5 +281,27 @@ describe('NativeKit.agent.subagents on an old engine', () => {
     // The feature list is cached per page, so check the message the bridge builds.
     const bridge = readFileSync(path.resolve(__dirname, '../bridge/nativekit.ts'), 'utf8');
     expect(bridge).toContain("engine is too old (missing '${name}')");
+  });
+
+  it('steer() sends an envelope in its wire form and returns its id', async () => {
+    const steer = vi.fn(async () => undefined);
+    (agent as any).steer = steer;
+    const id = await NativeKit.agent.steer({ text: 'use yarn', mode: 'update', target: 'main', id: 'st-abc' });
+    expect(id).toBe('st-abc');
+    const sent = JSON.parse((steer.mock.calls[0] as any)[0].text);
+    expect(sent).toMatchObject({ steer_v: 1, id: 'st-abc', text: 'use yarn', mode: 'update' });
+    expect(sent.target, "'main' is the default target and is not sent").toBeUndefined();
+    expect(await NativeKit.agent.steer('plain words')).toBeNull();
+    expect((steer.mock.calls[1] as any)[0].text).toBe('plain words');
+    await expect(NativeKit.agent.steer({ text: 'x', mode: 'bogus' })).rejects.toThrow('unknown mode');
+    await expect(NativeKit.agent.steer('   ')).rejects.toThrow('text is required');
+    delete (agent as any).steer;
+  });
+
+  it('allows the steer panel actions through subagents()', async () => {
+    for (const action of ['steer.inbox', 'steer.dismiss', 'steer.checklists', 'steer.checklist', 'steer.permission']) {
+      await NativeKit.agent.subagents({ action, id: 'st-1' });
+    }
+    expect(agent.subagents).toHaveBeenCalledTimes(5);
   });
 });

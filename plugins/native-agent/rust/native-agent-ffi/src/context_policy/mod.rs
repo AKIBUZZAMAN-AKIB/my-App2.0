@@ -48,6 +48,8 @@ pub struct BlockView<'a> {
     pub excluded_ids: &'a [String],
     /// One line per finished step: `"1 read_file ok"`.
     pub ledger: &'a [String],
+    /// Steer lines (goal revision, per-steer checklists) from the steer hub.
+    pub steer_lines: &'a [String],
 }
 
 /// The task block. It refers to the user's request instead of repeating it:
@@ -97,6 +99,10 @@ pub fn render_task_block(view: &BlockView<'_>) -> String {
             cap_list(&ex, 24)
         ));
     }
+    for line in view.steer_lines {
+        out.push_str(line);
+        out.push('\n');
+    }
     if !view.ledger.is_empty() {
         out.push_str(&format!("Steps: {}\n", view.ledger.join("; ")));
     }
@@ -135,6 +141,7 @@ mod tests {
             checklist: Some(&c),
             excluded_ids: &ex,
             ledger: &ledger,
+            steer_lines: &[],
         });
         assert!(b.starts_with(TASK_BLOCK_MARKER));
         assert!(

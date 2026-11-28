@@ -66,6 +66,8 @@ pub fn begin_turn(db_path: &str, session_key: &str, now_ms: i64) {
 struct Newest {
     prompt: String,
     steers: Vec<String>,
+    /// Steer ids parallel to `steers` ("" for a message without one).
+    steer_ids: Vec<String>,
     tool_names: Vec<String>,
     first_calls: Vec<String>,
     results: Vec<(String, bool)>,
@@ -100,6 +102,7 @@ fn newest(view: &[Message]) -> Option<Newest> {
     let mut n = Newest {
         prompt,
         steers: Vec::new(),
+        steer_ids: Vec::new(),
         tool_names: Vec::new(),
         first_calls: Vec::new(),
         results: Vec::new(),
@@ -110,7 +113,18 @@ fn newest(view: &[Message]) -> Option<Newest> {
     let mut first_seen = false;
     for m in &msgs[1..] {
         match (&m.role, &m.content) {
-            (Role::User, MessageContent::Text(t)) => n.steers.push(t.clone()),
+            (Role::User, _) if crate::steer::is_steer_message(m) => {
+                // An engine steer message: the user's words verbatim, by id.
+                // Patch notes are the engine's reading, not the user's words.
+                if let Some((id, text, false)) = crate::steer::steer_of(m) {
+                    n.steers.push(text);
+                    n.steer_ids.push(id);
+                }
+            }
+            (Role::User, MessageContent::Text(t)) => {
+                n.steers.push(t.clone());
+                n.steer_ids.push(String::new());
+            }
             (Role::Assistant, MessageContent::Blocks(bs)) => {
                 let calls: Vec<(String, Value)> = bs
                     .iter()
@@ -195,6 +209,9 @@ pub struct StepInput<'a> {
     pub is_subagent: bool,
     pub step: u32,
     pub now_ms: i64,
+    /// Lines from the steer hub (goal changed by a steer, per-steer to-dos),
+    /// rendered in the task block. Empty when no steer changed anything.
+    pub steer_lines: &'a [String],
 }
 
 /// The view for one model call.
@@ -263,9 +280,9 @@ pub fn step_view(inp: &StepInput<'_>) -> StepView {
         .filter(|_| !crate::context_tree::store::ai_task_pick_off(&conn, inp.session_key));
     let mut new_steer = false;
     if let Ok(mut goal) = serde_json::from_value::<TaskGoal>(task.goal_json.clone()) {
-        for s in &n.steers {
-            if !goal.steer_messages.contains(s) {
-                goal.add_steer(s);
+        for (i, s) in n.steers.iter().enumerate() {
+            let id = n.steer_ids.get(i).map(|s| s.as_str()).unwrap_or("");
+            if goal.add_steer_with_id(id, s) {
                 new_steer = true;
             }
         }
@@ -444,6 +461,7 @@ pub fn step_view(inp: &StepInput<'_>) -> StepView {
             checklist: Some(&list),
             excluded_ids: &left_out,
             ledger: &n.ledger,
+            steer_lines: inp.steer_lines,
         })
     });
     StepView {
@@ -688,6 +706,7 @@ mod tests {
             is_subagent: false,
             step,
             now_ms: 10 + step as i64,
+            steer_lines: &[],
         })
     }
 

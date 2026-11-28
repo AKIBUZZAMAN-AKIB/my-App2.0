@@ -22,6 +22,11 @@ pub struct TaskGoal {
     pub user_request: String,
     /// User messages that arrived while the task ran, verbatim.
     pub steer_messages: Vec<String>,
+    /// Steer ids already folded in (a revision is deduped by its id, not its
+    /// text: the same words sent twice are two steers). Parallel to
+    /// `steer_messages` where known; legacy goals have none.
+    #[serde(default)]
+    pub steer_ids: Vec<String>,
     /// Only from the model's `ctx task focus:`; at most 300 characters.
     pub required_outcome: Option<String>,
     /// Verbatim pieces of the request that limit how the work is done.
@@ -113,6 +118,7 @@ impl TaskGoal {
             goal_id: new_goal_id(),
             user_request: user_request.to_string(),
             steer_messages: steer_messages.to_vec(),
+            steer_ids: Vec::new(),
             required_outcome: None,
             constraints,
             response_requirements,
@@ -147,6 +153,23 @@ impl TaskGoal {
                 push_unique(&mut self.constraints, clause);
             }
         }
+    }
+
+    /// Add a steer by id: a steer already folded in (same id) is skipped.
+    /// Returns whether it was new. An empty id falls back to the text.
+    pub fn add_steer_with_id(&mut self, id: &str, text: &str) -> bool {
+        if id.is_empty() {
+            if self.steer_messages.iter().any(|s| s == text) {
+                return false;
+            }
+        } else if self.steer_ids.iter().any(|s| s == id) {
+            return false;
+        }
+        self.add_steer(text);
+        if !id.is_empty() {
+            self.steer_ids.push(id.to_string());
+        }
+        true
     }
 
     /// Every problem with the goal, or none. A constraint or response requirement

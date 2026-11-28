@@ -761,6 +761,7 @@ impl SubagentRunner for EngineRunner {
                 skip_user_echo: false,
                 session_key: req.params.session_key.clone(),
                 subagents: Some(req.child.clone()),
+                steer_hub: None,
             })
             .await?;
             Ok(RunDone {
@@ -2189,13 +2190,18 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         self.emit(&env.callback, "subagent.started", rec, json!({ "task": truncate_chars(&rec.task, 500), "tools": rec.tools, "memoryMode": rec.memory_mode, "run": rec.runs }));
 
         let timeout_ms = rec.timeout_seconds * 1000;
+        // Kept to drain at run end: a steer that reached no safe point of this
+        // run becomes its next message (a FollowUp), never lost.
+        let leftover_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<String>>>> =
+            Arc::new(Mutex::new(Some(steer_rx)));
+        let leftover_env = env.clone();
         let req = RunRequest {
             id: rec.id.clone(),
             params,
             prior_messages: prior.clone(),
             callback: events,
             abort: abort.clone(),
-            steer_rx: Arc::new(Mutex::new(Some(steer_rx))),
+            steer_rx: leftover_rx.clone(),
             memory,
             timeout_ms,
             child,
@@ -2294,8 +2300,68 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 }
                 Err(_) => ("timeout".to_string(), partial, None),
             };
+            // Leftover steers (sent after the run's last safe point): queued as
+            // the run's next message, ahead of later ones, unless it was
+            // cancelled outright.
+            let mut leftovers: Vec<String> = Vec::new();
+            if let Some(rx) = leftover_rx.lock().await.as_mut() {
+                while let Ok(raw) = rx.try_recv() {
+                    let env = crate::steer::SteerEnvelope::decode(&raw);
+                    if !env.text.trim().is_empty() {
+                        leftovers.push(env.text);
+                    }
+                }
+            }
+            if !leftovers.is_empty() && status != "cancelled" {
+                mgr.followups
+                    .lock()
+                    .unwrap()
+                    .entry(id.clone())
+                    .or_default()
+                    .push_front(FollowUp {
+                        text: leftovers.join("\n\n"),
+                        attachments_json: String::new(),
+                        env: leftover_env,
+                    });
+            }
             mgr.finish(&id, &status, result, error, &app);
         });
+    }
+
+    /// Step 5 of the steer plan: hand a steer to one of `parent_session_key`'s
+    /// sub-agents by id, name or title (the `subagents.message` path). A
+    /// running one gets it as a steer; for one that is not running this fails
+    /// and the steer stays with the main agent.
+    pub fn route_steer(
+        self: &Arc<Self>,
+        parent_session_key: &str,
+        target: &str,
+        text: &str,
+    ) -> Result<String, String> {
+        let t = target.trim();
+        let rec = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.parent_session_key == parent_session_key || parent_session_key.is_empty())
+            .find(|r| {
+                r.id == t
+                    || r.name.eq_ignore_ascii_case(t)
+                    || r.title.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(t))
+            })
+            .cloned()
+            .ok_or_else(|| format!("No sub-agent '{t}' in this chat."))?;
+        let msg = format!("[Message from the user, routed by steer]\n{text}");
+        if let Some(live) = self.live.lock().unwrap().get(&rec.id) {
+            live.steer_tx
+                .send(msg)
+                .map_err(|e| e.to_string())?;
+            return Ok(rec.id);
+        }
+        // Not running: the main agent keeps the steer (it can message the
+        // sub-agent itself with the full parent context).
+        Err(format!("Sub-agent '{t}' is not running."))
     }
 
     fn finish(
@@ -2390,10 +2456,12 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             }
         };
         let Some(f) = next else { return };
-        self.next_attachments
-            .lock()
-            .unwrap()
-            .insert(id.to_string(), f.attachments_json);
+        if !f.attachments_json.is_empty() {
+            self.next_attachments
+                .lock()
+                .unwrap()
+                .insert(id.to_string(), f.attachments_json);
+        }
         if self
             .rerun_existing(id, f.text, PendingPrior::Resume, &f.env, false)
             .is_err()
@@ -4473,6 +4541,9 @@ mod tests {
                         );
                         tokio::time::sleep(Duration::from_millis(5)).await;
                     }
+                } else if let Some(ms) = prompt.strip_prefix("hold:") {
+                    // Works without reading its steers (no safe point).
+                    tokio::time::sleep(Duration::from_millis(ms.trim().parse().unwrap_or(0))).await;
                 } else if prompt == "approval" {
                     cb.on_event("tool_use".into(), json!({"toolName": "write_file", "toolCallId": "t1", "args": {"path": "a"}}).to_string());
                     cb.on_event("approval_request".into(), json!({"toolCallId": "t1", "toolName": "write_file", "sessionKey": req.params.session_key}).to_string());
@@ -5707,6 +5778,26 @@ mod tests {
         )
         .await;
         assert!(err && out.contains("No sub-agent of yours"));
+    }
+
+    #[tokio::test]
+    async fn sub_agent_leftover_steer_becomes_a_follow_up() {
+        let (mgr, _script, _app, env, _) = setup();
+        let rec = mgr.spawn(0, spec("hold:150"), &env).unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let routed = mgr.route_steer(&env.session_key, &rec.id, "and add a summary line");
+        assert_eq!(routed.as_deref(), Ok(rec.id.as_str()));
+        for _ in 0..200 {
+            let r = mgr.get(&rec.id).unwrap();
+            if r.runs >= 2 && r.status == "finished" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let r = mgr.get(&rec.id).unwrap();
+        assert_eq!(r.runs, 2, "the leftover steer started the next run");
+        assert!(r.result.unwrap_or_default().contains("and add a summary line"));
+        assert!(mgr.route_steer(&env.session_key, "nobody", "x").is_err());
     }
 
     #[tokio::test]
