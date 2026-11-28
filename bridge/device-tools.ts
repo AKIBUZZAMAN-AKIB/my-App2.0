@@ -50,6 +50,11 @@ import {
   updateWidget as updateHomeWidget,
   applyPref as applyHomePref,
   checkItem as checkHomeItem,
+  describeHomeBackgrounds,
+  findHomeBackground,
+  HOME_BG_INTENSITIES,
+  HOME_BG_MOTIONS,
+  HOME_BG_SPEEDS,
   HOME_CONTROL_ACTIONS,
   HOME_CONTROL_ACTION_IDS,
   HOME_PAGE_ACTIONS,
@@ -1998,9 +2003,10 @@ const TOOL_SPECS: DeviceToolSpec[] = [
   {
     name: 'home_control',
     description:
-      "Control the app's Home screen the way the user does with their fingers: theme, text size, spacing, accent colour, " +
-      'greeting, start/pause/reset/lap a stopwatch or timer, tick checklist items, open an app screen, edit mode, ' +
-      'the add-widget sheet, refresh and scroll to a widget. Actions: ' +
+      "Control the app's Home screen the way the user does with their fingers: background theme (static or animated, " +
+      'with speed, intensity and motion), text size, spacing, accent colour, greeting, start/pause/reset/lap a stopwatch ' +
+      'or timer, tick checklist items, open an app screen, edit mode, the add-widget sheet, refresh and scroll to a widget. ' +
+      "Light/dark is not a setting: Home always follows the phone's system theme. Actions: " +
       HOME_CONTROL_ACTION_IDS.map((a) => `${a} (${HOME_CONTROL_ACTIONS[a]})`).join('; ') +
       '. Settings and widget state apply even when Home is closed; page actions run as soon as Home is shown. ' +
       'Use home_get_layout for widget ids and home_add_widget/home_update_widget to change widgets themselves.',
@@ -2008,15 +2014,21 @@ const TOOL_SPECS: DeviceToolSpec[] = [
       type: 'object',
       properties: {
         action: { type: 'string', enum: [...HOME_CONTROL_ACTION_IDS], description: 'What to do.' },
-        value: { description: 'The setting value or app id; see the action list.' },
+        value: { description: 'The setting value, background id or app id; see the action list.' },
         id: { type: 'string', description: 'Widget id, for stopwatch_*, check_item and scroll_to.' },
         index: { type: 'number', description: 'check_item: 0-based checklist item.' },
         done: { type: 'boolean', description: 'check_item: true to tick, false to untick; omit to toggle.' },
+        speed: { type: 'string', enum: [...HOME_BG_SPEEDS], description: 'set_background: animation speed (optional).' },
+        intensity: { type: 'string', enum: [...HOME_BG_INTENSITIES], description: 'set_background: colour strength (optional).' },
+        motion: { type: 'string', enum: [...HOME_BG_MOTIONS], description: 'set_background: "auto" animates, "off" keeps it still (optional).' },
       },
       required: ['action'],
     },
     run: async (args, deps) => {
       const action = String(args.action ?? '') as HomeControlAction;
+      if ((action as string) === 'set_theme') {
+        return errorResult("Home has no light/dark setting any more: it always follows the phone's system theme. To change the look, use set_background (list_backgrounds shows the choices), set_accent, set_text_size or set_density.");
+      }
       if (!(HOME_CONTROL_ACTION_IDS as readonly string[]).includes(action)) {
         return errorResult(`Unknown action "${action}". Use one of ${HOME_CONTROL_ACTION_IDS.join(', ')}.`);
       }
@@ -2024,17 +2036,29 @@ const TOOL_SPECS: DeviceToolSpec[] = [
       try {
         if (action === 'get_state') {
           const layout = readHome(deps);
+          const prefs = parseHomePrefs(state.readPrefs());
           const body = {
-            prefs: parseHomePrefs(state.readPrefs()),
+            prefs,
+            theme: 'system',
+            background: describeHomeBackgrounds(prefs).current,
             widgets: layout.widgets.map((w, position) => ({ position, id: w.id, type: w.type, size: w.size, title: w.title })),
             stopwatches: parseStopwatches(state.readStopwatches()),
             actions: HOME_CONTROL_ACTION_IDS,
           };
           return textResult(JSON.stringify(body), body);
         }
+        if (action === 'list_backgrounds') {
+          const body = describeHomeBackgrounds(parseHomePrefs(state.readPrefs()));
+          return textResult(JSON.stringify(body), body);
+        }
         if (action.startsWith('set_')) {
-          const prefs = applyHomePref(parseHomePrefs(state.readPrefs()), action, args.value);
+          const prefs = applyHomePref(parseHomePrefs(state.readPrefs()), action, args.value, { speed: args.speed, intensity: args.intensity, motion: args.motion });
           state.writePrefs(JSON.stringify(prefs));
+          if (action.startsWith('set_background')) {
+            const bg = findHomeBackground(prefs.background)!;
+            const extras = bg.animated ? `, speed ${prefs.bgSpeed}, intensity ${prefs.bgIntensity}, motion ${prefs.bgMotion}` : `, intensity ${prefs.bgIntensity}`;
+            return textResult(`Home background is now ${bg.label}${bg.animated ? ' (animated)' : ''}${extras}. It adapts to the phone's light/dark theme.`, { prefs, background: describeHomeBackgrounds(prefs).current });
+          }
           return textResult(`Home ${action.replace(/^set_/, '').replace(/_/g, ' ')} is now ${JSON.stringify(args.value ?? '')}.`, { prefs });
         }
         if (action.startsWith('stopwatch_')) {

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { unzipSync, zipSync } from 'fflate';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import {
   createDeviceToolsTransport,
@@ -19,6 +21,7 @@ import {
   type AgentLike,
   type McpServerConfig,
 } from '../bridge/mcp-client';
+import { HOME_BACKGROUND_IDS } from '../bridge/home-layout';
 
 /** First text block of a result, union-safe. */
 function textOf(result: any): string {
@@ -1560,11 +1563,15 @@ describe('home_* tools', () => {
         sendCommand: (j) => { kv.cmd = j; },
       },
     });
-    expect((await callTool(deps, 'home_control', { action: 'set_theme', value: 'dark' })).isError).toBeFalsy();
-    expect(JSON.parse(kv.prefs!).theme).toBe('dark');
+    // Light/dark is the phone's: the old theme action is refused with a pointer to backgrounds.
+    const theme = await callTool(deps, 'home_control', { action: 'set_theme', value: 'dark' });
+    expect(theme.isError).toBe(true);
+    expect(textOf(theme)).toMatch(/system theme/);
+    expect(kv.prefs).toBeNull();
     expect((await callTool(deps, 'home_control', { action: 'set_text_size', value: 'huge' })).isError).toBe(true);
     await callTool(deps, 'home_control', { action: 'set_accent', value: '#6366f1' });
-    expect(JSON.parse(kv.prefs!)).toMatchObject({ theme: 'dark', accent: '#6366f1' });
+    expect(JSON.parse(kv.prefs!)).toMatchObject({ accent: '#6366f1' });
+    expect(JSON.parse(kv.prefs!).theme).toBeUndefined();
 
     await callTool(deps, 'home_control', { action: 'stopwatch_start' });
     expect(JSON.parse(kv.sw!)['stopwatch-main'].run).toBe(true);
@@ -1582,6 +1589,60 @@ describe('home_* tools', () => {
 
     const text = textOf(await callTool(deps, 'home_control', { action: 'get_state' }));
     const state = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
-    expect(state.prefs.theme).toBe('dark');
+    expect(state.prefs.accent).toBe('#6366f1');
+    expect(state.theme).toBe('system');
+  });
+
+  it('home_control lists, sets and tunes background themes, static and animated', async () => {
+    const kv: Record<string, string | null> = { prefs: null };
+    const { deps } = fakeDeps({
+      home: { read: () => null, write: () => {} },
+      homeState: {
+        readPrefs: () => kv.prefs, writePrefs: (j) => { kv.prefs = j; },
+        readStopwatches: () => null, writeStopwatches: () => {}, sendCommand: () => {},
+      },
+    });
+    const listText = textOf(await callTool(deps, 'home_control', { action: 'list_backgrounds' }));
+    const list = JSON.parse(listText.slice(listText.indexOf('{'), listText.lastIndexOf('}') + 1));
+    expect(list.current).toMatchObject({ id: 'plain', animated: false, speed: 'normal', intensity: 'normal', motion: 'auto' });
+    const ids = list.backgrounds.map((b: any) => b.id);
+    expect(ids).toEqual(expect.arrayContaining(['plain', 'aurora', 'sunset', 'ocean', 'forest', 'dusk', 'aurora_flow', 'ocean_waves', 'starry_night']));
+    expect(list.backgrounds.filter((b: any) => b.animated).length).toBeGreaterThanOrEqual(5);
+
+    expect((await callTool(deps, 'home_control', { action: 'set_background', value: 'sunset' })).isError).toBeFalsy();
+    expect(JSON.parse(kv.prefs!).background).toBe('sunset');
+    // Labels and dashes resolve to the id; options ride along in the same call.
+    const r = await callTool(deps, 'home_control', { action: 'set_background', value: 'Aurora flow', speed: 'slow', intensity: 'vivid' });
+    expect(r.isError).toBeFalsy();
+    expect(textOf(r)).toMatch(/Aurora flow \(animated\)/);
+    expect(JSON.parse(kv.prefs!)).toMatchObject({ background: 'aurora_flow', bgSpeed: 'slow', bgIntensity: 'vivid', bgMotion: 'auto' });
+    await callTool(deps, 'home_control', { action: 'set_background', value: 'ocean-waves' });
+    expect(JSON.parse(kv.prefs!).background).toBe('ocean_waves');
+
+    await callTool(deps, 'home_control', { action: 'set_background_speed', value: 'fast' });
+    await callTool(deps, 'home_control', { action: 'set_background_intensity', value: 'subtle' });
+    await callTool(deps, 'home_control', { action: 'set_background_motion', value: 'off' });
+    expect(JSON.parse(kv.prefs!)).toMatchObject({ background: 'ocean_waves', bgSpeed: 'fast', bgIntensity: 'subtle', bgMotion: 'off' });
+
+    expect((await callTool(deps, 'home_control', { action: 'set_background', value: 'lava' })).isError).toBe(true);
+    expect((await callTool(deps, 'home_control', { action: 'set_background', value: 'dusk', speed: 'warp' })).isError).toBe(true);
+    expect((await callTool(deps, 'home_control', { action: 'set_background_speed', value: 'warp' })).isError).toBe(true);
+    expect((await callTool(deps, 'home_control', { action: 'set_background_motion', value: 'maybe' })).isError).toBe(true);
+    expect(JSON.parse(kv.prefs!).background).toBe('ocean_waves');
+
+    const stateText = textOf(await callTool(deps, 'home_control', { action: 'get_state' }));
+    const state = JSON.parse(stateText.slice(stateText.indexOf('{'), stateText.lastIndexOf('}') + 1));
+    expect(state.background).toMatchObject({ id: 'ocean_waves', animated: true, motion: 'off' });
+  });
+
+  it('home.html offers exactly the background catalogue the agent can set, and no theme switch', () => {
+    const html = readFileSync(resolve(__dirname, '../www/home.html'), 'utf8');
+    const block = html.slice(html.indexOf('const BACKGROUNDS = ['), html.indexOf('];', html.indexOf('const BACKGROUNDS = [')));
+    const pageIds = [...block.matchAll(/id: '([a-z_]+)'/g)].map((m) => m[1]);
+    expect(pageIds).toEqual(HOME_BACKGROUND_IDS);
+    expect(html).not.toMatch(/id="themeBtn"|id="agentPill"|id="brandMark"/);
+    expect(html).toMatch(/prefers-reduced-motion/);
+    expect(html).not.toMatch(/const ACTIONS = \[[^\]]*'set_theme'/);
+    expect(html).toMatch(/const ACTIONS = \[[^\]]*'set_background'/);
   });
 });

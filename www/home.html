@@ -5,12 +5,69 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <script>
-// Apply the saved Home theme / text size before first paint (same idea as the Agent app).
+/* Home always follows the phone's light/dark setting (no theme switch). The saved
+   text size, density and background theme are applied here, before first paint.
+   BACKGROUNDS mirrors HOME_BACKGROUNDS in bridge/home-layout.ts: the browser's
+   start-page backdrops plus animated ones, blended into the light or dark ground. */
 (function () {
-  var p = {}; try { p = JSON.parse(localStorage.getItem('myapp.home.prefs.v1') || '{}') || {}; } catch (e) {}
-  var t = p.theme || 'system', r = document.documentElement;
-  r.dataset.theme = t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
-  if (p.textSize) r.dataset.text = p.textSize; if (p.density) r.dataset.density = p.density;
+  'use strict';
+  const BACKGROUNDS = [
+    { id: 'plain', label: 'Plain', animated: false, colors: [] },
+    { id: 'aurora', label: 'Aurora', animated: false, colors: ['#6366f1', '#14b8a6'] },
+    { id: 'sunset', label: 'Sunset', animated: false, colors: ['#f97316', '#ec4899'] },
+    { id: 'ocean', label: 'Ocean', animated: false, colors: ['#0ea5e9', '#2563eb'] },
+    { id: 'forest', label: 'Forest', animated: false, colors: ['#22c55e', '#0d9488'] },
+    { id: 'dusk', label: 'Dusk', animated: false, colors: ['#8b5cf6', '#1e293b'] },
+    { id: 'aurora_flow', label: 'Aurora flow', animated: true, colors: ['#6366f1', '#14b8a6', '#a78bfa'] },
+    { id: 'sunset_glow', label: 'Sunset glow', animated: true, colors: ['#f97316', '#ec4899', '#f59e0b'] },
+    { id: 'ocean_waves', label: 'Ocean waves', animated: true, colors: ['#0ea5e9', '#2563eb', '#06b6d4'] },
+    { id: 'bubbles', label: 'Bubbles', animated: true, colors: ['#8b5cf6', '#3b82f6', '#ec4899'] },
+    { id: 'starry_night', label: 'Starry night', animated: true, colors: ['#4338ca', '#1e293b', '#a5b4fc'] },
+  ];
+  const SPEEDS = ['slow', 'normal', 'fast'], INTENSITIES = ['subtle', 'normal', 'vivid'], MOTIONS = ['auto', 'off'];
+  const SPEED_K = { slow: 1.8, normal: 1, fast: 0.55 };
+  // [share of the colour at the top, at the bottom, opacity of animated layers]
+  const LEVEL = {
+    light: { subtle: [0.2, 0.1, 0.2], normal: [0.42, 0.22, 0.32], vivid: [0.72, 0.45, 0.48] },
+    dark: { subtle: [0.22, 0.1, 0.22], normal: [0.38, 0.18, 0.34], vivid: [0.55, 0.3, 0.5] },
+  };
+  const GROUND = { light: [250, 250, 250], dark: [9, 9, 11] };
+  const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const mix = (c, g, k) => 'rgb(' + c.map((v, i) => Math.round(v * k + g[i] * (1 - k))).join(',') + ')';
+  const find = (id) => {
+    const key = typeof id === 'string' ? id.trim().toLowerCase().replace(/[\s-]+/g, '_') : '';
+    return BACKGROUNDS.find((b) => b.id === key || b.label.toLowerCase().replace(/\s+/g, '_') === key);
+  };
+  const darkMq = matchMedia('(prefers-color-scheme: dark)');
+  /** CSS variables that paint one background in the current light/dark mode. */
+  function vars(id, intensity, dark) {
+    const bg = find(id) || BACKGROUNDS[0], mode = dark ? 'dark' : 'light', g = GROUND[mode];
+    const lv = LEVEL[mode][INTENSITIES.includes(intensity) ? intensity : 'normal'];
+    if (!bg.colors.length) return { '--bg-a': 'var(--bg)', '--bg-b': 'var(--bg)', '--page-bg': 'var(--bg)', '--bg-c1': 'transparent', '--bg-c2': 'transparent', '--bg-c3': 'transparent', '--bg-star': 'transparent' };
+    const c = bg.colors.map(rgb), alpha = (x) => 'rgba(' + x.join(',') + ',' + lv[2] + ')';
+    const bottom = mix(c[1], g, lv[1]);
+    return {
+      '--bg-a': mix(c[0], g, lv[0]), '--bg-b': bottom, '--page-bg': bottom,
+      '--bg-c1': alpha(c[0]), '--bg-c2': alpha(c[1]), '--bg-c3': alpha(c[2] || c[0]),
+      '--bg-star': dark ? 'rgba(255,255,255,.9)' : 'rgba(55,48,163,.8)',
+    };
+  }
+  function paint(p) {
+    p = p || {};
+    const r = document.documentElement, dark = darkMq.matches, bg = find(p.background) || BACKGROUNDS[0];
+    r.dataset.theme = dark ? 'dark' : 'light';
+    if (p.textSize) r.dataset.text = p.textSize;
+    if (p.density) r.dataset.density = p.density;
+    r.dataset.bg = bg.id;
+    r.dataset.bgAnimated = bg.animated ? 'true' : 'false';
+    r.dataset.bgMotion = MOTIONS.includes(p.bgMotion) ? p.bgMotion : 'auto';
+    const v = vars(bg.id, p.bgIntensity, dark);
+    Object.keys(v).forEach((k) => r.style.setProperty(k, v[k]));
+    r.style.setProperty('--bg-k', String(SPEED_K[p.bgSpeed] || 1));
+  }
+  window.__homeBg = Object.freeze({ list: BACKGROUNDS, speeds: SPEEDS, intensities: INTENSITIES, motions: MOTIONS, find, vars, paint });
+  let p = {}; try { p = JSON.parse(localStorage.getItem('myapp.home.prefs.v1') || '{}') || {}; } catch (e) {}
+  paint(p);
 })();
 </script>
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
@@ -186,7 +243,7 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 .dock .btn.pri { background: var(--accent); }
 .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 40; display: none; }
 .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 41; background: var(--bg); border-radius: 28px 28px 0 0; padding: 10px 18px calc(24px + env(safe-area-inset-bottom, 0px)); max-height: 80dvh; overflow: auto; transform: translateY(105%); visibility: hidden; transition: transform .25s ease, visibility .25s; }
-.sheet-open .sheet { transform: none; visibility: visible; } .sheet-open .sheet-bg { display: block; }
+.sheet-open #sheet { transform: none; visibility: visible; } .sheet-open .sheet-bg { display: block; }
 .sheet h2 { font-size: 22px; margin: 14px 4px 14px; letter-spacing: -.02em; }
 .grab { width: 40px; height: 5px; border-radius: 3px; background: var(--faint); margin: 0 auto; opacity: .5; }
 .cat { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -275,24 +332,119 @@ body { padding-top: calc(env(safe-area-inset-top, 0px) + 12px); }
 .toast { border-radius: 12px; font-size: calc(14px * var(--fs)); font-weight: 500; box-shadow: var(--shadow-pop); }
 .flash { animation: flash 1.2s var(--ease); }
 @keyframes flash { 0%, 100% { box-shadow: var(--shadow); } 30% { box-shadow: 0 0 0 3px var(--ring), var(--shadow); } }
+
+/* ==========================================================================
+   Background themes (light/dark always follows the system). #bg sits behind
+   everything; swatches in the Background sheet reuse the same .bgx markup.
+   Animations use transform/opacity only and pause for reduced motion, for
+   motion "off" and while the page is hidden.
+   ========================================================================== */
+html { background: var(--page-bg, var(--bg)); }
+body { background: transparent; }
+.wrap { position: relative; z-index: 1; }
+.bgx { position: absolute; inset: 0; overflow: hidden; pointer-events: none; contain: strict; --k: var(--bg-k, 1);
+  background: linear-gradient(180deg, var(--bg-a, var(--bg)) 0%, var(--bg-b, var(--bg)) 100%); }
+#bg.bgx { position: fixed; z-index: 0; }
+.bgx > i { position: absolute; display: block; will-change: transform; }
+/* Aurora flow: three soft lights drifting */
+.bgx[data-bg="aurora_flow"] > i { width: 120%; aspect-ratio: 1; border-radius: 50%; }
+.bgx[data-bg="aurora_flow"] .b1 { left: -45%; top: -25%; background: radial-gradient(closest-side, var(--bg-c1), transparent); animation: bg-af1 calc(22s * var(--k)) ease-in-out infinite alternate; }
+.bgx[data-bg="aurora_flow"] .b2 { right: -55%; top: 10%; background: radial-gradient(closest-side, var(--bg-c2), transparent); animation: bg-af2 calc(28s * var(--k)) ease-in-out infinite alternate; }
+.bgx[data-bg="aurora_flow"] .b3 { left: -10%; bottom: -35%; background: radial-gradient(closest-side, var(--bg-c3), transparent); animation: bg-af3 calc(25s * var(--k)) ease-in-out infinite alternate; }
+@keyframes bg-af1 { to { transform: translate(35%, 30%) scale(1.25); } }
+@keyframes bg-af2 { to { transform: translate(-35%, 25%) scale(.85); } }
+@keyframes bg-af3 { to { transform: translate(25%, -40%) scale(1.2); } }
+/* Sunset glow: warm lights orbiting slowly */
+.bgx[data-bg="sunset_glow"] .g1 { left: 50%; top: 50%; width: 300%; aspect-ratio: 1; transform: translate(-50%, -50%);
+  background: radial-gradient(circle at 41% 43%, var(--bg-c1), transparent 34%), radial-gradient(circle at 59% 53%, var(--bg-c2), transparent 36%), radial-gradient(circle at 46% 60%, var(--bg-c3), transparent 30%);
+  animation: bg-spin calc(48s * var(--k)) linear infinite; }
+.bgx[data-bg="sunset_glow"] .g2 { inset: auto -20% -30% -20%; height: 60%; border-radius: 50%; background: radial-gradient(closest-side, var(--bg-c3), transparent); animation: bg-pulse calc(9s * var(--k)) ease-in-out infinite alternate; }
+@keyframes bg-spin { from { transform: translate(-50%, -50%) rotate(0deg); } to { transform: translate(-50%, -50%) rotate(360deg); } }
+@keyframes bg-pulse { from { opacity: .55; transform: scale(.95); } to { opacity: 1; transform: scale(1.08); } }
+/* Ocean waves: three wave layers rolling along the bottom */
+.bgx[data-bg="ocean_waves"] .w1, .bgx[data-bg="ocean_waves"] .w2, .bgx[data-bg="ocean_waves"] .w3 { left: 0; bottom: 0; width: 200%;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 120' preserveAspectRatio='none'%3E%3Cpath d='M0 60C150 10 350 10 600 60S1050 110 1200 60V120H0Z'/%3E%3C/svg%3E") 0 0 / 50% 100% repeat-x;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 120' preserveAspectRatio='none'%3E%3Cpath d='M0 60C150 10 350 10 600 60S1050 110 1200 60V120H0Z'/%3E%3C/svg%3E") 0 0 / 50% 100% repeat-x; }
+.bgx[data-bg="ocean_waves"] .w1 { height: 30%; background: var(--bg-c3); animation: bg-wave calc(18s * var(--k)) linear infinite; }
+.bgx[data-bg="ocean_waves"] .w2 { height: 22%; background: var(--bg-c1); animation: bg-wave calc(12s * var(--k)) linear infinite reverse; }
+.bgx[data-bg="ocean_waves"] .w3 { height: 14%; background: var(--bg-c2); animation: bg-wave calc(8s * var(--k)) linear infinite; }
+.bgx[data-bg="ocean_waves"] .gl { right: -30%; top: -20%; width: 90%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(closest-side, var(--bg-c3), transparent); animation: bg-pulse calc(10s * var(--k)) ease-in-out infinite alternate; }
+@keyframes bg-wave { to { transform: translateX(-50%); } }
+/* Bubbles: rising and swaying */
+.bgx[data-bg="bubbles"] > i { bottom: 0; height: 100%; left: var(--x); width: var(--s); animation: bg-rise calc(var(--d) * var(--k)) linear infinite; animation-delay: calc(var(--dl) * var(--k)); }
+.bgx[data-bg="bubbles"] > i::before { content: ''; position: absolute; left: 0; bottom: 0; width: 100%; aspect-ratio: 1; border-radius: 50%;
+  background: radial-gradient(circle at 32% 30%, rgba(255,255,255,.6), var(--c) 55%, transparent 72%); transform: translate(0, 100%);
+  animation: bg-sway calc(5s * var(--k)) ease-in-out infinite alternate; animation-delay: calc(var(--dl) * .3s); }
+@keyframes bg-rise { from { transform: translateY(0); } to { transform: translateY(-130%); } }
+@keyframes bg-sway { from { transform: translate(-35%, 100%); } to { transform: translate(35%, 100%); } }
+/* Starry night: two twinkling star fields drifting, a soft moon glow and a shooting star */
+.bgx[data-bg="starry_night"] .m { right: -25%; top: -15%; width: 80%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(closest-side, var(--bg-c3), transparent); }
+.bgx[data-bg="starry_night"] .s1, .bgx[data-bg="starry_night"] .s2 { left: 0; right: 0; top: 0; }
+.bgx[data-bg="starry_night"] .s1 { bottom: -200px; background-size: 200px 200px;
+  background-image: radial-gradient(1.6px 1.6px at 22px 34px, var(--bg-star), transparent), radial-gradient(1.2px 1.2px at 140px 18px, var(--bg-star), transparent), radial-gradient(1.8px 1.8px at 90px 120px, var(--bg-star), transparent), radial-gradient(1.1px 1.1px at 170px 160px, var(--bg-star), transparent), radial-gradient(1.4px 1.4px at 48px 178px, var(--bg-star), transparent);
+  animation: bg-twinkle calc(3.6s * var(--k)) ease-in-out infinite alternate, bg-drift1 calc(120s * var(--k)) linear infinite; }
+.bgx[data-bg="starry_night"] .s2 { bottom: -320px; background-size: 320px 320px;
+  background-image: radial-gradient(1px 1px at 60px 80px, var(--bg-star), transparent), radial-gradient(2px 2px at 250px 40px, var(--bg-star), transparent), radial-gradient(1.3px 1.3px at 200px 230px, var(--bg-star), transparent), radial-gradient(1px 1px at 30px 290px, var(--bg-star), transparent), radial-gradient(1.5px 1.5px at 120px 180px, var(--bg-star), transparent), radial-gradient(1px 1px at 300px 300px, var(--bg-star), transparent);
+  animation: bg-twinkle calc(5.2s * var(--k)) ease-in-out infinite alternate-reverse, bg-drift2 calc(200s * var(--k)) linear infinite; }
+.bgx[data-bg="starry_night"] .sh { left: 10%; top: 12%; width: 110px; height: 2px; border-radius: 2px; opacity: 0;
+  background: linear-gradient(90deg, transparent, var(--bg-star)); transform: rotate(-25deg); animation: bg-shoot calc(11s * var(--k)) ease-in infinite; }
+@keyframes bg-twinkle { from { opacity: 1; } to { opacity: .35; } }
+@keyframes bg-drift1 { to { transform: translateY(-200px); } }
+@keyframes bg-drift2 { to { transform: translateY(-320px); } }
+@keyframes bg-shoot { 0%, 86% { opacity: 0; transform: rotate(-25deg) translateX(0); } 90% { opacity: 1; } 100% { opacity: 0; transform: rotate(-25deg) translateX(260px); } }
+/* Still when the phone asks for reduced motion, when motion is off, and while hidden */
+@media (prefers-reduced-motion: reduce) { .bgx *, .bgx *::before { animation-play-state: paused !important; } }
+:root[data-bg-motion="off"] .bgx *, :root[data-bg-motion="off"] .bgx *::before, .bg-paused .bgx *, .bg-paused .bgx *::before { animation-play-state: paused !important; }
+/* Cards stay readable over a backdrop: near-opaque surface, blur only over still backdrops */
+:root:not([data-bg="plain"]) .w:not(.weather) { background: color-mix(in oklab, var(--card) 90%, transparent); -webkit-backdrop-filter: blur(14px) saturate(1.1); backdrop-filter: blur(14px) saturate(1.1); }
+:root[data-bg-animated="true"] .w:not(.weather) { background: color-mix(in oklab, var(--card) 95%, transparent); -webkit-backdrop-filter: none; backdrop-filter: none; }
+:root:not([data-bg="plain"]) .icon-btn:not(.on) { background: color-mix(in oklab, var(--card) 85%, transparent); }
+/* Header: greeting + date on the left, edit on the right */
+.top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.top .icon-btn { flex: none; margin-top: 2px; }
+/* Background sheet */
+.bg-open .bgsheet { transform: none; visibility: visible; } .bg-open .sheet-bg { display: block; }
+.bgsheet h3 { font-size: calc(12px * var(--fs)); font-weight: 600; color: var(--muted); margin: 16px 4px 8px; letter-spacing: .02em; }
+.bgsheet .note { font-size: calc(12px * var(--fs)); color: var(--muted); margin: 0 4px; line-height: 1.45; }
+.swatches { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+@media (min-width: 560px) { .swatches { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+.swatch { display: grid; gap: 6px; text-align: center; font-size: calc(12px * var(--fs)); font-weight: 500; color: var(--muted); }
+.swatch .pv { position: relative; aspect-ratio: 3 / 4; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: var(--bg); }
+.swatch .pv .bgx { --bg-k: 1; }
+.swatch .pv b { position: absolute; left: 8px; right: 8px; height: 18%; border-radius: 6px; background: color-mix(in oklab, var(--card) 92%, transparent); box-shadow: 0 1px 2px oklch(0 0 0 / 8%); }
+.swatch .pv b:nth-of-type(1) { top: 14%; } .swatch .pv b:nth-of-type(2) { top: 38%; width: calc(50% - 12px); } .swatch .pv b:nth-of-type(3) { top: 38%; left: calc(50% + 4px); }
+.swatch .tag { position: absolute; top: 6px; right: 6px; z-index: 1; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: oklch(0 0 0 / 45%); color: #fff; }
+.swatch[aria-pressed="true"] { color: var(--text); font-weight: 600; }
+.swatch[aria-pressed="true"] .pv { outline: 2px solid var(--text); outline-offset: 2px; }
+.seg { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--card2); }
+.seg button { flex: 1; height: 34px; border-radius: 9px; font-size: calc(13px * var(--fs)); font-weight: 500; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 2px oklch(0 0 0 / 10%); }
+.seg button:disabled { opacity: .45; cursor: default; }
+.toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 4px; font-size: calc(14px * var(--fs)); }
+.switch { width: 46px; height: 28px; border-radius: 14px; background: var(--card2); border: 1px solid var(--line); position: relative; flex: none; }
+.switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--muted); transition: transform .18s; }
+.switch[aria-checked="true"] { background: var(--accent); border-color: transparent; }
+.switch[aria-checked="true"]::after { transform: translateX(18px); background: var(--accent-fg); }
 </style>
 </head>
 <body>
+<div class="bgx" id="bg" aria-hidden="true"></div>
 <div class="wrap" id="wrap">
-  <div class="bar-top">
-    <div class="brand"><span class="brand-mark" id="brandMark" aria-label="Home"></span></div>
-    <span class="pill" id="agentPill" data-agent-action="open_app:agent"><span class="dot"></span>Agent</span>
-    <span class="sp"></span>
-    <button class="icon-btn" id="themeBtn" aria-label="Switch light or dark" data-agent-action="set_theme"></button>
-    <button class="icon-btn" id="editBtn" aria-label="Edit Home" data-agent-action="edit_mode"></button>
-  </div>
-  <header class="top"><div class="hello" id="hello">Hello</div><div class="today" id="today"></div></header>
+  <header class="top"><div><div class="hello" id="hello">Hello</div><div class="today" id="today"></div></div><button class="icon-btn" id="editBtn" aria-label="Edit Home" data-agent-action="edit_mode"></button></header>
   <div class="section-label"><span>Widgets</span><button id="addInline" data-agent-action="open_add_sheet">+ Add</button></div>
   <main class="grid" id="grid" aria-live="polite"></main>
 </div>
-<div class="dock"><button class="btn" id="addBtn"></button><button class="btn pri" id="doneBtn">Done</button></div>
+<div class="dock"><button class="btn" id="bgBtn" data-agent-action="list_backgrounds"></button><button class="btn" id="addBtn"></button><button class="btn pri" id="doneBtn">Done</button></div>
 <div class="sheet-bg" id="sheetBg"></div>
 <section class="sheet" id="sheet" aria-label="Add a widget"><div class="grab"></div><h2>Add a widget</h2><div class="cat" id="cat"></div></section>
+<section class="sheet bgsheet" id="bgSheet" aria-label="Background"><div class="grab"></div><h2>Background</h2>
+  <p class="note" id="bgNote">Light or dark follows your phone. Every background works in both.</p>
+  <h3>Still</h3><div class="swatches" id="bgStill"></div>
+  <h3>Animated</h3><div class="swatches" id="bgAnim"></div>
+  <h3>Colour strength</h3><div class="seg" id="bgIntensity"></div>
+  <h3>Animation speed</h3><div class="seg" id="bgSpeed"></div>
+  <div class="toggle-row"><span>Animate backgrounds</span><button class="switch" id="bgMotion" role="switch" aria-label="Animate backgrounds"></button></div>
+</section>
 <div class="toast" id="toast" role="status"></div>
 <script>
 (() => {
@@ -321,6 +473,7 @@ const P = {
   chart: '<path d="M4 19.5h16M7 16v-5M12 16V7M17 16v-8"/>',
   list: '<path d="M9 7h11M9 12h11M9 17h11M4.5 7h.01M4.5 12h.01M4.5 17h.01"/>',
   code: '<path d="M8.5 7.5 4 12l4.5 4.5M15.5 7.5 20 12l-4.5 4.5M13.5 5l-3 14"/>',
+  palette: '<path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.8 1.8-1.7 0-1.3-1-1.6-1-2.6 0-.9.7-1.5 1.7-1.5h2.2a3.8 3.8 0 0 0 3.8-3.8C20.5 6.6 16.7 3.5 12 3.5z"/><circle cx="7.8" cy="11" r=".9" fill="currentColor"/><circle cx="10.5" cy="7.4" r=".9" fill="currentColor"/><circle cx="15" cy="7.6" r=".9" fill="currentColor"/>',
   edit: '<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   play: '<path d="M8 5.5v13l10-6.5z" fill="currentColor"/>',
@@ -629,13 +782,16 @@ function header() {
 }
 $('#editBtn').innerHTML = ic('edit');
 $('#addBtn').innerHTML = `${ic('plus')} Add widget`;
+$('#bgBtn').innerHTML = `${ic('palette')} Background`;
 function setEdit(on) { editing = on; document.body.classList.toggle('edit-on', on); grid.classList.toggle('edit', on); $('#editBtn').classList.toggle('on', on); $('#editBtn').innerHTML = ic(on ? 'check' : 'edit'); }
 $('#addInline').onclick = () => { setEdit(true); openSheet(true); };
 $('#editBtn').onclick = () => setEdit(!editing);
 $('#doneBtn').onclick = () => setEdit(false);
-const openSheet = (on) => document.body.classList.toggle('sheet-open', on);
+const openSheet = (on) => { if (on) document.body.classList.remove('bg-open'); document.body.classList.toggle('sheet-open', on); };
+const openBgSheet = (on) => { if (on) { document.body.classList.remove('sheet-open'); paintBgSheet(); } document.body.classList.toggle('bg-open', on); };
 $('#addBtn').onclick = () => openSheet(true);
-$('#sheetBg').onclick = () => openSheet(false);
+$('#bgBtn').onclick = () => openBgSheet(true);
+$('#sheetBg').onclick = () => { openSheet(false); openBgSheet(false); };
 $('#cat').innerHTML = Object.entries(TYPES).map(([id, t]) => `<button data-add="${id}"><span class="chip" style="--hue:var(--accent)">${ic(t.icon)}</span><b>${t.label}</b><small>${t.hint}</small></button>`).join('');
 $('#cat').onclick = (e) => {
   const b = e.target.closest('[data-add]'); if (!b) return;
@@ -674,46 +830,96 @@ grid.addEventListener('click', (e) => {
 let pressT = 0;
 grid.addEventListener('pointerdown', (e) => { if (editing || !e.target.closest('.w') || e.target.closest('button,a,iframe')) return; pressT = setTimeout(() => { setEdit(true); navigator.vibrate?.(12); }, 480); });
 ['pointerup', 'pointercancel', 'pointerleave', 'pointermove'].forEach((n) => grid.addEventListener(n, (e) => { if (n === 'pointermove' && Math.abs(e.movementY) + Math.abs(e.movementX) < 3) return; clearTimeout(pressT); }));
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { openSheet(false); setEdit(false); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { openSheet(false); openBgSheet(false); setEdit(false); } });
 
 
-/* ---------- Home settings (theme, text size, density, accent, greeting) ---------- */
+/* ---------- Home settings (background theme, text size, density, accent, greeting) ----------
+   Light/dark is not a setting: Home always follows the phone (prefers-color-scheme), live. */
 const PREFS_KEY = 'myapp.home.prefs.v1';
 const CMD_KEY = 'myapp.home.command.v1';
 const CMD_EVENT = 'myapp:home-command';
-const PREF_DEFAULTS = { theme: 'system', textSize: 'default', density: 'comfortable', accent: '', greeting: '' };
-function readPrefs() { const raw = (() => { try { return localStorage.getItem(PREFS_KEY); } catch { return null; } })(); return { raw, value: { ...PREF_DEFAULTS, ...(parse(raw, {}) || {}) } }; }
+const BG = window.__homeBg;
+const PREF_DEFAULTS = { textSize: 'default', density: 'comfortable', accent: '', greeting: '', background: 'plain', bgSpeed: 'normal', bgIntensity: 'normal', bgMotion: 'auto' };
+function cleanPrefs(raw) {
+  const p = { ...PREF_DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
+  delete p.theme; delete p.showAsk; // old settings: the theme switch and the Ask bar are gone
+  p.background = (BG.find(p.background) || BG.list[0]).id;
+  if (!BG.speeds.includes(p.bgSpeed)) p.bgSpeed = 'normal';
+  if (!BG.intensities.includes(p.bgIntensity)) p.bgIntensity = 'normal';
+  if (!BG.motions.includes(p.bgMotion)) p.bgMotion = 'auto';
+  return p;
+}
+function readPrefs() { const raw = (() => { try { return localStorage.getItem(PREFS_KEY); } catch { return null; } })(); return { raw, value: cleanPrefs(parse(raw, {})) }; }
 let { raw: lastPrefs, value: prefs } = readPrefs();
 const darkMq = matchMedia('(prefers-color-scheme: dark)');
+const reduceMq = matchMedia('(prefers-reduced-motion: reduce)');
+const bgCurrent = () => { const b = BG.find(prefs.background) || BG.list[0]; return { id: b.id, label: b.label, animated: b.animated, speed: prefs.bgSpeed, intensity: prefs.bgIntensity, motion: prefs.bgMotion, moving: b.animated && prefs.bgMotion !== 'off' && !reduceMq.matches }; };
+const bgLayers = (id) => {
+  if (id === 'aurora_flow') return '<i class="b1"></i><i class="b2"></i><i class="b3"></i>';
+  if (id === 'sunset_glow') return '<i class="g1"></i><i class="g2"></i>';
+  if (id === 'ocean_waves') return '<i class="gl"></i><i class="w1"></i><i class="w2"></i><i class="w3"></i>';
+  if (id === 'starry_night') return '<i class="m"></i><i class="s1"></i><i class="s2"></i><i class="sh"></i>';
+  if (id === 'bubbles') return [[6, 9, 17, -2, 1], [18, 5, 12, -9, 2], [29, 12, 21, -14, 3], [41, 6, 14, -5, 1], [52, 10, 19, -11, 2], [63, 4, 11, -3, 3], [72, 8, 16, -12, 1], [83, 11, 22, -6, 2], [91, 5, 13, -1, 3], [12, 7, 18, -16, 3], [47, 13, 24, -20, 1], [78, 6, 15, -18, 2]]
+    .map(([x, sz, d, dl, c]) => `<i style="--x:${x}%;--s:${sz}%;--d:${d}s;--dl:${dl}s;--c:var(--bg-c${c})"></i>`).join('');
+  return '';
+};
+let paintedBg = '';
 function applyPrefs() {
   const r = document.documentElement;
-  const dark = prefs.theme === 'dark' || (prefs.theme !== 'light' && darkMq.matches);
-  r.dataset.theme = dark ? 'dark' : 'light'; r.dataset.text = prefs.textSize; r.dataset.density = prefs.density;
+  BG.paint(prefs); // system light/dark + background colours, text size, density
   if (/^#[0-9a-f]{6}$/i.test(prefs.accent || '')) { r.style.setProperty('--user-accent', prefs.accent); r.style.setProperty('--user-accent-fg', '#fff'); }
   else { r.style.removeProperty('--user-accent'); r.style.removeProperty('--user-accent-fg'); }
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#09090b' : '#fafafa');
-  $('#themeBtn').innerHTML = ic(dark ? 'sun' : 'moon');
-  $('#themeBtn').setAttribute('aria-label', dark ? 'Switch to light' : 'Switch to dark');
+  const bg = $('#bg');
+  if (paintedBg !== prefs.background) { paintedBg = prefs.background; bg.dataset.bg = prefs.background; bg.innerHTML = bgLayers(prefs.background); }
+  if (document.body.classList.contains('bg-open')) paintBgSheet();
 }
+function swatch(b) {
+  const v = BG.vars(b.id, prefs.bgIntensity, darkMq.matches);
+  const style = Object.entries(v).map(([k, x]) => `${k}:${x}`).join(';');
+  return `<button class="swatch" data-bg-pick="${b.id}" aria-pressed="${prefs.background === b.id}" aria-label="${esc(b.label)}${b.animated ? ' (animated)' : ''}"><span class="pv">${b.animated ? '<span class="tag">Live</span>' : ''}<span class="bgx" data-bg="${b.id}" style="${style}">${bgLayers(b.id)}</span><b></b><b></b><b></b></span>${esc(b.label)}</button>`;
+}
+const seg = (list, cur, key, disabled) => list.map((x) => `<button data-${key}="${x}" aria-pressed="${cur === x}"${disabled ? ' disabled' : ''}>${x[0].toUpperCase() + x.slice(1)}</button>`).join('');
+function paintBgSheet() {
+  const cur = BG.find(prefs.background) || BG.list[0];
+  $('#bgStill').innerHTML = BG.list.filter((b) => !b.animated).map(swatch).join('');
+  $('#bgAnim').innerHTML = BG.list.filter((b) => b.animated).map(swatch).join('');
+  $('#bgIntensity').innerHTML = seg(BG.intensities, prefs.bgIntensity, 'bg-int', cur.id === 'plain');
+  $('#bgSpeed').innerHTML = seg(BG.speeds, prefs.bgSpeed, 'bg-speed', !cur.animated || prefs.bgMotion === 'off');
+  $('#bgMotion').setAttribute('aria-checked', String(prefs.bgMotion !== 'off'));
+  $('#bgNote').textContent = 'Light or dark follows your phone. Every background works in both.' + (reduceMq.matches ? ' Your phone asks for reduced motion, so animated backgrounds stay still.' : '');
+}
+$('#bgSheet').addEventListener('click', (e) => {
+  const pick = e.target.closest('[data-bg-pick]'), it = e.target.closest('[data-bg-int]'), sp = e.target.closest('[data-bg-speed]');
+  if (pick) prefs.background = pick.dataset.bgPick;
+  else if (it && !it.disabled) prefs.bgIntensity = it.dataset.bgInt;
+  else if (sp && !sp.disabled) prefs.bgSpeed = sp.dataset.bgSpeed;
+  else if (e.target.closest('#bgMotion')) prefs.bgMotion = prefs.bgMotion === 'off' ? 'auto' : 'off';
+  else return;
+  savePrefs(); paintBgSheet();
+});
 function savePrefs() { lastPrefs = JSON.stringify(prefs); try { localStorage.setItem(PREFS_KEY, lastPrefs); } catch {} applyPrefs(); header(); paintType('html'); }
-darkMq.addEventListener?.('change', () => { if (prefs.theme === 'system') { applyPrefs(); paintType('html'); } });
-$('#themeBtn').onclick = () => { prefs.theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; savePrefs(); };
-$('#brandMark').innerHTML = ic('grid');
-
-$('#agentPill').onclick = () => { location.href = './agent.html'; };
-function paintPill() {
-  const a = live.agent, on = DEMO || a?.ready;
-  $('#agentPill').innerHTML = `<span class="dot ${on ? 'live' : ''}"></span>${!kit() && !DEMO ? 'Preview' : on ? 'Agent online' : 'Agent idle'}`;
-}
+// Follow the phone's light/dark and reduced-motion settings live.
+darkMq.addEventListener?.('change', () => { applyPrefs(); paintType('html'); });
+reduceMq.addEventListener?.('change', () => { if (document.body.classList.contains('bg-open')) paintBgSheet(); });
+document.addEventListener('visibilitychange', () => document.documentElement.classList.toggle('bg-paused', document.visibilityState !== 'visible'));
 
 /* ---------- Agent control: one dispatcher for home_control commands and window.MyAppHome ---------- */
-const ACTIONS = ['get_state', 'set_theme', 'set_text_size', 'set_density', 'set_accent', 'set_greeting', 'stopwatch_start', 'stopwatch_pause', 'stopwatch_reset', 'stopwatch_lap', 'check_item', 'open_app', 'edit_mode', 'open_add_sheet', 'refresh', 'scroll_to'];
+const ACTIONS = ['get_state', 'list_backgrounds', 'set_background', 'set_background_speed', 'set_background_intensity', 'set_background_motion', 'set_text_size', 'set_density', 'set_accent', 'set_greeting', 'stopwatch_start', 'stopwatch_pause', 'stopwatch_reset', 'stopwatch_lap', 'check_item', 'open_app', 'edit_mode', 'open_add_sheet', 'refresh', 'scroll_to'];
 function only(type, id) { const all = layout.widgets.filter((w) => w.type === type); const w = id ? all.find((x) => x.id === id) : all.length === 1 ? all[0] : null; if (!w) throw new Error(`No single ${type} widget${id ? ` with id ${id}` : ''}.`); return w; }
 function runAction(action, a = {}) {
   const v = a.value;
   switch (action) {
-    case 'get_state': return { prefs, editing, widgets: layout.widgets.map((w) => ({ id: w.id, type: w.type, size: w.size, title: w.title })), stopwatches: swAll, actions: ACTIONS };
-    case 'set_theme': if (!['system', 'light', 'dark'].includes(v)) throw new Error('theme: system|light|dark'); prefs.theme = v; break;
+    case 'get_state': return { prefs, theme: 'system', systemDark: darkMq.matches, reducedMotion: reduceMq.matches, background: bgCurrent(), editing, widgets: layout.widgets.map((w) => ({ id: w.id, type: w.type, size: w.size, title: w.title })), stopwatches: swAll, actions: ACTIONS };
+    case 'list_backgrounds': return { current: bgCurrent(), backgrounds: BG.list.map((b) => ({ id: b.id, label: b.label, animated: b.animated, colors: b.colors })), options: { speed: BG.speeds, intensity: BG.intensities, motion: BG.motions } };
+    case 'set_background': {
+      const b = BG.find(v); if (!b) throw new Error(`background: ${BG.list.map((x) => x.id).join('|')}`);
+      const opt = (x, list, name) => { if (x == null || x === '') return undefined; if (!list.includes(x)) throw new Error(`${name}: ${list.join('|')}`); return x; };
+      const sp = opt(a.speed, BG.speeds, 'speed'), it = opt(a.intensity, BG.intensities, 'intensity'), mo = opt(a.motion, BG.motions, 'motion');
+      prefs.background = b.id; if (sp) prefs.bgSpeed = sp; if (it) prefs.bgIntensity = it; if (mo) prefs.bgMotion = mo; break;
+    }
+    case 'set_background_speed': if (!BG.speeds.includes(v)) throw new Error(`speed: ${BG.speeds.join('|')}`); prefs.bgSpeed = v; break;
+    case 'set_background_intensity': if (!BG.intensities.includes(v)) throw new Error(`intensity: ${BG.intensities.join('|')}`); prefs.bgIntensity = v; break;
+    case 'set_background_motion': if (!BG.motions.includes(v)) throw new Error(`motion: ${BG.motions.join('|')}`); prefs.bgMotion = v; break;
     case 'set_text_size': if (!['compact', 'default', 'large'].includes(v)) throw new Error('text size: compact|default|large'); prefs.textSize = v; break;
     case 'set_density': if (!['comfortable', 'compact'].includes(v)) throw new Error('density: comfortable|compact'); prefs.density = v; break;
     case 'set_accent': if (v && !/^#[0-9a-f]{6}$/i.test(v)) throw new Error('accent: #rrggbb'); prefs.accent = v || ''; break;
@@ -736,6 +942,7 @@ function runAction(action, a = {}) {
     case 'open_add_sheet': setEdit(true); openSheet(true); return { sheet: true };
     case 'refresh': Object.keys(cache).forEach((k) => { if (cache[k]) cache[k].at = 0; }); refresh(); return { refreshed: true };
     case 'scroll_to': { const el = grid.querySelector(`[data-id="${CSS.escape(String(a.id || ''))}"]`); if (!el) throw new Error('no widget with that id'); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); return { id: a.id }; }
+    case 'set_theme': throw new Error("Home always follows the phone's light/dark setting. Use set_background to change the look.");
     default: throw new Error(`Unknown action ${action}. Use one of ${ACTIONS.join(', ')}.`);
   }
   savePrefs(); return { prefs };
@@ -803,12 +1010,12 @@ async function refresh() {
   if (!DEMO) {
     if (types.has('alarms') || types.has('clock')) jobs.push(readAlarms().then(() => { paintType('alarms'); paintType('clock'); }));
     if (types.has('battery')) jobs.push(readBattery().then(() => paintType('battery')));
-    jobs.push(readAgent().then(() => { paintType('agent'); paintPill(); }));
+    jobs.push(readAgent().then(() => paintType('agent')));
   }
   await Promise.allSettled(jobs);
 }
 render();
-paintPill();
+
 refresh();
 checkCommand();
 try { localStorage.setItem(SEEN_KEY, String(layout.updatedAt)); } catch {}

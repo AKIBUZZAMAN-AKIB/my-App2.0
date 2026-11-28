@@ -341,27 +341,81 @@ export const HOME_COMMAND_KEY = 'myapp.home.command.v1';
 export const HOME_STOPWATCH_KEY = 'myapp.home.stopwatch.v1';
 export const HOME_COMMAND_EVENT = 'myapp:home-command';
 
-export type HomeTheme = 'system' | 'light' | 'dark';
 export type HomeTextSize = 'compact' | 'default' | 'large';
 export type HomeDensity = 'comfortable' | 'compact';
 
+// ── Background themes ────────────────────────────────────────────────────────
+// Home always follows the phone's light/dark setting; there is no theme switch.
+// What the user (or the agent) picks is the backdrop behind the widgets: the
+// browser's start-page backdrops (Plain, Aurora, Sunset, Ocean, Forest, Dusk)
+// plus animated ones. Colours are blended into the light or dark ground, so
+// every backdrop works in both modes. www/home.html mirrors this catalogue.
+
+export interface HomeBackground {
+  id: string;
+  label: string;
+  animated: boolean;
+  /** theme colours as #rrggbb; empty for Plain (the light/dark ground) */
+  colors: readonly string[];
+  description: string;
+}
+
+export const HOME_BACKGROUNDS = [
+  { id: 'plain', label: 'Plain', animated: false, colors: [], description: 'The plain light or dark ground.' },
+  { id: 'aurora', label: 'Aurora', animated: false, colors: ['#6366f1', '#14b8a6'], description: 'Indigo to teal gradient.' },
+  { id: 'sunset', label: 'Sunset', animated: false, colors: ['#f97316', '#ec4899'], description: 'Orange to pink gradient.' },
+  { id: 'ocean', label: 'Ocean', animated: false, colors: ['#0ea5e9', '#2563eb'], description: 'Sky to deep blue gradient.' },
+  { id: 'forest', label: 'Forest', animated: false, colors: ['#22c55e', '#0d9488'], description: 'Green to teal gradient.' },
+  { id: 'dusk', label: 'Dusk', animated: false, colors: ['#8b5cf6', '#1e293b'], description: 'Violet to slate gradient.' },
+  { id: 'aurora_flow', label: 'Aurora flow', animated: true, colors: ['#6366f1', '#14b8a6', '#a78bfa'], description: 'Soft aurora lights drifting slowly.' },
+  { id: 'sunset_glow', label: 'Sunset glow', animated: true, colors: ['#f97316', '#ec4899', '#f59e0b'], description: 'Warm glow turning slowly.' },
+  { id: 'ocean_waves', label: 'Ocean waves', animated: true, colors: ['#0ea5e9', '#2563eb', '#06b6d4'], description: 'Layered waves rolling along the bottom.' },
+  { id: 'bubbles', label: 'Bubbles', animated: true, colors: ['#8b5cf6', '#3b82f6', '#ec4899'], description: 'Bubbles rising gently.' },
+  { id: 'starry_night', label: 'Starry night', animated: true, colors: ['#4338ca', '#1e293b', '#a5b4fc'], description: 'Twinkling stars over a deep sky.' },
+] as const satisfies readonly HomeBackground[];
+
+export type HomeBackgroundId = (typeof HOME_BACKGROUNDS)[number]['id'];
+export const HOME_BACKGROUND_IDS = HOME_BACKGROUNDS.map((b) => b.id) as HomeBackgroundId[];
+export const HOME_BG_SPEEDS = ['slow', 'normal', 'fast'] as const;
+export const HOME_BG_INTENSITIES = ['subtle', 'normal', 'vivid'] as const;
+/** auto = animate unless the phone asks for reduced motion; off = always still. */
+export const HOME_BG_MOTIONS = ['auto', 'off'] as const;
+export type HomeBgSpeed = (typeof HOME_BG_SPEEDS)[number];
+export type HomeBgIntensity = (typeof HOME_BG_INTENSITIES)[number];
+export type HomeBgMotion = (typeof HOME_BG_MOTIONS)[number];
+
+export function findHomeBackground(id: unknown): HomeBackground | undefined {
+  const key = typeof id === 'string' ? id.trim().toLowerCase().replace(/[\s-]+/g, '_') : '';
+  return HOME_BACKGROUNDS.find((b) => b.id === key || b.label.toLowerCase().replace(/\s+/g, '_') === key);
+}
+
 export interface HomePrefs {
-  theme: HomeTheme;
   textSize: HomeTextSize;
   density: HomeDensity;
   /** hex accent used for buttons and highlights; empty = the agent app's neutral primary */
   accent: string;
   greeting: string;
+  background: HomeBackgroundId;
+  bgSpeed: HomeBgSpeed;
+  bgIntensity: HomeBgIntensity;
+  bgMotion: HomeBgMotion;
 }
 
-export const DEFAULT_HOME_PREFS: HomePrefs = { theme: 'system', textSize: 'default', density: 'comfortable', accent: '', greeting: '' };
+export const DEFAULT_HOME_PREFS: HomePrefs = {
+  textSize: 'default', density: 'comfortable', accent: '', greeting: '',
+  background: 'plain', bgSpeed: 'normal', bgIntensity: 'normal', bgMotion: 'auto',
+};
 
 export const HOME_APP_IDS = ['agent', 'calendar', 'browser', 'notes', 'reminder', 'habits', 'academic', 'store', 'more'] as const;
 
 /** Every action home_control accepts, with what it needs. Shown to the model in the tool description. */
 export const HOME_CONTROL_ACTIONS = {
-  get_state: 'Read Home settings, the layout summary and each stopwatch/timer state.',
-  set_theme: 'value: "system" | "light" | "dark".',
+  get_state: 'Read Home settings (including the background), the layout summary and each stopwatch/timer state.',
+  list_backgrounds: 'List every background theme (static and animated) with its options, and the one in use.',
+  set_background: 'value: background id from list_backgrounds (' + HOME_BACKGROUND_IDS.join(', ') + '); optional speed, intensity, motion in the same call.',
+  set_background_speed: 'value: "slow" | "normal" | "fast" — how fast an animated background moves.',
+  set_background_intensity: 'value: "subtle" | "normal" | "vivid" — how strong the background colours are.',
+  set_background_motion: 'value: "auto" (animate unless the phone asks for reduced motion) | "off" (keep animated backgrounds still).',
   set_text_size: 'value: "compact" | "default" | "large" — scales every font on Home.',
   set_density: 'value: "comfortable" | "compact" — spacing between and inside widgets.',
   set_accent: 'value: hex colour like "#6366f1", or "" for the default neutral accent.',
@@ -400,24 +454,43 @@ export function parseHomePrefs(json: string | null | undefined): HomePrefs {
   try { raw = json ? JSON.parse(json) : null; } catch { raw = null; }
   const p = { ...DEFAULT_HOME_PREFS };
   if (!raw || typeof raw !== 'object') return p;
-  if (['system', 'light', 'dark'].includes(raw.theme)) p.theme = raw.theme;
   if (['compact', 'default', 'large'].includes(raw.textSize)) p.textSize = raw.textSize;
   if (['comfortable', 'compact'].includes(raw.density)) p.density = raw.density;
   if (typeof raw.accent === 'string' && (raw.accent === '' || /^#[0-9a-f]{6}$/i.test(raw.accent))) p.accent = raw.accent;
   if (typeof raw.greeting === 'string') p.greeting = raw.greeting.slice(0, 40);
+  const bg = findHomeBackground(raw.background);
+  if (bg) p.background = bg.id as HomeBackgroundId;
+  if ((HOME_BG_SPEEDS as readonly string[]).includes(raw.bgSpeed)) p.bgSpeed = raw.bgSpeed;
+  if ((HOME_BG_INTENSITIES as readonly string[]).includes(raw.bgIntensity)) p.bgIntensity = raw.bgIntensity;
+  if ((HOME_BG_MOTIONS as readonly string[]).includes(raw.bgMotion)) p.bgMotion = raw.bgMotion;
   return p;
 }
 
-export function applyPref(prefs: HomePrefs, action: HomeControlAction, value: unknown): HomePrefs {
+export interface HomeBackgroundOptions { speed?: unknown; intensity?: unknown; motion?: unknown }
+
+export function applyPref(prefs: HomePrefs, action: HomeControlAction, value: unknown, options: HomeBackgroundOptions = {}): HomePrefs {
   const next = { ...prefs };
-  const pick = <T extends string>(allowed: readonly T[], label: string): T => {
-    if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value)) throw new Error(`${label} must be one of ${allowed.join(', ')}.`);
-    return value as T;
+  const pickFrom = <T extends string>(v: unknown, allowed: readonly T[], label: string): T => {
+    if (typeof v !== 'string' || !(allowed as readonly string[]).includes(v)) throw new Error(`${label} must be one of ${allowed.join(', ')}.`);
+    return v as T;
   };
+  const pick = <T extends string>(allowed: readonly T[], label: string): T => pickFrom(value, allowed, label);
+  const given = (v: unknown) => v !== undefined && v !== null && v !== '';
   switch (action) {
-    case 'set_theme': next.theme = pick(['system', 'light', 'dark'] as const, 'value'); break;
     case 'set_text_size': next.textSize = pick(['compact', 'default', 'large'] as const, 'value'); break;
     case 'set_density': next.density = pick(['comfortable', 'compact'] as const, 'value'); break;
+    case 'set_background': {
+      const bg = findHomeBackground(value);
+      if (!bg) throw new Error(`value must be a background id: ${HOME_BACKGROUND_IDS.join(', ')}.`);
+      next.background = bg.id as HomeBackgroundId;
+      if (given(options.speed)) next.bgSpeed = pickFrom(options.speed, HOME_BG_SPEEDS, 'speed');
+      if (given(options.intensity)) next.bgIntensity = pickFrom(options.intensity, HOME_BG_INTENSITIES, 'intensity');
+      if (given(options.motion)) next.bgMotion = pickFrom(options.motion, HOME_BG_MOTIONS, 'motion');
+      break;
+    }
+    case 'set_background_speed': next.bgSpeed = pick(HOME_BG_SPEEDS, 'value'); break;
+    case 'set_background_intensity': next.bgIntensity = pick(HOME_BG_INTENSITIES, 'value'); break;
+    case 'set_background_motion': next.bgMotion = pick(HOME_BG_MOTIONS, 'value'); break;
     case 'set_accent': {
       const v = typeof value === 'string' ? value.trim() : '';
       if (v !== '' && !/^#[0-9a-f]{6}$/i.test(v)) throw new Error('value must be a hex colour like #6366f1, or "" for the default.');
@@ -468,6 +541,17 @@ export function checkItem(layout: HomeLayout, id: unknown, index: unknown, done:
   const next = { ...widget, config: { ...widget.config, items } };
   const widgets = layout.widgets.map((w) => (w.id === widget.id ? next : w));
   return { layout: { ...layout, widgets, updatedAt: now, updatedBy: 'agent' }, widget: next, item: items[i] };
+}
+
+/** What list_backgrounds returns: the catalogue, the options and the current choice. */
+export function describeHomeBackgrounds(prefs: HomePrefs) {
+  const current = findHomeBackground(prefs.background) ?? HOME_BACKGROUNDS[0];
+  return {
+    current: { id: current.id, label: current.label, animated: current.animated, speed: prefs.bgSpeed, intensity: prefs.bgIntensity, motion: prefs.bgMotion },
+    backgrounds: HOME_BACKGROUNDS.map((b) => ({ id: b.id, label: b.label, animated: b.animated, colors: b.colors, description: b.description })),
+    options: { speed: HOME_BG_SPEEDS, intensity: HOME_BG_INTENSITIES, motion: HOME_BG_MOTIONS },
+    note: 'Light or dark always follows the phone setting; backgrounds adapt to both. Animated backgrounds stay still when the phone asks for reduced motion.',
+  };
 }
 
 export function makeCommand(action: HomeControlAction, args: Record<string, unknown>, now = Date.now()): HomeCommand {
