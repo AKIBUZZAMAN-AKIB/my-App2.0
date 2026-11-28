@@ -2352,7 +2352,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             })
             .cloned()
             .ok_or_else(|| format!("No sub-agent '{t}' in this chat."))?;
-        let msg = format!("[Message from the user, routed by steer]\n{text}");
+        let msg = format!("[Message from the user, routed by steer]\n\n{text}");
         if let Some(live) = self.live.lock().unwrap().get(&rec.id) {
             live.steer_tx
                 .send(msg)

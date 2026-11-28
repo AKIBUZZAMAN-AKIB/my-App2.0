@@ -159,6 +159,7 @@ fn apply_patch_tx_keeps_user_checklists_read_only_and_supersedes_the_plan() {
     let db = path.to_str().unwrap();
     let conn = Connection::open(db).unwrap();
     crate::db::ensure_schema(&conn).unwrap();
+    crate::context_tree::store::ensure_tables(&conn).unwrap();
     crate::context_tree::store::put_strategy(&conn, "s", "old plan: step 1 done, step 2", None, 1).unwrap();
     let env = SteerEnvelope::new("x");
     inbox_insert(&conn, "s", &env, "accepted").unwrap();

@@ -77,7 +77,7 @@ async function run(browser, size, dark) {
   await sleep(80);
   const both = (await visible(p, '.aui-composer-steer')) && (await visible(p, '.aui-composer-update')) && (await visible(p, '.aui-composer-queue'));
   ck(`${tag} running with text: Steer and Update show beside Queue`, both);
-  const order = await p.evaluate(() => { const end = document.querySelector('.aui-composer-action-end'); return [...end.children].filter((e) => !e.hidden).map((e) => e.className.match(/aui-composer-(\w+)/)?.[1]); });
+  const order = await p.evaluate(() => { const end = document.querySelector('.aui-composer-action-end'); return [...end.children].filter((e) => !e.hidden).map((e) => e.className.match(/aui-composer-(steer|update|queue)\b/)?.[1]); });
   ck(`${tag} order is Steer, Update, Queue`, order.indexOf('steer') >= 0 && order.indexOf('steer') < order.indexOf('update') && order.indexOf('update') < order.indexOf('queue'), order.join(','));
   const fit = await p.evaluate(() => [...document.querySelectorAll('.aui-composer-steer, .aui-composer-update, .aui-composer-queue')].every((b) => { const r = b.getBoundingClientRect(); return r.right <= innerWidth + 0.5 && r.width >= 28; }));
   ck(`${tag} the buttons fit on screen`, fit);
@@ -145,8 +145,15 @@ async function run(browser, size, dark) {
   // Send as message.
   await p.locator(`.st-bubble[data-steer-id="${upd?.id}"] [data-action="steer-resend"]`).click();
   await sleep(250);
-  const resent = await p.evaluate(() => [...window.__mock.calls].reverse().find((c) => c.name === 'agent.sendMessage' || c.name === 'agent.followUp' || c.name === 'agent.resumeSession'));
-  ck(`${tag} Send as message sends it as a normal message`, !!resent && JSON.stringify(resent.args).includes('make it a table instead'), JSON.stringify(resent));
+  // The queued Enter message started a new reply when the turn ended, so the re-sent steer
+  // either went out or waits in the queue as a normal message, never as a steer.
+  const resent = await p.evaluate(() => ({
+    sent: window.__mock.calls.some((c) => /^agent\.(sendMessage|followUp|resumeSession)$/.test(c.name) && JSON.stringify(c.args).includes('make it a table instead')),
+    queued: [...document.querySelectorAll('.aui-queue')].some((q) => q.innerText.includes('make it a table instead')),
+    steered: window.__steers.filter((x) => x.text === 'make it a table instead').length,
+    bubble: !!document.querySelector('.st-bubble[data-status="unapplied"]'),
+  }));
+  ck(`${tag} Send as message sends it as a normal message`, (resent.sent || resent.queued) && resent.steered === 1 && !resent.bubble, JSON.stringify(resent));
 
   const overflow = await p.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
   ck(`${tag} no horizontal overflow`, !overflow);

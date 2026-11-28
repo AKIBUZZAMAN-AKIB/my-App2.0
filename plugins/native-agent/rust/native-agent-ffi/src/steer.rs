@@ -1255,6 +1255,9 @@ fn apply_inner(conn: &Connection, session_key: &str, p: &SteerPatch) -> Result<A
     use crate::context_tree::{ops, store};
     let mut out = ApplyOutcome::default();
     let now = now_ms();
+    if !p.ctx_ops.is_empty() || p.plan_edit.is_some() {
+        store::ensure_tables(conn).map_err(|e| e.to_string())?;
+    }
     // Context ops, minus anything on the user's own checklists.
     let raw: Vec<Value> = p
         .ctx_ops
