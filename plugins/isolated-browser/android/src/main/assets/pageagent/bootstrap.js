@@ -534,6 +534,18 @@
   var launcher = null;
   var launcherBusy = false;
   var launcherPos = null; // {x, y} once dragged
+  var launcherOpen = false; // panel open -> launcher becomes the close handle
+  try {
+    var savedPos = JSON.parse(window.sessionStorage.getItem('__nkAgentLauncherPos') || 'null');
+    if (savedPos && typeof savedPos.x === 'number' && typeof savedPos.y === 'number') launcherPos = savedPos;
+  } catch (error) { /* storage blocked */ }
+
+  function launcherCloseIcon() {
+    return svgEl('path', {
+      d: 'M9 6l6 6-6 6', fill: 'none', stroke: '#ffffff', 'stroke-width': '2.6',
+      'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+    });
+  }
 
   function launcherIcon() {
     return svgEl('path', {
@@ -562,21 +574,26 @@
     if (!launcher) return;
     while (launcher.firstChild) launcher.removeChild(launcher.firstChild);
     var svg = svgEl('svg', { width: '26', height: '26', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
-    svg.appendChild(launcherBusy ? launcherSpinner() : launcherIcon());
+    svg.appendChild(launcherBusy ? launcherSpinner() : (launcherOpen ? launcherCloseIcon() : launcherIcon()));
     launcher.appendChild(svg);
+    launcher.setAttribute('aria-label', launcherOpen ? 'Hide the AI page agent' : 'Open the AI page agent');
   }
 
+  // Floating bubble: ALWAYS visible (\"floating ta active and shown\"),
+  // draggable, snaps to the nearest side, remembered for the tab session.
+  // While the docked panel is open it parks on the panel's left edge and
+  // turns into its close handle, so it never covers the agent's input.
   function applyLauncherPosition() {
     if (!launcher) return;
-    if (!launcherPos && cfg.dock === 'side') {
-      // Edge handle: a slim tab on the right edge, vertically centred. It reads
-      // as part of the browser chrome instead of a random floating bubble, and
-      // it is the always-available way back into the agent panel.
-      applyStyles(launcher, {
-        position: 'fixed', right: '0', top: '50%', left: 'auto', bottom: 'auto',
-        width: '34px', height: '84px', borderRadius: '16px 0 0 16px',
-        transform: 'translateY(-50%)', boxShadow: '-4px 0 16px rgba(0, 0, 0, 0.35)',
-      });
+    launcher.style.transform = 'none';
+    launcher.style.width = '52px';
+    launcher.style.height = '52px';
+    launcher.style.borderRadius = '50%';
+    if (launcherOpen && cfg.dock === 'side') {
+      launcher.style.left = 'auto';
+      launcher.style.bottom = 'auto';
+      launcher.style.top = 'calc(50% - 26px)';
+      launcher.style.right = 'calc(min(88vw, 380px) - 26px)';
       return;
     }
     if (launcherPos) {
@@ -587,9 +604,18 @@
     } else {
       launcher.style.left = 'auto';
       launcher.style.top = 'auto';
-      launcher.style.right = '16px';
-      launcher.style.bottom = '24px';
+      launcher.style.right = '14px';
+      launcher.style.bottom = '96px';
     }
+  }
+
+  function snapLauncher() {
+    if (!launcherPos) return;
+    var middle = launcherPos.x + 26;
+    launcherPos.x = middle < window.innerWidth / 2 ? 10 : window.innerWidth - 62;
+    launcherPos.y = Math.max(10, Math.min(window.innerHeight - 62, launcherPos.y));
+    try { window.sessionStorage.setItem('__nkAgentLauncherPos', JSON.stringify(launcherPos)); } catch (error) { /* optional */ }
+    applyLauncherPosition();
   }
 
   function ensureLauncher() {
@@ -603,7 +629,8 @@
     applyStyles(button, {
       position: 'fixed', width: '52px', height: '52px', margin: '0', padding: '0',
       border: 'none', borderRadius: '50%',
-      background: '#2563eb', color: '#ffffff',
+      background: 'linear-gradient(135deg, #2563eb, #7c3aed)', color: '#ffffff',
+      transition: 'left 180ms ease, top 180ms ease, right 220ms ease',
       boxShadow: '0 4px 14px rgba(0, 0, 0, 0.35)',
       cursor: 'pointer', zIndex: '2147483647',
       display: 'none', alignItems: 'center', justifyContent: 'center',
@@ -634,7 +661,8 @@
     function endTap(event) {
       if (!dragging) return;
       dragging = false;
-      if (!moved) showPanel();
+      if (moved) { snapLauncher(); return; }
+      if (launcherOpen) dockHide(); else showPanel();
     }
     // In dock mode the launcher is the always-available way back into the panel.
     button.addEventListener('pointerup', endTap);
@@ -649,12 +677,40 @@
 
   function showLauncher() {
     var node = ensureLauncher();
-    if (node) node.style.display = 'flex';
+    launcherOpen = false;
+    if (node) {
+      node.style.display = 'flex';
+      renderLauncherIcon();
+      applyLauncherPosition();
+    }
   }
 
+  // The launcher is never hidden any more: with the panel open it becomes
+  // the panel's close handle (and stays on top of it).
   function hideLauncher() {
-    if (launcher) launcher.style.display = 'none';
+    var node = ensureLauncher();
+    launcherOpen = cfg.dock === 'side';
+    if (node) {
+      node.style.display = 'flex';
+      if (node.parentNode) node.parentNode.appendChild(node);
+      renderLauncherIcon();
+      applyLauncherPosition();
+    }
   }
+
+  // SPAs that re-render <body> drop foreign nodes: keep the bubble alive.
+  setInterval(function () {
+    if (!document.body) return;
+    if (!launcher || !launcher.isConnected) {
+      launcher = null;
+      var wasOpen = launcherOpen;
+      ensureLauncher();
+      if (wasOpen) hideLauncher(); else showLauncher();
+    } else if (launcher.style.display === 'none') {
+      launcher.style.display = 'flex';
+    }
+  }, 2000);
+  window.addEventListener('resize', function () { if (launcherPos) snapLauncher(); else applyLauncherPosition(); });
 
   function setLauncherBusy(busy) {
     launcherBusy = !!busy;

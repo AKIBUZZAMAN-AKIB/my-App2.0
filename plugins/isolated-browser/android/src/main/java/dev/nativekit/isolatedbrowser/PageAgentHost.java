@@ -147,6 +147,19 @@ public final class PageAgentHost {
         }
     }
 
+    /**
+     * Toggles the docked agent panel from the native browser toolbar/menu.
+     * One-way native -> page call into the bootstrap's own host bridge; the
+     * page gains no channel back into native code from this.
+     */
+    public static void togglePanel(WebView webView) {
+        if (webView == null) return;
+        try {
+            webView.evaluateJavascript(
+                "(function(){var p=window.__nativekitAgentPanel;return p?p.toggle():null;})()", null);
+        } catch (Throwable ignored) { /* page not ready */ }
+    }
+
     private void onPageMessage(@NonNull WebView view, @NonNull WebMessageCompat message, @NonNull Uri sourceOrigin, boolean isMainFrame, @NonNull JavaScriptReplyProxy proxy) {
         if (!installed || !isMainFrame) return;
         String data = message.getData();
