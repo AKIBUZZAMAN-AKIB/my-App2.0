@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Screen recording (MediaProjection) from the browser's menu. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <application>
     <service
       android:name="dev.nativekit.isolatedbrowser.IsolatedBrowserBrokerService"
@@ -26,6 +30,14 @@
       android:name="dev.nativekit.isolatedbrowser.IsolatedStorageCleanupService"
       android:process=":nativekit_isolated"
       android:exported="false"
+      android:stopWithTask="false" />
+    <!-- Same process as RemoteBrowserActivity: it receives the projection
+         consent and shows the REC pill through a static hook. -->
+    <service
+      android:name="dev.nativekit.isolatedbrowser.ScreenRecordService"
+      android:process=":nativekit_isolated"
+      android:exported="false"
+      android:foregroundServiceType="mediaProjection"
       android:stopWithTask="false" />
     <activity
       android:name="dev.nativekit.isolatedbrowser.RemoteBrowserActivity"
