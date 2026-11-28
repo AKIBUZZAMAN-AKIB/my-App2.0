@@ -98,7 +98,9 @@ const AgentWorkflows = (() => {
     return e.loop ? `↺ ${t}`.trim() : t;
   }
   /** Layered layout: longest path over the forward edges, then rows in order. */
-  function autoLayout(wf) {
+  // Narrow screens (phones) stack the layers top to bottom, so the graph stays readable without zooming out to a strip.
+  const narrow = () => typeof window !== 'undefined' && (window.innerWidth || 1024) < 560;
+  function autoLayout(wf, vertical = narrow()) {
     const fwd = wf.edges.filter((e) => !e.loop);
     const layer = new Map();
     const indeg = new Map(wf.nodes.map((n) => [n.id, 0]));
@@ -118,13 +120,14 @@ const AgentWorkflows = (() => {
       const l = layer.has(n.id) ? layer.get(n.id) : 0;
       const r = rows.get(l) || 0;
       rows.set(l, r + 1);
-      n.position = { x: 40 + l * 260, y: 40 + r * 120 };
+      n.position = vertical ? { x: 40 + r * (NODE_W + 28), y: 40 + l * (NODE_H + 70) } : { x: 40 + l * 260, y: 40 + r * 120 };
     }
-    // Centre each column on the tallest one.
+    // Centre each column (or row) on the biggest one.
     const tallest = Math.max(1, ...rows.values());
     for (const n of wf.nodes) {
       const l = layer.has(n.id) ? layer.get(n.id) : 0;
-      n.position.y += ((tallest - rows.get(l)) * 120) / 2;
+      if (vertical) n.position.x += ((tallest - rows.get(l)) * (NODE_W + 28)) / 2;
+      else n.position.y += ((tallest - rows.get(l)) * 120) / 2;
     }
   }
 
@@ -449,6 +452,18 @@ const AgentWorkflows = (() => {
       const a = nodeById(e.from);
       const b = nodeById(e.to);
       if (!a || !b) return { d: '', mx: 0, my: 0 };
+      // Stacked (top-to-bottom layout): the target sits below or above the source, overlapping it sideways.
+      if (Math.abs(b.position.x - a.position.x) < NODE_W + 10 && Math.abs(b.position.y - a.position.y) >= NODE_H) {
+        if (!e.loop && b.position.y > a.position.y) {
+          const sx = a.position.x + NODE_W / 2, sy = a.position.y + NODE_H, tx = b.position.x + NODE_W / 2, ty = b.position.y;
+          const dy = Math.max(30, (ty - sy) / 2);
+          return { d: `M${sx},${sy} C${sx},${sy + dy} ${tx},${ty - dy} ${tx},${ty}`, mx: (sx + tx) / 2, my: (sy + ty) / 2 };
+        }
+        // Back edge in a stack: out of the right side, round the right, into the target's right side.
+        const sx = a.position.x + NODE_W, sy = a.position.y + NODE_H / 2, tx = b.position.x + NODE_W, ty = b.position.y + NODE_H / 2;
+        const side = Math.max(sx, tx) + 56;
+        return { d: `M${sx},${sy} C${side},${sy} ${side},${ty} ${tx},${ty}`, mx: side - 14, my: (sy + ty) / 2 };
+      }
       const ax = a.position.x + NODE_W;
       const ay = a.position.y + NODE_H / 2;
       const bx = b.position.x;
@@ -618,8 +633,11 @@ const AgentWorkflows = (() => {
       const y0 = Math.min(...ys) - 30;
       const x1 = Math.max(...xs) + NODE_W + 30;
       const y1 = Math.max(...ys) + NODE_H + 80;
-      const k = clamp(Math.min(b.width / (x1 - x0), b.height / (y1 - y0)), MIN_K, 1.2);
-      view = { k, x: (b.width - (x1 - x0) * k) / 2 - x0 * k, y: (b.height - (y1 - y0) * k) / 2 - y0 * k };
+      // Never shrink below a readable size (a phone got a 35% strip): what does not fit starts at its top-left, and you pan to the rest.
+      const minK = b.width < 560 ? 0.62 : 0.5;
+      const k = clamp(Math.min(b.width / (x1 - x0), b.height / (y1 - y0), 1.2), minK, 1.2);
+      const gw = (x1 - x0) * k, gh = (y1 - y0) * k;
+      view = { k, x: gw <= b.width ? (b.width - gw) / 2 - x0 * k : 8 - x0 * k, y: gh <= b.height ? (b.height - gh) / 2 - y0 * k : 8 - y0 * k };
       applyView();
     }
     const local = (ev) => { const b = canvas.getBoundingClientRect(); return { x: ev.clientX - b.left, y: ev.clientY - b.top }; };

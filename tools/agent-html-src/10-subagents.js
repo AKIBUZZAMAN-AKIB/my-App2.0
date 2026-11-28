@@ -655,6 +655,9 @@ const Subagents = (() => {
     appRef = app || appRef;
     if (openDialogRef?.panel?.isConnected) { openDialogRef.go(tab, id, wantTab); return openDialogRef; }
     let current = id ? 'detail' : tab;
+    // Workflows live in the Explorer now (its Workflow view); old links to the Workflows tab land there.
+    let explorerWantView = null;
+    if (current === 'workflows') { current = 'explorer'; explorerWantView = 'workflow'; }
     let detailId = id;
     // Which per-agent tab the detail shows (Overview keeps the full page).
     const tabOk = (t) => typeof AgentTabs !== 'undefined' && AgentTabs.has(t);
@@ -683,12 +686,13 @@ const Subagents = (() => {
     let alive = true;
     const body = h('div', { class: 'sa-screen' });
     // Built on every paint: the Swarm tab comes and goes with the engine's subagentSwarm feature.
-    const tabsNow = () => [['agents', 'Agents'], ...(advancedOn() ? [['explorer', 'Explorer']] : []), ['diagram', 'Diagram'], ...(workflowsOn() ? [['workflows', 'Workflows']] : []), ...(swarmOn() ? [['swarm', 'Swarm']] : []), ['presets', 'Presets'], ['settings', 'Limits']];
+    const tabsNow = () => [['agents', 'Agents'], ...(advancedOn() || workflowsOn() ? [['explorer', 'Explorer']] : []), ['diagram', 'Diagram'], ...(swarmOn() ? [['swarm', 'Swarm']] : []), ['presets', 'Presets'], ['settings', 'Limits']];
     const tablist = h('div', { class: 'segmented sa-tabs', role: 'tablist', 'aria-label': 'Agents sections' });
     const panel = h('div', { class: 'sa-panel', role: 'tabpanel', id: `sa-panel-${uid(5)}` });
     const go = (t, d, at = null) => {
       // An agent's old swarm tabs now live in the panel's Swarm tab.
       if (isSwarmTab(at)) { swarmSection = at; swarmFocus = d || null; t = 'swarm'; d = null; at = null; }
+      if (t === 'workflows') { t = 'explorer'; explorerWantView = 'workflow'; }
       if (t === 'swarm' && !swarmOn()) t = 'agents';
       if (t !== 'swarm' && !d) swarmFocus = null;
       // Another agent opens on its Overview unless a tab is asked for.
@@ -733,7 +737,7 @@ const Subagents = (() => {
       }));
     }
     let tabSig = '';
-    const paintTabsLive = () => { const sig = JSON.stringify([swarmOn(), advancedOn(), pinned.map((x) => [x, records.get(x)?.status, records.get(x)?.title])]); if (sig !== tabSig) { tabSig = sig; paintTabs(); } };
+    const paintTabsLive = () => { const sig = JSON.stringify([swarmOn(), advancedOn(), workflowsOn(), pinned.map((x) => [x, records.get(x)?.status, records.get(x)?.title])]); if (sig !== tabSig) { tabSig = sig; paintTabs(); } };
 
     let lastListSig = '';
     // The native tree is cheap to rebuild, so the Diagram tab repaints on the next frame of every
@@ -1447,16 +1451,23 @@ const Subagents = (() => {
        filters, replay, waits-for and message edges, batches and per-node control. */
     let explorer = null;
     function paintExplorer(force) {
+      if (!advancedOn() && workflowsOn()) {
+        // No batches engine: the Explorer is the workflow graph alone.
+        explorer = null; explorerWantView = null;
+        if (force || panel.firstChild !== workflowsView?.root) paintWorkflows();
+        return;
+      }
       if (!advancedOn()) {
         explorer = null;
         setChildren(panel, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'The Explorer needs the newer app engine. Update the app, then open this screen again.')));
         return;
       }
-      if (!force && explorer && explorer.root.isConnected) { explorer.update(); return; }
+      if (!force && explorer && explorer.root.isConnected) { explorer.update(); if (explorerWantView) { explorer.setView?.(explorerWantView); explorerWantView = null; } return; }
       explorer?.destroy?.();
       explorer = SubagentExplorer.mount(explorerCtx());
       setChildren(panel, explorer.root);
       explorer.ready?.();
+      if (explorerWantView) { explorer.setView?.(explorerWantView); explorerWantView = null; }
     }
     function explorerCtx() {
       const chat = currentChat();
@@ -1467,6 +1478,8 @@ const Subagents = (() => {
         openChat: appRef?.chat?.openSubagent ? (id) => { appRef.chat.openSubagent(id); if (openIn() !== 'panel') dialog.close(); } : null,
         stop, retry, message, remove, rerun: (r) => rerunSheet(r), levelText, fmtTokens, statusLabel: STATUS_LABEL, statusChip,
         maxDepth: () => num(settings.maxDepth, 2), alive: () => alive,
+        // The Explorer's Workflow view: the workflow graph editor, live run and replay (21-agent-workflows.js).
+        mountWorkflows: workflowsOn() ? () => AgentWorkflows.mount({ openAgent: (aid) => go('detail', aid) }) : null,
       };
     }
     /* ---- Swarm tab (engine feature subagentSwarm only) ----

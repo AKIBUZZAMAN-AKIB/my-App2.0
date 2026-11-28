@@ -432,3 +432,11 @@ button.sa-x-wf-row:focus-visible { outline: 2px solid var(--ring); outline-offse
 .sa-x-picknum text { fill: var(--background); font-size: 11px; font-weight: 700; pointer-events: none; }
 .sa-explorer[data-view="timeline"] :is(.sa-x-groupbar) { display: none; }
 @media (max-width: 560px) { .sa-x-groupsel { max-width: 100%; flex: 1 1 140px; } }
+
+/* Workflow view: the saved workflow graphs (21-agent-workflows.js) inside the Explorer */
+.sa-x-wfhost { display: none; min-width: 0; }
+.sa-explorer[data-view="workflow"] .sa-x-wfhost { display: block; }
+.sa-explorer[data-view="workflow"] :is(.sa-x-canvaswrap, .sa-x-timeline, .sa-x-inspector, .sa-x-searchwrap, .sa-x-status, .sa-x-drawbar, .sa-x-groupbar) { display: none !important; }
+.sa-explorer[data-view="workflow"] .sa-x-toolbar > .sa-x-row:not(:first-child) { display: none !important; }
+.sa-explorer[data-view="workflow"] .sa-x-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; }
+.sa-explorer[data-view="workflow"] .sa-x-wfhost { grid-column: 1 / -1; }

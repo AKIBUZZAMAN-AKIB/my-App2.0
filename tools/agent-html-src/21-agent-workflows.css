@@ -29,8 +29,7 @@
 .wf-edhead { display: flex; flex-direction: column; gap: 8px; }
 .wf-edrow { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .wf-name { flex: 1; min-width: 0; font-weight: 600; }
-.wf-add { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
-.wf-add::-webkit-scrollbar { display: none; }
+.wf-add { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .wf-add .btn { flex: none; }
 .wf-runbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .wf-input { flex: 1 1 180px; min-width: 0; }
