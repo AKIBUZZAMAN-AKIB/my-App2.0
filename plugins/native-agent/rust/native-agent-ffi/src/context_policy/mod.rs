@@ -39,6 +39,9 @@ pub use types::{PolicyId, PolicyMode, PolicyParams, Source, TaskStatus};
 /// changes, so the prompt cache prefix stays valid.
 pub const TASK_BLOCK_MARKER: &str = "[native-agent-task-context-v1]";
 
+/// How the task block explains steer messages (only when the request has one).
+pub const STEER_NOTE: &str = "[steer <id>] = the user's words sent while you worked: same task, not a new one; the newest steer wins; a [steer <id> patch] says how the engine read it.";
+
 /// What the task block shows about the running task.
 #[derive(Debug, Clone, Default)]
 pub struct BlockView<'a> {
@@ -48,6 +51,8 @@ pub struct BlockView<'a> {
     pub excluded_ids: &'a [String],
     /// One line per finished step: `"1 read_file ok"`.
     pub ledger: &'a [String],
+    /// Steer lines (goal revision, per-steer checklists) from the steer hub.
+    pub steer_lines: &'a [String],
 }
 
 /// The task block. It refers to the user's request instead of repeating it:
@@ -97,6 +102,27 @@ pub fn render_task_block(view: &BlockView<'_>) -> String {
             cap_list(&ex, 24)
         ));
     }
+    // Steer (docs/steer plan, step 3): the ctx instructions and the ctx tool
+    // definition have no room left, so what a [steer <id>] message means is
+    // said here, and only in a request that carries one.
+    let has_steer_ids = view.goal.is_some_and(|g| !g.steer_ids.is_empty() || !g.revisions.is_empty());
+    if has_steer_ids || !view.steer_lines.is_empty() {
+        out.push_str(STEER_NOTE);
+        out.push('\n');
+    }
+    let hub_has_goal = view
+        .steer_lines
+        .iter()
+        .any(|l| l.starts_with("Goal as changed by steer"));
+    if !hub_has_goal {
+        if let Some(r) = view.goal.and_then(|g| g.latest_revision()) {
+            out.push_str(&format!("Goal as changed by steer {}: {}\n", r.steer_id, r.text));
+        }
+    }
+    for line in view.steer_lines {
+        out.push_str(line);
+        out.push('\n');
+    }
     if !view.ledger.is_empty() {
         out.push_str(&format!("Steps: {}\n", view.ledger.join("; ")));
     }
@@ -135,6 +161,7 @@ mod tests {
             checklist: Some(&c),
             excluded_ids: &ex,
             ledger: &ledger,
+            steer_lines: &[],
         });
         assert!(b.starts_with(TASK_BLOCK_MARKER));
         assert!(
@@ -147,6 +174,32 @@ mod tests {
         assert!(b.contains("turn/t1"));
         assert!(b.contains("Steps: 1 read_file ok"));
         assert!(b.contains("ctx task id:T7"));
+    }
+
+    #[test]
+    fn steer_messages_are_explained_in_the_task_block_only_when_there_is_one() {
+        let mut g = TaskGoal::new("build the app", &[], None, 1);
+        let plain = render_task_block(&BlockView {
+            goal: Some(&g),
+            ..BlockView::default()
+        });
+        assert!(!plain.contains("[steer <id>]"), "no steer, no note");
+        g.add_steer_with_id("st-1", "use yarn");
+        g.add_revision("st-1", "build the app with yarn", 2);
+        let b = render_task_block(&BlockView {
+            goal: Some(&g),
+            ..BlockView::default()
+        });
+        assert!(b.contains(STEER_NOTE));
+        assert!(b.contains("Goal as changed by steer st-1: build the app with yarn"));
+        // The hub's own goal line is not repeated.
+        let lines = vec!["Goal as changed by steer st-1: build the app with yarn".to_string()];
+        let b = render_task_block(&BlockView {
+            goal: Some(&g),
+            steer_lines: &lines,
+            ..BlockView::default()
+        });
+        assert_eq!(b.matches("Goal as changed by steer").count(), 1);
     }
 
     #[test]

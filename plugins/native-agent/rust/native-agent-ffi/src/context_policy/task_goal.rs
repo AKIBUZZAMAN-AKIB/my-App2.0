@@ -22,6 +22,17 @@ pub struct TaskGoal {
     pub user_request: String,
     /// User messages that arrived while the task ran, verbatim.
     pub steer_messages: Vec<String>,
+    /// Steer ids already folded in (a revision is deduped by its id, not its
+    /// text: the same words sent twice are two steers). Parallel to
+    /// `steer_messages` where known; legacy goals have none.
+    #[serde(default)]
+    pub steer_ids: Vec<String>,
+    /// Goal revisions made by steers (docs/steer plan: "TaskGoal-এ revision"),
+    /// oldest first, one per steer id: a later patch for the same steer
+    /// replaces its text. The newest revision is the goal as the user now
+    /// wants it; the original `user_request` is never rewritten.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revisions: Vec<GoalRevision>,
     /// Only from the model's `ctx task focus:`; at most 300 characters.
     pub required_outcome: Option<String>,
     /// Verbatim pieces of the request that limit how the work is done.
@@ -33,6 +44,14 @@ pub struct TaskGoal {
     pub linked_goal_id: Option<String>,
     pub created_at: i64,
     pub status: TaskStatus,
+}
+
+/// One goal revision a steer made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GoalRevision {
+    pub steer_id: String,
+    pub text: String,
+    pub at: i64,
 }
 
 /// Words that mark a clause as a constraint (English and Bangla).
@@ -113,6 +132,8 @@ impl TaskGoal {
             goal_id: new_goal_id(),
             user_request: user_request.to_string(),
             steer_messages: steer_messages.to_vec(),
+            steer_ids: Vec::new(),
+            revisions: Vec::new(),
             required_outcome: None,
             constraints,
             response_requirements,
@@ -147,6 +168,52 @@ impl TaskGoal {
                 push_unique(&mut self.constraints, clause);
             }
         }
+    }
+
+    /// Record a steer's goal revision, deduped by steer id (not text): a
+    /// second patch for the same steer replaces its revision in place.
+    /// Returns whether anything changed.
+    pub fn add_revision(&mut self, steer_id: &str, text: &str, at: i64) -> bool {
+        let text = text.trim();
+        if text.is_empty() {
+            return false;
+        }
+        if let Some(r) = self.revisions.iter_mut().find(|r| r.steer_id == steer_id) {
+            if r.text == text {
+                return false;
+            }
+            r.text = text.to_string();
+            r.at = at;
+            return true;
+        }
+        self.revisions.push(GoalRevision {
+            steer_id: steer_id.to_string(),
+            text: text.to_string(),
+            at,
+        });
+        true
+    }
+
+    /// The newest steer revision of the goal, if any.
+    pub fn latest_revision(&self) -> Option<&GoalRevision> {
+        self.revisions.last()
+    }
+
+    /// Add a steer by id: a steer already folded in (same id) is skipped.
+    /// Returns whether it was new. An empty id falls back to the text.
+    pub fn add_steer_with_id(&mut self, id: &str, text: &str) -> bool {
+        if id.is_empty() {
+            if self.steer_messages.iter().any(|s| s == text) {
+                return false;
+            }
+        } else if self.steer_ids.iter().any(|s| s == id) {
+            return false;
+        }
+        self.add_steer(text);
+        if !id.is_empty() {
+            self.steer_ids.push(id.to_string());
+        }
+        true
     }
 
     /// Every problem with the goal, or none. A constraint or response requirement
@@ -293,6 +360,21 @@ mod tests {
         assert!(g.validate().is_ok());
         g.set_focus("  ");
         assert!(g.required_outcome.is_none());
+    }
+
+    #[test]
+    fn steer_revisions_dedupe_by_id_and_never_leak_into_the_redacted_goal() {
+        let mut g = TaskGoal::new("build the app", &[], None, 1);
+        assert!(g.add_revision("st-1", "build the app with yarn", 2));
+        assert!(!g.add_revision("st-1", "build the app with yarn", 3));
+        assert!(g.add_revision("st-1", "build with yarn workspaces", 4));
+        assert!(g.add_revision("st-2", "build with yarn workspaces", 5));
+        assert_eq!(g.revisions.len(), 2, "same text, different steer: two revisions");
+        assert_eq!(g.latest_revision().unwrap().steer_id, "st-2");
+        assert_eq!(g.user_request, "build the app", "the request itself is never rewritten");
+        let back: TaskGoal = serde_json::from_value(serde_json::to_value(&g).unwrap()).unwrap();
+        assert_eq!(back, g);
+        assert!(!g.redacted().to_string().contains("yarn"));
     }
 
     #[test]

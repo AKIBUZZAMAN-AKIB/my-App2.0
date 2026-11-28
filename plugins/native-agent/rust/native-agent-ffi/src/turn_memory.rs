@@ -216,11 +216,30 @@ fn opens_turn(prev: Option<&Message>) -> bool {
 /// Split a transcript into turns. Messages before the first user prompt (a
 /// legacy compaction note, a memory block) belong to no turn. See
 /// [`opens_turn`] for where one turn ends and the next begins.
+/// Where a user message came from. A steer (the user's words sent while a
+/// turn ran, `steer::steer_message`) is part of the turn it was sent in, even
+/// when the engine delivered it after the model's last answer (SP3): it never
+/// opens a turn of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageOrigin {
+    Prompt,
+    Steer { id: String },
+}
+
+pub fn origin_of(m: &Message) -> MessageOrigin {
+    match crate::steer::steer_of(m) {
+        Some((id, _, _)) => MessageOrigin::Steer { id },
+        None => MessageOrigin::Prompt,
+    }
+}
+
 pub fn split_turns(messages: &[Message]) -> Vec<Turn> {
     let mut turns: Vec<Turn> = Vec::new();
     let mut prev: Option<&Message> = None;
     for (i, m) in messages.iter().enumerate() {
-        let starts = m.is_user_prompt() && (turns.is_empty() || opens_turn(prev));
+        let starts = m.is_user_prompt()
+            && (turns.is_empty()
+                || (opens_turn(prev) && origin_of(m) == MessageOrigin::Prompt));
         if matches!(m.role, Role::User | Role::Assistant) {
             prev = Some(m);
         }

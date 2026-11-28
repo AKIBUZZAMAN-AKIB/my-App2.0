@@ -268,6 +268,69 @@ const SUBAGENT_POLICY_ACTIONS = [
   'policy.get', 'policy.validate', 'policy.save', 'policy.pin', 'policy.unpin', 'policy.preview',
   'policy.metrics', 'policy.proposals', 'policy.approve', 'policy.reject',
 ] as const;
+
+/** One steer as the UI sends it (see native steer::SteerEnvelope). */
+export interface SteerInput {
+  text: string;
+  id?: string;
+  attachments?: unknown[];
+  /** A sub-agent id or name; omit (or 'main') for the running main agent. */
+  target?: string;
+  mode?: 'steer' | 'update';
+}
+
+/** The steer envelope wire form (key steer_v), or plain text unchanged. */
+export function encodeSteer(input: string | SteerInput): string {
+  if (typeof input === 'string') {
+    if (!input.trim()) throw new Error('steer: text is required');
+    return input;
+  }
+  if (!input || typeof input !== 'object' || typeof input.text !== 'string') {
+    throw new Error('steer: a text is required');
+  }
+  if (!input.text.trim() && !(Array.isArray(input.attachments) && input.attachments.length)) {
+    throw new Error('steer: text is required');
+  }
+  if (input.mode !== undefined && input.mode !== 'steer' && input.mode !== 'update') {
+    throw new Error(`steer: unknown mode "${String(input.mode)}"`);
+  }
+  const id = input.id && String(input.id).trim()
+    ? String(input.id).trim()
+    : `st-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`;
+  return JSON.stringify({
+    steer_v: 1,
+    id,
+    text: input.text,
+    at: Date.now(),
+    ...(Array.isArray(input.attachments) && input.attachments.length ? { attachments: input.attachments } : {}),
+    ...(input.target && input.target !== 'main' ? { target: String(input.target) } : {}),
+    ...(input.mode ? { mode: input.mode } : {}),
+  });
+}
+
+function steerIdOf(text: string): string | null {
+  if (!text.trimStart().startsWith('{')) return null;
+  try {
+    const v = JSON.parse(text);
+    return v && v.steer_v ? String(v.id) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The steer panel's engine actions (native lib.rs steer_action), sent through
+ * subagents(). Missing here they would fail in the bridge with 'subagents:
+ * unknown action'.
+ */
+export const STEER_ACTIONS = [
+  'steer.inbox',
+  'steer.dismiss',
+  'steer.checklists',
+  'steer.checklist',
+  'steer.permission',
+] as const;
+
 /** Actions that act on one chat's context tree and need its sessionKey. */
 const SUBAGENT_SESSION_KEY_ACTIONS = ['ctx.tree', 'ctx.set', 'ctx.reset', 'ctx.requests', 'ctx.checklist'];
 export const SUBAGENT_ACTIONS: readonly string[] = [
@@ -281,6 +344,7 @@ export const SUBAGENT_ACTIONS: readonly string[] = [
   ...SUBAGENT_CTX_ACTIONS,
   ...SUBAGENT_AGENTS_ACTIONS,
   ...SUBAGENT_POLICY_ACTIONS,
+  ...STEER_ACTIONS,
 ];
 /** Actions that act on one agent and need its id. */
 const SUBAGENT_ID_ACTIONS = [
@@ -1173,7 +1237,20 @@ const NativeKit: any = {
     cancelToolCall: (toolCallId: string): boolean => cancelMcpToolCall(String(toolCallId), 'cancelled'),
     /** Ids of the WebView-side tool calls running now. */
     runningToolCalls: (): string[] => runningMcpToolCalls(),
-    steer: async (text: string) => { feature('agent'); requireNative(); return NativeAgent.steer({ text }); },
+    /**
+     * Steer the running turn (docs/steer/PLAN.bn.md). A plain string is sent as
+     * is; an object becomes a steer envelope ({ id, text, attachments, target,
+     * mode: 'steer' | 'update' }) in its wire form, so the native signature stays
+     * steer({ text }). The engine answers with steer.accepted, then
+     * steer.applied at the safe point where the words reached the model (or
+     * steer.unapplied when no turn could take them). Returns the steer id.
+     */
+    steer: async (input: string | SteerInput) => {
+      feature('agent'); requireNative();
+      const text = encodeSteer(input);
+      await NativeAgent.steer({ text });
+      return steerIdOf(text);
+    },
 
     // ── Approval gate (human-in-the-loop tool calls) ──
     respondToApproval: async (toolCallId: string, approved: boolean, reason?: string) => {
