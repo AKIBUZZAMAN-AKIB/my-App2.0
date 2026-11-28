@@ -351,12 +351,10 @@ export interface HomePrefs {
   density: HomeDensity;
   /** hex accent used for buttons and highlights; empty = the agent app's neutral primary */
   accent: string;
-  /** show the "Ask the agent" bar under the greeting */
-  showAskBar: boolean;
   greeting: string;
 }
 
-export const DEFAULT_HOME_PREFS: HomePrefs = { theme: 'system', textSize: 'default', density: 'comfortable', accent: '', showAskBar: true, greeting: '' };
+export const DEFAULT_HOME_PREFS: HomePrefs = { theme: 'system', textSize: 'default', density: 'comfortable', accent: '', greeting: '' };
 
 export const HOME_APP_IDS = ['agent', 'calendar', 'browser', 'notes', 'reminder', 'habits', 'academic', 'store', 'more'] as const;
 
@@ -368,7 +366,6 @@ export const HOME_CONTROL_ACTIONS = {
   set_density: 'value: "comfortable" | "compact" — spacing between and inside widgets.',
   set_accent: 'value: hex colour like "#6366f1", or "" for the default neutral accent.',
   set_greeting: 'value: custom greeting line (max 40 chars), or "" for the time-of-day greeting.',
-  show_ask_bar: 'value: true | false — the "Ask the agent" bar at the top of Home.',
   stopwatch_start: 'id: stopwatch widget id (optional when Home has one stopwatch).',
   stopwatch_pause: 'id: stopwatch widget id (optional).',
   stopwatch_reset: 'id: stopwatch widget id (optional).',
@@ -407,7 +404,6 @@ export function parseHomePrefs(json: string | null | undefined): HomePrefs {
   if (['compact', 'default', 'large'].includes(raw.textSize)) p.textSize = raw.textSize;
   if (['comfortable', 'compact'].includes(raw.density)) p.density = raw.density;
   if (typeof raw.accent === 'string' && (raw.accent === '' || /^#[0-9a-f]{6}$/i.test(raw.accent))) p.accent = raw.accent;
-  if (typeof raw.showAskBar === 'boolean') p.showAskBar = raw.showAskBar;
   if (typeof raw.greeting === 'string') p.greeting = raw.greeting.slice(0, 40);
   return p;
 }
@@ -428,7 +424,6 @@ export function applyPref(prefs: HomePrefs, action: HomeControlAction, value: un
       next.accent = v; break;
     }
     case 'set_greeting': next.greeting = typeof value === 'string' ? value.trim().slice(0, 40) : ''; break;
-    case 'show_ask_bar': next.showAskBar = value !== false && value !== 'false'; break;
     default: throw new Error(`${action} is not a setting.`);
   }
   return next;

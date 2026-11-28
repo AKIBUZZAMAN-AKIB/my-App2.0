@@ -216,19 +216,6 @@ body { padding-top: calc(env(safe-area-inset-top, 0px) + 12px); }
 .top { margin: 6px 2px 14px; display: block; }
 .hello { font-size: calc(13px * var(--fs)); font-weight: 500; color: var(--muted); letter-spacing: 0; }
 .today { font-size: calc(24px * var(--fs)); line-height: 1.25; font-weight: 600; letter-spacing: -0.025em; margin-top: 2px; text-wrap: balance; }
-/* Ask bar: the Agent app's composer, one tap from Home */
-.ask { margin: 0 0 12px; }
-.ask form { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 14px; border-radius: 16px; border: 1px solid var(--line); background: var(--card); box-shadow: var(--shadow); transition: border-color .15s, box-shadow .15s; }
-.ask form:focus-within { border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 25%, transparent); }
-.ask .spark { color: var(--muted); font-size: 18px; display: grid; }
-.ask input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: calc(15px * var(--fs)); height: 36px; }
-.ask input::placeholder { color: var(--faint); }
-.send { width: 36px; height: 36px; border-radius: 10px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; font-size: 17px; flex: none; }
-.suggest { display: flex; gap: 8px; overflow-x: auto; padding: 10px 2px 2px; scrollbar-width: none; }
-.suggest::-webkit-scrollbar { display: none; }
-.suggest button { flex: none; height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--muted); font-size: calc(13px * var(--fs)); font-weight: 500; white-space: nowrap; transition: color .15s, background .15s; }
-.suggest button:hover { color: var(--text); background: var(--card2); }
-.no-ask .ask { display: none; }
 .section-label { display: flex; align-items: center; justify-content: space-between; margin: 6px 4px 10px; font-size: calc(12px * var(--fs)); font-weight: 500; color: var(--muted); }
 .section-label button { font-size: calc(12px * var(--fs)); color: var(--muted); font-weight: 500; }
 /* Widgets: bordered cards, quieter shadow, agent type scale */
@@ -293,17 +280,13 @@ body { padding-top: calc(env(safe-area-inset-top, 0px) + 12px); }
 <body>
 <div class="wrap" id="wrap">
   <div class="bar-top">
-    <div class="brand"><span class="brand-mark" id="brandMark"></span><span>Home</span></div>
+    <div class="brand"><span class="brand-mark" id="brandMark" aria-label="Home"></span></div>
     <span class="pill" id="agentPill" data-agent-action="open_app:agent"><span class="dot"></span>Agent</span>
     <span class="sp"></span>
     <button class="icon-btn" id="themeBtn" aria-label="Switch light or dark" data-agent-action="set_theme"></button>
     <button class="icon-btn" id="editBtn" aria-label="Edit Home" data-agent-action="edit_mode"></button>
   </div>
   <header class="top"><div class="hello" id="hello">Hello</div><div class="today" id="today"></div></header>
-  <section class="ask" aria-label="Ask the agent">
-    <form id="askForm" autocomplete="off"><span class="spark" id="askSpark"></span><input id="askInput" name="ask" placeholder="Ask the agent to do anything on Home…" aria-label="Ask the agent" enterkeyhint="send"><button class="send" id="askSend" type="submit" aria-label="Send to the agent"></button></form>
-    <div class="suggest" id="suggest"></div>
-  </section>
   <div class="section-label"><span>Widgets</span><button id="addInline" data-agent-action="open_add_sheet">+ Add</button></div>
   <main class="grid" id="grid" aria-live="polite"></main>
 </div>
@@ -694,12 +677,11 @@ grid.addEventListener('pointerdown', (e) => { if (editing || !e.target.closest('
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { openSheet(false); setEdit(false); } });
 
 
-/* ---------- Home settings (theme, text size, density, accent, greeting, Ask bar) ---------- */
+/* ---------- Home settings (theme, text size, density, accent, greeting) ---------- */
 const PREFS_KEY = 'myapp.home.prefs.v1';
 const CMD_KEY = 'myapp.home.command.v1';
 const CMD_EVENT = 'myapp:home-command';
-const ASK_KEY = 'myapp.home.ask';
-const PREF_DEFAULTS = { theme: 'system', textSize: 'default', density: 'comfortable', accent: '', showAskBar: true, greeting: '' };
+const PREF_DEFAULTS = { theme: 'system', textSize: 'default', density: 'comfortable', accent: '', greeting: '' };
 function readPrefs() { const raw = (() => { try { return localStorage.getItem(PREFS_KEY); } catch { return null; } })(); return { raw, value: { ...PREF_DEFAULTS, ...(parse(raw, {}) || {}) } }; }
 let { raw: lastPrefs, value: prefs } = readPrefs();
 const darkMq = matchMedia('(prefers-color-scheme: dark)');
@@ -709,7 +691,6 @@ function applyPrefs() {
   r.dataset.theme = dark ? 'dark' : 'light'; r.dataset.text = prefs.textSize; r.dataset.density = prefs.density;
   if (/^#[0-9a-f]{6}$/i.test(prefs.accent || '')) { r.style.setProperty('--user-accent', prefs.accent); r.style.setProperty('--user-accent-fg', '#fff'); }
   else { r.style.removeProperty('--user-accent'); r.style.removeProperty('--user-accent-fg'); }
-  document.body.classList.toggle('no-ask', prefs.showAskBar === false);
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#09090b' : '#fafafa');
   $('#themeBtn').innerHTML = ic(dark ? 'sun' : 'moon');
   $('#themeBtn').setAttribute('aria-label', dark ? 'Switch to light' : 'Switch to dark');
@@ -719,17 +700,6 @@ darkMq.addEventListener?.('change', () => { if (prefs.theme === 'system') { appl
 $('#themeBtn').onclick = () => { prefs.theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; savePrefs(); };
 $('#brandMark').innerHTML = ic('grid');
 
-/* ---------- Ask the agent: hands the request to the Agent app's composer ---------- */
-const SUGGEST = ['Plan my day', 'Set an alarm for 6:30 AM', 'Add a London clock', 'Make Home dark', 'Bigger text', 'Start the stopwatch'];
-$('#askSpark').innerHTML = ic('spark'); $('#askSend').innerHTML = ic('send');
-$('#suggest').innerHTML = SUGGEST.map((t) => `<button type="button" data-ask="${esc(t)}">${esc(t)}</button>`).join('');
-function askAgent(text) {
-  text = String(text || '').trim(); if (!text) { $('#askInput').focus(); return; }
-  try { localStorage.setItem(ASK_KEY, JSON.stringify({ text, at: Date.now() })); } catch {}
-  location.href = './agent.html';
-}
-$('#askForm').onsubmit = (e) => { e.preventDefault(); askAgent($('#askInput').value); };
-$('#suggest').onclick = (e) => { const b = e.target.closest('[data-ask]'); if (b) askAgent(b.dataset.ask); };
 $('#agentPill').onclick = () => { location.href = './agent.html'; };
 function paintPill() {
   const a = live.agent, on = DEMO || a?.ready;
@@ -737,7 +707,7 @@ function paintPill() {
 }
 
 /* ---------- Agent control: one dispatcher for home_control commands and window.MyAppHome ---------- */
-const ACTIONS = ['get_state', 'set_theme', 'set_text_size', 'set_density', 'set_accent', 'set_greeting', 'show_ask_bar', 'stopwatch_start', 'stopwatch_pause', 'stopwatch_reset', 'stopwatch_lap', 'check_item', 'open_app', 'edit_mode', 'open_add_sheet', 'refresh', 'scroll_to'];
+const ACTIONS = ['get_state', 'set_theme', 'set_text_size', 'set_density', 'set_accent', 'set_greeting', 'stopwatch_start', 'stopwatch_pause', 'stopwatch_reset', 'stopwatch_lap', 'check_item', 'open_app', 'edit_mode', 'open_add_sheet', 'refresh', 'scroll_to'];
 function only(type, id) { const all = layout.widgets.filter((w) => w.type === type); const w = id ? all.find((x) => x.id === id) : all.length === 1 ? all[0] : null; if (!w) throw new Error(`No single ${type} widget${id ? ` with id ${id}` : ''}.`); return w; }
 function runAction(action, a = {}) {
   const v = a.value;
@@ -748,7 +718,6 @@ function runAction(action, a = {}) {
     case 'set_density': if (!['comfortable', 'compact'].includes(v)) throw new Error('density: comfortable|compact'); prefs.density = v; break;
     case 'set_accent': if (v && !/^#[0-9a-f]{6}$/i.test(v)) throw new Error('accent: #rrggbb'); prefs.accent = v || ''; break;
     case 'set_greeting': prefs.greeting = String(v || '').slice(0, 40); break;
-    case 'show_ask_bar': prefs.showAskBar = v !== false && v !== 'false'; break;
     case 'stopwatch_start': case 'stopwatch_pause': case 'stopwatch_reset': case 'stopwatch_lap': {
       const w = only('stopwatch', a.id), s = swOf(w.id);
       if (action === 'stopwatch_start' && !s.run) { s.start = Date.now(); s.run = true; s.done = false; }

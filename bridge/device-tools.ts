@@ -1999,7 +1999,7 @@ const TOOL_SPECS: DeviceToolSpec[] = [
     name: 'home_control',
     description:
       "Control the app's Home screen the way the user does with their fingers: theme, text size, spacing, accent colour, " +
-      'greeting, the Ask bar, start/pause/reset/lap a stopwatch or timer, tick checklist items, open an app screen, edit mode, ' +
+      'greeting, start/pause/reset/lap a stopwatch or timer, tick checklist items, open an app screen, edit mode, ' +
       'the add-widget sheet, refresh and scroll to a widget. Actions: ' +
       HOME_CONTROL_ACTION_IDS.map((a) => `${a} (${HOME_CONTROL_ACTIONS[a]})`).join('; ') +
       '. Settings and widget state apply even when Home is closed; page actions run as soon as Home is shown. ' +
@@ -2032,7 +2032,7 @@ const TOOL_SPECS: DeviceToolSpec[] = [
           };
           return textResult(JSON.stringify(body), body);
         }
-        if (action.startsWith('set_') || action === 'show_ask_bar') {
+        if (action.startsWith('set_')) {
           const prefs = applyHomePref(parseHomePrefs(state.readPrefs()), action, args.value);
           state.writePrefs(JSON.stringify(prefs));
           return textResult(`Home ${action.replace(/^set_/, '').replace(/_/g, ' ')} is now ${JSON.stringify(args.value ?? '')}.`, { prefs });
