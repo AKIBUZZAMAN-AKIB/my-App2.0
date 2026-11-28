@@ -633,6 +633,7 @@ public final class RemoteBrowserActivity extends Activity {
         if (wasCurrent) { hideFindBar(); exitCustomView(); cancelLoadTimeout(); }
         tabs.remove(index);
         destroyTabView(tab);
+        PageAgentHost.forgetSession(tab.id);
         if (tabs.isEmpty()) { current = null; finish(); return; }
         if (wasCurrent) {
             current = null;
@@ -1954,7 +1955,8 @@ public final class RemoteBrowserActivity extends Activity {
             agentEnabled,
             getIntent().getStringExtra(PageAgentHost.EXTRA_LANGUAGE),
             theme.dark,
-            BrowserTheme.hex(theme.accent));
+            BrowserTheme.hex(theme.accent),
+            tab.id);
         pageAgent = tab.agent;
         if (startUrl != null) webView.loadUrl(startUrl);
     }
@@ -2235,7 +2237,7 @@ public final class RemoteBrowserActivity extends Activity {
     private void destroyWebView() {
         cancelLoadTimeout();
         exitCustomView();
-        for (BrowserTab tab : new ArrayList<>(tabs)) destroyTabView(tab);
+        for (BrowserTab tab : new ArrayList<>(tabs)) { destroyTabView(tab); PageAgentHost.forgetSession(tab.id); }
         tabs.clear();
         current = null;
         webView = null;

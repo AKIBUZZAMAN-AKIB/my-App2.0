@@ -13,13 +13,19 @@
  *    card built with innerHTML) is no longer used. We drive PageAgentCore +
  *    PageController directly and render our own panel inside a closed shadow
  *    root, so page CSS can't break it and it can't break the page.
- *  - SESSION CONTINUITY: a real navigation destroys the page. The native side
- *    outlives it, so this bootstrap mirrors {task, status, result, compact
- *    step history} to native and asks for it back on every new page:
- *      status 'running' -> panel re-opens, earlier steps are shown and the
- *                          task resumes (context injected into the prompt)
- *      task finished    -> the result stays readable on the next page
- *      nothing yet      -> normal boot (launcher only)
+ *  - SESSION CONTINUITY: a real navigation destroys the page; the native
+ *    side (PageAgentHost, one session per tab) outlives it. Each step is
+ *    written natively BEFORE it runs (so a click that navigates is never
+ *    lost) and again with its result. A new page asks for the session back
+ *    and, if a run is in progress, waits for the page to settle, puts the
+ *    earlier steps back into the agent's own history (so the model sees them
+ *    in <agent_history>, step numbers continue) and goes on from the next
+ *    step. Plan + notes tools persist across pages too. A per-document owner
+ *    lease stops stale pages (bfcache, duplicates) from driving the run.
+ *  - ACCURACY: wait for load + DOM quiet + no requests before reading the
+ *    page, an Observation of what really changed after every action, a cap
+ *    on repeating a failing action, grounding rules in the prompt, and
+ *    read_page_text / list_links so answers come from the page.
  *
  * Agent UX (modelled on ChatGPT Atlas agent mode, Perplexity Comet, Gemini in
  * Chrome, Opera Neon and Edge Copilot Mode):
@@ -43,6 +49,8 @@
 (function () {
   'use strict';
   if (window.__nativekitPageAgentBooted) return;
+  // Main frame only: an agent per iframe would mean several drivers per tab.
+  try { if (window.top !== window) return; } catch (e) { return; }
   var cfg = window.__NATIVEKIT_PAGE_AGENT__;
   if (!cfg || typeof cfg !== 'object' || !window.PageAgentCore || !window.PageAgentController) return;
   var bridge = window[cfg.bridge || 'NativeKitPageAgent'];
@@ -61,8 +69,10 @@
     var data = event && event.data;
     if (typeof data !== 'string') return;
     try { data = JSON.parse(data); } catch (error) { return; }
-    if (!data || typeof data.id !== 'string' && data.kind !== 'state-resp') return;
+    if (!data) return;
     if (data.kind === 'state-resp') { onRestored(data); return; }
+    if (data.kind === 'evict') { onEvicted(data); return; }
+    if (typeof data.id !== 'string') return;
     var entry = pending[data.id];
     if (!entry) return;
     delete pending[data.id];
@@ -134,42 +144,85 @@
     });
   }
 
+  // ---------- task session (kept natively, survives page loads) -----------
+  // pid: this document. runId: the task run it is part of. Native only lets
+  // the current owner page write to a run (see PageAgentHost).
+  var pid = 'p' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  var runId = '';
+  var hydrated = [];      // step records done on earlier pages of this run
+  var seqBase = 0;        // earlier steps folded into a summary (not in history)
+  var plan = '', notes = '';
+  var quiet = false;      // true while a stale page stops without writing
+  var finalSent = 0;      // highest step seq already finalised natively
+
+  var LIMITS = { task: 2000, status: 40, result: 6000, plan: 4000, notes: 6000 };
   function sendState(patch) {
-    var payload = { v: 1, kind: 'state', token: cfg.token };
-    if (patch && 'task' in patch) payload.task = String(patch.task || '').slice(0, 2000);
-    if (patch && 'status' in patch) payload.status = String(patch.status || '').slice(0, 40);
-    if (patch && 'result' in patch) payload.result = String(patch.result || '').slice(0, 4000);
+    if (quiet) return;
+    var payload = { v: 1, kind: 'state', token: cfg.token, pid: pid, runId: runId };
+    for (var key in LIMITS) {
+      if (patch && key in patch) payload[key] = String(patch[key] || '').slice(0, LIMITS[key]);
+    }
     send(payload);
   }
 
-  var historyTimer = null;
-  function scheduleHistorySync() {
-    if (historyTimer) return;
-    historyTimer = setTimeout(function () {
-      historyTimer = null;
-      if (!agent) return;
-      try {
-        var entries = [];
-        var source = Array.isArray(agent.history) ? agent.history : [];
-        for (var i = Math.max(0, source.length - 120); i < source.length; i += 1) {
-          var item = source[i] || {};
-          var compact = { type: String(item.type || '') };
-          if (item.type === 'step' && item.action) {
-            compact.tool = String(item.action.name || '');
-            compact.message = stepTitle(item).slice(0, 300);
-          } else {
-            if (item.tool) compact.tool = String(item.tool);
-            if (item.message) compact.message = String(item.message).slice(0, 300);
-          }
-          entries.push(compact);
-        }
-        send({ v: 1, kind: 'history', token: cfg.token, body: JSON.stringify(entries) });
-      } catch (error) { /* best effort */ }
-    }, 400);
+  function sendStep(seq, record) {
+    if (quiet || !runId || seq < 1) return;
+    var body;
+    try { body = JSON.stringify(record); } catch (e) { return; }
+    if (body.length > 7800) {
+      record.output = String(record.output || '').slice(0, 1200);
+      record.input = {};
+      body = JSON.stringify(record);
+    }
+    send({ v: 1, kind: 'step', token: cfg.token, pid: pid, runId: runId, seq: seq, step: body });
   }
 
   function requestRestore() {
-    send({ v: 1, kind: 'restore', token: cfg.token });
+    send({ v: 1, kind: 'restore', token: cfg.token, pid: pid });
+  }
+
+  // Finalise every finished step of this page natively (result + reflection).
+  function syncSteps() {
+    if (!agent || !runId) return;
+    var steps = (agent.history || []).filter(function (h) { return h && h.type === 'step'; });
+    steps.forEach(function (item, i) {
+      if (item.nkHydrated) return;
+      var seq = seqBase + i + 1;
+      if (seq <= finalSent) return;
+      finalSent = seq;
+      sendStep(seq, recordFromStep(item, seq));
+    });
+  }
+
+  function recordFromStep(item, seq) {
+    var r = item.reflection || {};
+    var act = item.action || {};
+    var extra = (act.input && typeof act.input === 'object' && meta.get(act.input)) || {};
+    return {
+      seq: seq,
+      url: extra.url || location.href,
+      title: extra.title || String(document.title || '').slice(0, 120),
+      label: extra.label || '',
+      eval: String(r.evaluation_previous_goal || '').slice(0, 400),
+      memory: String(r.memory || '').slice(0, 800),
+      goal: String(r.next_goal || '').slice(0, 300),
+      tool: String(act.name || ''),
+      input: compactInput(act.input),
+      output: String(act.output == null ? '' : act.output).slice(0, 1500),
+      pending: false,
+      ts: Date.now(),
+    };
+  }
+
+  function compactInput(input) {
+    var out = {};
+    if (!input || typeof input !== 'object') return out;
+    for (var k in input) {
+      var v = input[k];
+      if (typeof v === 'string') out[k] = v.slice(0, 400);
+      else if (typeof v === 'number' || typeof v === 'boolean') out[k] = v;
+    }
+    return out;
   }
 
   // ---------- theme ----------------------------------------------------------
@@ -369,117 +422,516 @@
 
   // ---------- agent lifecycle -------------------------------------------------
   var agent = null;
-  var resumeContextForNextRun = '';
+  var MAX_TOTAL_STEPS = 50;          // across all pages of one run
+  var meta = new WeakMap();          // action input -> { label, url, title }
+  var lastReflection = {};           // model output of the step being executed
+  var fails = Object.create(null);   // same failing action -> count
 
-  function resumeContextFrom(historyJson) {
+  // Network-activity counter, so "settled" can mean "no requests in flight".
+  var inflight = 0;
+  (function trackNetwork() {
     try {
-      var entries = JSON.parse(historyJson || '[]');
-      if (!Array.isArray(entries) || !entries.length) return '';
-      var lines = [];
-      for (var i = Math.max(0, entries.length - 15); i < entries.length; i += 1) {
-        var item = entries[i] || {};
-        var line = item.type || 'step';
-        if (item.tool) line += ' ' + item.tool;
-        if (item.message) line += ' \u2014 ' + String(item.message).slice(0, 160);
-        lines.push((lines.length + 1) + '. ' + line);
+      var origFetch = window.fetch;
+      if (typeof origFetch === 'function') {
+        window.fetch = function () {
+          inflight += 1;
+          var done = function () { inflight = Math.max(0, inflight - 1); };
+          try {
+            var p = origFetch.apply(this, arguments);
+            p.then(done, done);
+            return p;
+          } catch (e) { done(); throw e; }
+        };
       }
-      var text = '[NativeKit session continuation] The page navigated mid-task, so this is a NEW page; the previous conversation state was: '
-        + lines.join(' | ');
-      return text.slice(0, 3000);
-    } catch (error) { return ''; }
+      var XHR = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
+      if (XHR && XHR.send) {
+        var origSend = XHR.send;
+        XHR.send = function () {
+          inflight += 1;
+          var counted = true;
+          this.addEventListener('loadend', function () { if (counted) { counted = false; inflight = Math.max(0, inflight - 1); } });
+          return origSend.apply(this, arguments);
+        };
+      }
+    } catch (e) { /* tracking is best effort */ }
+  })();
+
+  function ours(node) {
+    try {
+      var n = node && node.nodeType === 1 ? node : node && node.parentElement;
+      if (!n) return false;
+      if (n === host || n === glow) return true;
+      if (n.closest && n.closest('[data-page-agent-ignore]')) return true;
+      var mask = agent && agent.pageController && agent.pageController.mask;
+      return !!(mask && mask.wrapper && mask.wrapper.contains(n));
+    } catch (e) { return false; }
   }
 
-  function createAgent(resumeContext) {
+  // Resolve once the page is loaded, the DOM has been quiet for 450 ms and no
+  // requests are in flight — or after maxMs, whichever comes first.
+  function settle(signal, maxMs) {
+    return new Promise(function (resolve) {
+      var start = Date.now();
+      var last = Date.now();
+      var mo = null;
+      try {
+        mo = new MutationObserver(function (records) {
+          for (var i = 0; i < records.length; i += 1) {
+            if (!ours(records[i].target)) { last = Date.now(); return; }
+          }
+        });
+        mo.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+      } catch (e) { mo = null; }
+      (function tick() {
+        var calm = Date.now() - last >= 450 && document.readyState === 'complete' && inflight <= 0;
+        if (calm || Date.now() - start >= maxMs || (signal && signal.aborted)) {
+          if (mo) mo.disconnect();
+          resolve();
+          return;
+        }
+        setTimeout(tick, 120);
+      })();
+    });
+  }
+
+  function hashText(text) {
+    var h = 0;
+    for (var i = 0; i < text.length; i += 1) h = (h * 31 + text.charCodeAt(i)) | 0;
+    return h;
+  }
+
+  function pageSignature() {
+    try {
+      var body = document.body;
+      if (!body) return '';
+      var text = body.innerText || '';
+      return document.getElementsByTagName('*').length + ':' + text.length + ':' + hashText(text.slice(0, 20000));
+    } catch (e) { return ''; }
+  }
+
+  function elementAt(target, index) {
+    try {
+      var entry = target.pageController.selectorMap.get(index);
+      return entry && entry.ref ? entry.ref : null;
+    } catch (e) { return null; }
+  }
+
+  function snapshot(target, input) {
+    var node = input && typeof input.index === 'number' ? elementAt(target, input.index) : null;
+    return {
+      url: location.href,
+      title: document.title,
+      sig: pageSignature(),
+      y: window.scrollY || 0,
+      node: node,
+      href: node && node.closest && node.closest('a[href]') ? node.closest('a[href]').href : '',
+    };
+  }
+
+  // What actually happened after an action, fed back to the model with the
+  // tool result so it reasons from evidence, not from what it hoped for.
+  function observe(before, name, input) {
+    var notes = [];
+    var urlChanged = location.href !== before.url;
+    if (urlChanged) notes.push('URL changed to ' + location.href);
+    else if (document.title !== before.title) notes.push('page title changed to "' + String(document.title).slice(0, 80) + '"');
+    var changed = pageSignature() !== before.sig;
+    if (name === 'input_text' && before.node) {
+      var value = 'value' in before.node ? String(before.node.value || '') : String(before.node.textContent || '');
+      var want = String(input && input.text || '');
+      if (want && value.indexOf(want) === -1) notes.push('\u26a0\ufe0f the field now contains "' + value.slice(0, 80) + '", not exactly the text you typed; check it');
+      else if (want) notes.push('verified: the field contains the text');
+    } else if (name === 'scroll' || name === 'scroll_horizontally') {
+      if (!input || input.index === undefined) {
+        if ((window.scrollY || 0) === before.y && name === 'scroll') notes.push('\u26a0\ufe0f the page did not move (already at the ' + (input && input.down === false ? 'top' : 'end') + '?)');
+      }
+    } else if (!urlChanged) {
+      if (changed) notes.push('the page content changed');
+      else if (before.href && before.href !== location.href) notes.push('link target ' + before.href + ' \u2014 a page load may still be starting');
+      else notes.push('\u26a0\ufe0f no visible change on the page (same URL, same content). The action may not have worked; do not assume success \u2014 check the page');
+    }
+    return notes.length ? 'Observation: ' + notes.join('; ') + '.' : '';
+  }
+
+  var VERIFY = { click_element_by_index: 1, input_text: 1, select_dropdown_option: 1, scroll: 1, scroll_horizontally: 1 };
+
+  function failed(output) {
+    var first = String(output == null ? '' : output).split('\n')[0];
+    return /^\s*(\u274c|error|failed)/i.test(first);
+  }
+
+  function stepCount(target) {
+    var a = target || agent;
+    var n = 0;
+    (a && a.history || []).forEach(function (h) { if (h && h.type === 'step') n += 1; });
+    return n;
+  }
+
+  // Every tool goes through here: records the step natively BEFORE acting (a
+  // click that navigates can't be lost), pauses sensitive clicks for the user,
+  // caps repeats of a failing action, waits for the page to settle and appends
+  // an observation of what really changed.
+  function runTool(self, name, original, input, ctx) {
+    var signal = ctx && ctx.signal;
+    var label = input && typeof input.index === 'number' ? elementLabel(self, input.index) : '';
+    var info = { label: label, url: location.href, title: String(document.title || '').slice(0, 120) };
+    if (input && typeof input === 'object') meta.set(input, info);
+    var seq = seqBase + stepCount(self) + 1;
+    if (name !== 'done') {
+      sendStep(seq, {
+        seq: seq, url: info.url, title: info.title, label: label,
+        eval: String(lastReflection.eval || '').slice(0, 400),
+        memory: String(lastReflection.memory || '').slice(0, 800),
+        goal: String(lastReflection.goal || '').slice(0, 300),
+        tool: name, input: compactInput(input), output: '', pending: true, ts: Date.now(),
+      });
+    }
+    var sig = name + '|' + JSON.stringify(compactInput(input)) + '|' + location.pathname;
+    if ((fails[sig] || 0) >= 2) {
+      return Promise.resolve('\u274c Not executed: this exact action already failed twice on this page. Do NOT repeat it. Try a different element or approach (scroll, search, read_page_text), or call done with success=false and say plainly what you could not find.');
+    }
+    var before = VERIFY[name] ? snapshot(self, input) : null;
+    var go = function () { return Promise.resolve(original.call(self, input, ctx)); };
+    var run;
+    if (name === 'click_element_by_index' && label && SENSITIVE.test(label)) {
+      run = confirmAction('Click \u201c' + label + '\u201d', signal).then(function (allowed) {
+        if (!allowed) return 'The user declined this action. Do not try it again; finish and tell the user what is left for them to do.';
+        return go();
+      });
+    } else {
+      run = go();
+    }
+    return run.then(function (output) {
+      if (!before || failed(output)) return output;
+      return settle(signal, 3500).then(function () {
+        var seen = observe(before, name, input);
+        return seen ? String(output) + '\n' + seen : output;
+      });
+    }).then(function (output) {
+      if (failed(output)) fails[sig] = (fails[sig] || 0) + 1;
+      return output;
+    });
+  }
+
+  function wrapTools(target) {
+    target.tools.forEach(function (tool, name) {
+      if (!tool || typeof tool.execute !== 'function' || tool.nkWrapped) return;
+      var original = tool.execute;
+      target.tools.set(name, Object.assign({}, tool, {
+        nkWrapped: true,
+        execute: function (input, ctx) { return runTool(this, name, original, input, ctx); },
+      }));
+    });
+  }
+
+  // ---------- extra tools ----------------------------------------------------
+  function mainText() {
+    var root = document.querySelector('main, [role=main], article') || document.body;
+    var text = root ? String(root.innerText || '') : '';
+    if (root !== document.body && text.length < 400 && document.body) text = String(document.body.innerText || '');
+    return text.replace(/[ \t\u00a0]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
+  }
+
+  function extraTools() {
+    var Z = window.PageAgentZod;
+    if (!Z) return {};
+    return {
+      read_page_text: {
+        description: 'Read the visible text of the current page (main content first). Use it to answer questions about the page and to check facts before reporting them. Optional query returns only the lines that mention it.',
+        inputSchema: Z.object({ query: Z.optional(Z.string()), max_chars: Z.optional(Z.int().min(500).max(12000)) }),
+        execute: function (input) {
+          var text = mainText();
+          var limit = (input && input.max_chars) || 6000;
+          var q = String(input && input.query || '').trim().toLowerCase();
+          if (!text) return Promise.resolve('\u274c This page has no readable text yet. Wait or scroll, then try again.');
+          if (!q) return Promise.resolve('Page text (' + text.length + ' chars' + (text.length > limit ? ', first ' + limit : '') + '):\n' + text.slice(0, limit));
+          var terms = q.split(/\s+/).filter(Boolean);
+          var lines = text.split('\n');
+          var hits = [];
+          for (var i = 0; i < lines.length && hits.length < 40; i += 1) {
+            var low = lines[i].toLowerCase();
+            if (terms.some(function (t) { return low.indexOf(t) !== -1; })) {
+              hits.push((lines[i - 1] ? lines[i - 1].slice(0, 200) + ' / ' : '') + lines[i].slice(0, 400) + (lines[i + 1] ? ' / ' + lines[i + 1].slice(0, 200) : ''));
+            }
+          }
+          if (!hits.length) return Promise.resolve('\u274c No text matching "' + q + '" on this page. Do not guess: scroll, search the site, open another page, or report that it was not found.');
+          return Promise.resolve('Lines mentioning "' + q + '":\n- ' + hits.join('\n- ').slice(0, limit));
+        },
+      },
+      list_links: {
+        description: 'List the links on the current page (text and URL). Optional query filters by link text or URL. Use it to find the exact URL before open_url.',
+        inputSchema: Z.object({ query: Z.optional(Z.string()) }),
+        execute: function (input) {
+          var q = String(input && input.query || '').trim().toLowerCase();
+          var seen = Object.create(null);
+          var out = [];
+          var links = document.querySelectorAll('a[href]');
+          for (var i = 0; i < links.length && out.length < 60; i += 1) {
+            var a = links[i];
+            var href = a.href;
+            if (!/^https?:/i.test(href) || seen[href]) continue;
+            var text = String(a.innerText || a.getAttribute('aria-label') || a.title || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+            if (q && (text + ' ' + href).toLowerCase().indexOf(q) === -1) continue;
+            seen[href] = 1;
+            out.push((text || '(no text)') + ' \u2192 ' + href);
+          }
+          if (!out.length) return Promise.resolve(q ? '\u274c No links matching "' + q + '" on this page.' : '\u274c No links on this page.');
+          return Promise.resolve(out.join('\n'));
+        },
+      },
+      open_url: {
+        description: 'Open a URL in this tab (http/https only). Use only a URL the user gave, one you read on a page (list_links), or a well-known site/search URL. The task continues on the new page automatically.',
+        inputSchema: Z.object({ url: Z.string() }),
+        execute: function (input) {
+          var url = String(input && input.url || '').trim();
+          if (!/^https?:\/\//i.test(url)) return Promise.resolve('\u274c Only http(s) URLs can be opened.');
+          setTimeout(function () { location.assign(url); }, 50);
+          return new Promise(function (resolve) { setTimeout(function () { resolve('Opening ' + url + ' \u2014 the next step continues on that page.'); }, 4000); });
+        },
+      },
+      go_back: {
+        description: 'Go back to the previous page in this tab.',
+        inputSchema: Z.object({}),
+        execute: function () {
+          if (window.history.length <= 1) return Promise.resolve('\u274c There is no previous page in this tab.');
+          var from = location.href;
+          window.history.back();
+          return new Promise(function (resolve) {
+            setTimeout(function () { resolve(location.href !== from ? '\u2705 Went back to ' + location.href : 'Going back \u2014 the next step continues on the previous page.'); }, 1500);
+          });
+        },
+      },
+      wait_for_text: {
+        description: 'Wait until some text appears on the page (e.g. results loading), up to the given seconds.',
+        inputSchema: Z.object({ text: Z.string(), seconds: Z.optional(Z.number().min(1).max(15)) }),
+        execute: function (input, ctx) {
+          var want = String(input && input.text || '').toLowerCase();
+          var until = Date.now() + 1000 * ((input && input.seconds) || 6);
+          return new Promise(function (resolve) {
+            (function poll() {
+              var has = want && document.body && String(document.body.innerText || '').toLowerCase().indexOf(want) !== -1;
+              if (has) return resolve('\u2705 "' + input.text + '" is on the page.');
+              if (Date.now() > until || (ctx && ctx.signal && ctx.signal.aborted)) return resolve('\u274c "' + input.text + '" did not appear on the page.');
+              setTimeout(poll, 300);
+            })();
+          });
+        },
+      },
+      update_plan: {
+        description: 'Write or update the numbered plan for a multi-step / multi-page task, marking finished items with [x]. It is kept across page changes and shown to you every step.',
+        inputSchema: Z.object({ plan: Z.string() }),
+        execute: function (input) {
+          plan = String(input && input.plan || '').slice(0, 4000);
+          sendState({ plan: plan });
+          return Promise.resolve('\u2705 Plan saved.');
+        },
+      },
+      save_notes: {
+        description: 'Save facts you found (names, prices, answers, URLs) so they survive page changes. Replaces the previous notes, so include everything you still need.',
+        inputSchema: Z.object({ notes: Z.string() }),
+        execute: function (input) {
+          notes = String(input && input.notes || '').slice(0, 6000);
+          sendState({ notes: notes });
+          return Promise.resolve('\u2705 Notes saved.');
+        },
+      },
+    };
+  }
+
+  var RULES = [
+    'You work inside a real mobile browser tab. Tasks can span several pages; the page reloads when you navigate, but your history, plan and notes are kept.',
+    'Rules for accurate work:',
+    '1. agent_history may contain steps done on EARLIER pages. They are real and already done: never start over or repeat them. Continue from the next step.',
+    '2. Act only on elements listed in browser_state right now. Indexes change after every page change or update; never reuse an index from an older step.',
+    '3. Every action result ends with an Observation of what really changed. If it says there was no change or something failed, do not assume success: check the page and try another way.',
+    '4. Never invent facts, prices, names, links or results. Before you report anything about page content, read it with read_page_text (use query to search) and use only what it returns.',
+    '5. If you cannot find something after reasonable attempts (scroll, site search, read_page_text, list_links), say so plainly with done success=false. Do not guess.',
+    '6. Never repeat the same failing action more than twice; change approach.',
+    '7. For tasks with several steps or pages: call update_plan early (numbered items, mark done with [x]) and save_notes for facts you will need later.',
+    '8. Use open_url only with a URL the user gave, one you read on a page, or a well-known site or search URL.',
+    '9. The done text must start with the answer or result, then a short "What I did:" list of the key steps, then anything that is not finished.',
+  ].join('\n');
+
+  function createAgent() {
     var config = {
       baseURL: cfg.baseURL,
       apiKey: '',
       model: cfg.model,
       language: cfg.language || 'en-US',
       maxRetries: 1,
+      maxSteps: 40,
       enableMask: true,
+      customTools: extraTools(),
+      instructions: {
+        get system() {
+          var text = RULES;
+          if (plan) text += '\n\nCURRENT PLAN (kept across pages):\n' + plan;
+          if (notes) text += '\n\nSAVED NOTES (facts you found earlier; trust these):\n' + notes;
+          return text;
+        },
+      },
       customFetch: function (url, init) {
         return relayFetch(url, init).then(function (res) {
+          captureReflection(res.body);
           return new Response(res.body, {
             status: res.status || 200,
             headers: { 'Content-Type': 'application/json' },
           });
         });
       },
+      onBeforeTask: function (a) { hydrate(a); },
+      onBeforeStep: function (a) {
+        var total = seqBase + stepCount(a);
+        if (total >= MAX_TOTAL_STEPS + 1) {
+          var msg = 'Stopped after ' + total + ' steps without finishing. Try a shorter or more specific request.';
+          if (run) run.result = { success: false, data: msg };
+          throw new Error(msg);
+        }
+        if (total === MAX_TOTAL_STEPS - 4) a.pushObservation('Only 4 steps left for this task. Wrap up and call done with what you have (say what is not finished).');
+        if (total >= MAX_TOTAL_STEPS - 1) a.pushObservation('Step limit reached: call done NOW with what you found and what is not finished.');
+        // Read the DOM only once the page has loaded and stopped changing.
+        return settle(null, 2500);
+      },
     };
-    if (resumeContext) {
-      config.transformRequestBody = function (body) {
-        try {
-          if (body && Array.isArray(body.messages) && body.messages.length
-              && body.messages[0] && body.messages[0].role === 'system') {
-            body.messages[0].content = String(body.messages[0].content) + '\n\n' + resumeContext;
-          }
-        } catch (error) { /* leave the request untouched */ }
-        return body;
-      };
-    }
     var controller = new window.PageAgentController(config);
     config.pageController = controller;
     var created = new window.PageAgentCore(config);
     created.onAskUser = function (question, opts) { return askUser(question, opts && opts.signal); };
-    guardSensitiveClicks(created);
+    wrapTools(created);
     window.__nativekitPageAgent = created;
     created.addEventListener('statuschange', onStatus);
-    created.addEventListener('historychange', function () { scheduleHistorySync(); renderSteps(); });
+    created.addEventListener('historychange', function () { syncSteps(); renderSteps(); });
     created.addEventListener('activity', onActivity);
     return created;
   }
 
+  // The model's reflection for the step about to run (the core only records it
+  // after the action finishes — too late if that action navigates away).
+  function captureReflection(body) {
+    try {
+      var json = JSON.parse(body);
+      var msg = json && json.choices && json.choices[0] && json.choices[0].message;
+      if (!msg) return;
+      var args = msg.tool_calls && msg.tool_calls[0] && msg.tool_calls[0].function && msg.tool_calls[0].function.arguments;
+      var out = null;
+      if (typeof args === 'string') out = JSON.parse(args);
+      else if (typeof msg.content === 'string') {
+        var m = /({[\s\S]*})/.exec(msg.content);
+        if (m) out = JSON.parse(m[1]);
+      }
+      if (out && typeof out === 'object') {
+        lastReflection = { eval: out.evaluation_previous_goal || '', memory: out.memory || '', goal: out.next_goal || '' };
+      }
+    } catch (e) { /* keep the previous one */ }
+  }
+
+  function recordOutput(r) {
+    if (!r.pending) return String(r.output || '');
+    if (r.tool === 'open_url') return 'Opened ' + String(r.input && r.input.url || '') + '. The page then loaded (now on ' + location.href + ').';
+    if (r.tool === 'go_back') return 'Went back (now on ' + location.href + ').';
+    return 'The action ran and the page then navigated/reloaded before its result was captured (now on ' + location.href + '). Treat it as probably done and verify on the current page.';
+  }
+
+  // Put the earlier pages' steps back into the agent's own history, so the
+  // model sees them in <agent_history> and step numbers continue.
+  function hydrate(a) {
+    if (!hydrated.length) return;
+    var keep = hydrated.slice(-30);
+    var older = hydrated.slice(0, hydrated.length - keep.length);
+    seqBase = older.length;
+    finalSent = hydrated.length;
+    if (older.length) {
+      a.history.push({ type: 'observation', content: 'Earlier steps 1-' + older.length + ' (summary): ' + older.map(function (r) {
+        return r.seq + '. ' + (r.goal || actionText(r.tool, r.input, r.label)) + ' -> ' + recordOutput(r).slice(0, 80);
+      }).join(' | ').slice(0, 3000) });
+    }
+    keep.forEach(function (r) {
+      var input = r.input || {};
+      meta.set(input, { label: r.label || '', url: r.url || '', title: r.title || '' });
+      a.history.push({
+        type: 'step', stepIndex: r.seq - 1, nkHydrated: true,
+        reflection: { evaluation_previous_goal: r.eval || '', memory: r.memory || '', next_goal: r.goal || actionText(r.tool, input, r.label) },
+        action: { name: r.tool, input: input, output: recordOutput(r) },
+      });
+    });
+    var last = hydrated[hydrated.length - 1] || {};
+    a.history.push({ type: 'observation', content: '[Continuation] The page changed while this task was running. Steps 1-' + hydrated.length
+      + ' above were ALREADY DONE on earlier pages (last one on ' + (last.url || 'the previous page') + '). Now on ' + location.href
+      + '. Do NOT start over or repeat finished steps; look at this page and continue with the next step.' });
+    a.dispatchEvent(new Event('historychange'));
+  }
+
   function ensureAgent() {
-    if (!agent || agent.disposed) agent = createAgent(resumeContextForNextRun);
+    if (!agent || agent.disposed) agent = createAgent();
     return agent;
   }
 
   // Sensitive actions pause for the user (Atlas / Comet behaviour).
   var SENSITIVE = /\b(buy|pay|purchase|checkout|check out|place order|order now|send|submit|post|publish|delete|remove|confirm|book|reserve|subscribe|transfer|sign up|log ?out)\b/i;
 
+  function clean(text, max) {
+    text = String(text || '').replace(/\s+/g, ' ').trim();
+    max = max || 48;
+    return text.length > max ? text.slice(0, max - 2) + '\u2026' : text;
+  }
+
+  // Human-readable name of an indexed element: what the user sees on it, never
+  // the serialised "[2]<button …>" line the model gets.
   function elementLabel(target, index) {
     try {
+      var node = elementAt(target, index);
+      if (node) {
+        var aria = node.getAttribute && (node.getAttribute('aria-label') || '');
+        var labelled = '';
+        var ids = node.getAttribute && node.getAttribute('aria-labelledby');
+        if (ids) ids.split(/\s+/).forEach(function (id) { var l = document.getElementById(id); if (l) labelled += ' ' + (l.innerText || l.textContent || ''); });
+        var tag = String(node.tagName || '').toLowerCase();
+        var isField = tag === 'input' || tag === 'textarea' || tag === 'select';
+        var text = isField ? '' : (node.innerText || node.textContent || '');
+        var forLabel = '';
+        if (isField && node.labels && node.labels[0]) forLabel = node.labels[0].innerText || '';
+        var value = tag === 'input' && /^(submit|button|reset)$/i.test(node.type || '') ? node.value : '';
+        var img = node.querySelector && node.querySelector('img[alt]');
+        var candidates = [aria, labelled, text, value, forLabel, node.getAttribute && node.getAttribute('placeholder'),
+          node.getAttribute && node.getAttribute('title'), node.getAttribute && node.getAttribute('alt'), img && img.getAttribute('alt'),
+          node.getAttribute && node.getAttribute('name')];
+        for (var i = 0; i < candidates.length; i += 1) {
+          var c = clean(candidates[i]);
+          if (c) return c;
+        }
+      }
+      // Fall back to the serialised line, stripped of its markup.
       var map = target.pageController && target.pageController.elementTextMap;
-      var text = map && typeof map.get === 'function' ? map.get(index) : '';
-      text = String(text || '').replace(/\s+/g, ' ').trim();
-      return text.length > 48 ? text.slice(0, 46) + '\u2026' : text;
+      var line = String(map && typeof map.get === 'function' ? map.get(index) || '' : '');
+      var m = /^\[\d+\]<[^>]*>([^<]*)/.exec(line);
+      if (m && clean(m[1])) return clean(m[1]);
+      var attr = /(?:aria-label|placeholder|title|alt|value)=["']?([^"'>]+)/i.exec(line);
+      if (attr) return clean(attr[1]);
+      return '';
     } catch (e) { return ''; }
   }
 
-  function guardSensitiveClicks(target) {
-    try {
-      var original = target.tools.get('click_element_by_index');
-      if (!original || typeof original.execute !== 'function') return;
-      var wrapped = Object.assign({}, original, {
-        execute: function (input, ctx) {
-          var self = this;
-          var label = elementLabel(target, input && input.index);
-          if (!label || !SENSITIVE.test(label)) return original.execute.call(self, input, ctx);
-          return confirmAction('Click \u201c' + label + '\u201d', ctx && ctx.signal).then(function (allowed) {
-            if (!allowed) return 'The user declined this action. Do not try it again; finish and tell the user what is left for them to do.';
-            return original.execute.call(self, input, ctx);
-          });
-        },
-      });
-      target.tools.set('click_element_by_index', wrapped);
-    } catch (e) { /* guard is best effort */ }
-  }
-
   // ---------- plain-language step text --------------------------------------
-  function actionText(name, input, target) {
+  function actionText(name, input, label) {
     input = input || {};
+    if (label === undefined && input && typeof input === 'object') label = (meta.get(input) || {}).label;
     switch (name) {
-      case 'click_element_by_index': {
-        var l = elementLabel(target || agent, input.index);
-        return l ? 'Click \u201c' + l + '\u201d' : 'Click element ' + input.index;
-      }
-      case 'input_text': return 'Type \u201c' + String(input.text || '').slice(0, 40) + '\u201d';
-      case 'select_dropdown_option': return 'Choose \u201c' + String(input.text || '').slice(0, 40) + '\u201d';
+      case 'click_element_by_index':
+        return label ? 'Click \u201c' + label + '\u201d' : 'Click an element';
+      case 'input_text': return 'Type \u201c' + clean(input.text, 40) + '\u201d' + (label ? ' into \u201c' + label + '\u201d' : '');
+      case 'select_dropdown_option': return 'Choose \u201c' + clean(input.text, 40) + '\u201d';
       case 'scroll': return input.down === false ? 'Scroll up' : 'Scroll down';
       case 'scroll_horizontally': return input.right === false ? 'Scroll left' : 'Scroll right';
       case 'wait': return 'Wait ' + (input.seconds || 1) + 's for the page';
+      case 'wait_for_text': return 'Wait for \u201c' + clean(input.text, 30) + '\u201d';
       case 'ask_user': return 'Ask you a question';
       case 'execute_javascript': return 'Run a script on the page';
+      case 'read_page_text': return input.query ? 'Look for \u201c' + clean(input.query, 30) + '\u201d on the page' : 'Read the page';
+      case 'list_links': return 'Look at the links on the page';
+      case 'open_url': return 'Open ' + clean(String(input.url || '').replace(/^https?:\/\/(www\.)?/, ''), 40);
+      case 'go_back': return 'Go back';
+      case 'update_plan': return 'Update the plan';
+      case 'save_notes': return 'Save notes';
       case 'done': return input.success === false ? 'Finish (not fully done)' : 'Finish';
       default: return name ? String(name).replace(/_/g, ' ') : 'Think';
     }
@@ -769,13 +1221,20 @@
 
   function setLive(text) {
     if (liveText) liveText.textContent = text;
-    if (pillText) pillText.textContent = text + (run ? ' \u00b7 step ' + Math.max(1, run.count) : '');
+    if (pillText) pillText.textContent = text + (run ? ' \u00b7 step ' + (run.count + 1) : '');
+    // Keep the live row in the step list in sync (it used to keep showing the
+    // previous step while waiting for Allow / Deny).
+    var row = run && run.list.querySelector('.step.live .sgoal');
+    if (row) row.textContent = text;
   }
 
   function onActivity(event) {
     var d = (event && event.detail) || {};
     if (d.type === 'thinking') setLive('Thinking\u2026');
-    else if (d.type === 'executing') setLive(actionText(d.tool, d.input) + '\u2026');
+    else if (d.type === 'executing') {
+      var lbl = d.input && typeof d.input.index === 'number' && agent ? elementLabel(agent, d.input.index) : undefined;
+      setLive(actionText(d.tool, d.input, lbl) + '\u2026');
+    }
     else if (d.type === 'retrying') setLive('Model busy, retrying (' + d.attempt + '/' + d.maxAttempts + ')\u2026');
     else if (d.type === 'error') setLive('Something went wrong');
   }
@@ -798,17 +1257,32 @@
     startTask(text);
   }
 
+  function newRunId() {
+    return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
   function startTask(task, opts) {
     opts = opts || {};
     buildUi();
     if (running()) return;
     lastTask = task;
     emptyEl.style.display = 'none';
-    if (!opts.resumed) addUser(task);
-    openRun(opts.earlier);
-    sendState({ task: task, status: 'running', result: '' });
+    if (!opts.resumed) {
+      // A brand-new run: native replaces the old session when it sees the new id.
+      addUser(task);
+      runId = newRunId();
+      hydrated = [];
+      seqBase = 0;
+      finalSent = 0;
+      plan = '';
+      notes = '';
+      fails = Object.create(null);
+      lastReflection = {};
+      sendState({ task: task, status: 'running', result: '', plan: '', notes: '' });
+    }
+    openRun();
     setRunning(true);
-    setLive(opts.resumed ? 'Resuming on this page\u2026' : 'Thinking\u2026');
+    setLive(opts.resumed ? 'Continuing on this page\u2026' : 'Thinking\u2026');
     showPanel();
     var a = ensureAgent();
     a.execute(task).then(function (result) {
@@ -883,16 +1357,24 @@
     var steps = (agent.history || []).filter(function (h) { return h && h.type === 'step'; });
     // Re-render only what changed: finished steps + one live row.
     while (run.list.childNodes.length > run.base) run.list.removeChild(run.list.lastChild);
+    if (seqBase) run.list.appendChild(el('li', 'earlier', seqBase + ' earlier steps on previous pages'));
+    var hadHydrated = false;
     steps.forEach(function (item) {
       var name = item.action && item.action.name;
+      if (!item.nkHydrated && hadHydrated) {
+        run.list.appendChild(el('li', 'earlier', 'Page changed \u2014 continuing here'));
+        hadHydrated = false;
+      }
+      if (item.nkHydrated) hadHydrated = true;
       if (name === 'done') return;
-      var ok = !(item.action && typeof item.action.output === 'string' && /^(error|failed)/i.test(item.action.output));
+      var ok = !(item.action && failed(item.action.output));
       run.list.appendChild(stepRow(stepTitle(item), actionText(name, item.action && item.action.input), ok ? 'done' : 'bad'));
     });
-    run.count = steps.length;
+    if (hadHydrated && running()) run.list.appendChild(el('li', 'earlier', 'Page changed \u2014 continuing here'));
+    run.count = seqBase + steps.length;
     if (running()) {
       run.list.appendChild(stepRow(liveText ? liveText.textContent : 'Thinking\u2026', '', 'live'));
-      run.title.textContent = 'Working \u00b7 step ' + (steps.length + 1);
+      run.title.textContent = 'Working \u00b7 step ' + (run.count + 1);
     }
     updateMeta();
     setLive(liveText ? liveText.textContent : 'Thinking\u2026');
@@ -923,9 +1405,17 @@
     }
     r.head.replaceChild(badge, r.badge);
     var secs = Math.round((Date.now() - r.start) / 1000);
-    r.meta.textContent = r.count + (r.count === 1 ? ' step' : ' steps') + ' \u00b7 ' + (secs < 60 ? secs + 's' : Math.floor(secs / 60) + 'm ' + (secs % 60) + 's');
+    var pages = Object.create(null);
+    hydrated.forEach(function (h) { if (h && h.url) pages[h.url] = 1; });
+    pages[location.href] = 1;
+    var pageCount = Object.keys(pages).length;
+    r.meta.textContent = r.count + (r.count === 1 ? ' step' : ' steps') + (pageCount > 1 ? ' \u00b7 ' + pageCount + ' pages' : '') + ' \u00b7 ' + (secs < 60 ? secs + 's' : Math.floor(secs / 60) + 'm ' + (secs % 60) + 's');
     if (text) addAnswer(text, status !== 'completed');
+    if (quiet && status === 'stopped') threadEl.appendChild(el('div', 'earlier', 'This task continued on another page.'));
+    // Done / stopped / failed: native drops the run's steps so nothing resumes it.
     sendState({ status: status, result: text });
+    hydrated = [];
+    seqBase = 0;
     if (!isOpen && fab) fab.classList.add('unread');
     syncFloating();
   }
@@ -967,9 +1457,13 @@
     while (threadEl.firstChild) threadEl.removeChild(threadEl.firstChild);
     emptyEl.style.display = 'block';
     lastTask = '';
-    resumeContextForNextRun = '';
     if (agent) { try { agent.dispose(); } catch (e) {} agent = null; }
     sendState({ task: '', status: 'idle', result: '' });
+    runId = '';
+    hydrated = [];
+    seqBase = 0;
+    plan = '';
+    notes = '';
   }
 
   // ---------- ask_user + confirmations ---------------------------------------
@@ -1053,9 +1547,24 @@
 
   // ---------- boot + restore -------------------------------------------------
   var restoreHandled = false;
+  var resuming = false;
+
+  function parseSteps(list) {
+    var out = [];
+    (Array.isArray(list) ? list : []).forEach(function (raw) {
+      try {
+        var r = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (r && typeof r === 'object' && r.tool) out.push(r);
+      } catch (e) { /* skip a broken record */ }
+    });
+    out.sort(function (x, y) { return (x.seq | 0) - (y.seq | 0); });
+    return out;
+  }
 
   function onRestored(data) {
-    if (restoreHandled) return;
+    var canResume = data.resume === true && !running() && !resuming;
+    // A late answer (after the default boot) still resumes a running task.
+    if (restoreHandled && !(canResume && threadEl && !threadEl.firstChild)) return;
     restoreHandled = true;
     if (typeof data.dark === 'boolean') theme.dark = data.dark;
     if (/^#[0-9a-fA-F]{6}$/.test(String(data.accent || ''))) theme.accent = data.accent;
@@ -1064,20 +1573,30 @@
     var task = typeof data.task === 'string' && data.task ? data.task : null;
     var status = typeof data.status === 'string' ? data.status : '';
     var result = typeof data.result === 'string' ? data.result : '';
-    var historyJson = typeof data.history === 'string' ? data.history : '';
 
-    if (task && status === 'running') {
-      // The page navigated mid-task: show what happened so far and continue.
-      resumeContextForNextRun = resumeContextFrom(historyJson);
-      var earlier = [];
-      try {
-        JSON.parse(historyJson || '[]').forEach(function (h) {
-          if (h && h.type === 'step' && h.message && h.tool !== 'done') earlier.push(String(h.message));
-        });
-      } catch (e) { /* no earlier steps */ }
+    if (task && canResume && data.runId) {
+      // The page navigated mid-task: take the run over and continue it from
+      // the next step with the full history (never restart it).
+      resuming = true;
+      runId = String(data.runId);
+      plan = String(data.plan || '');
+      notes = String(data.notes || '');
+      hydrated = parseSteps(data.steps);
+      seqBase = 0;
+      finalSent = hydrated.length;
+      fails = Object.create(null);
+      lastReflection = {};
+      lastTask = task;
       emptyEl.style.display = 'none';
       addUser(task);
-      setTimeout(function () { startTask(task, { resumed: true, earlier: earlier.slice(-8) }); }, 500);
+      showPanel();
+      setLive('Waiting for the page to load\u2026');
+      // Let the new page finish loading (and any redirect happen) first.
+      settle(null, 6000).then(function () {
+        resuming = false;
+        if (runId !== String(data.runId) || running()) return;
+        startTask(task, { resumed: true });
+      });
       return;
     }
     if (task && (status === 'completed' || status === 'error' || status === 'stopped')) {
@@ -1091,6 +1610,19 @@
     syncFloating();
   }
 
+  // Native says another page now drives this run (e.g. this one came back
+  // from the back/forward cache): stop here without touching the session.
+  function onEvicted(data) {
+    if (!data || data.runId !== runId || !running()) return;
+    silentStop();
+  }
+
+  function silentStop() {
+    quiet = true;
+    var done = function () { quiet = false; runId = ''; };
+    try { Promise.resolve(agent.stop()).then(done, done); } catch (e) { done(); }
+  }
+
   function defaultBoot() {
     buildUi();
     if (cfg.autoShow === true) showPanel();
@@ -1101,8 +1633,16 @@
     if (!document.body) { setTimeout(boot, 100); return; }
     requestRestore();
     // If the native side never answers (older host, race), boot normally.
-    setTimeout(function () { if (!restoreHandled) { restoreHandled = true; defaultBoot(); } }, 600);
+    setTimeout(function () { if (!restoreHandled) { restoreHandled = true; defaultBoot(); } }, 1500);
   }
+
+  // Back/forward cache: a frozen page coming back must not keep driving an
+  // old copy of the run. Stop it quietly and re-sync from native.
+  window.addEventListener('pageshow', function (event) {
+    if (!event || !event.persisted) return;
+    if (running()) silentStop();
+    setTimeout(function () { restoreHandled = false; requestRestore(); }, 300);
+  });
 
   // SPAs that re-render <body> drop foreign nodes: keep the panel host alive.
   setInterval(function () {

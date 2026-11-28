@@ -45,8 +45,17 @@ import java.util.concurrent.Executors;
  *    NativeKit transport).
  *  - Only main-frame messages are honoured, and LLM usage is capped per session
  *    (state/history mirroring never counts toward that cap).
- *  - The session store (task/status/compact history) is in-memory per host and
- *    only ever flows back to pages of this same WebView session.
+ *  - The task session (goal, step history, plan, notes, status) is in-memory,
+ *    keyed per browser tab, and only ever flows back to pages of that tab.
+ *
+ * Task continuity across navigations: the page (and the agent living in it)
+ * dies on every real page load; this store does not. The bootstrap writes each
+ * step here BEFORE it acts (so a click that navigates is never lost) and
+ * finalises it with the result afterwards. The next page asks for the session
+ * back, re-hydrates the steps into the agent's own history (so the model sees
+ * them in its prompt) and continues from the next step. A per-document owner
+ * id (lease) makes sure only one page drives a run: a stale page (bfcache,
+ * an iframe, a duplicate injection) is told to stop.
  */
 public final class PageAgentHost {
     public static final String JS_OBJECT = "NativeKitPageAgent";
@@ -72,7 +81,30 @@ public final class PageAgentHost {
     private static final int MAX_CALLS_DEFAULT = 60;
     private static final int MAX_REQUEST_CHARS = 2_000_000;
     private static final int MAX_RESPONSE_CHARS = 2_000_000;
-    private static final int MAX_HISTORY_CHARS = 131_072;
+    private static final int MAX_STEPS = 120;
+    private static final int MAX_STEP_CHARS = 8_000;
+
+    /** One agent task run, kept natively so it survives page loads. */
+    static final class Session {
+        String runId = "";
+        String owner = "";
+        String task = "";
+        String status = "";
+        String result = "";
+        String plan = "";
+        String notes = "";
+        final java.util.ArrayList<String> steps = new java.util.ArrayList<>();
+
+        void clearRun() {
+            steps.clear();
+            plan = "";
+            notes = "";
+            owner = "";
+        }
+    }
+
+    // Per-tab sessions: survive the tab's WebView being recreated, too.
+    private static final java.util.Map<String, Session> SESSIONS = new java.util.concurrent.ConcurrentHashMap<>();
 
     private static volatile String cachedInjection;
     // One shared worker for the whole process keeps relay calls serialized.
@@ -92,10 +124,7 @@ public final class PageAgentHost {
     // on every real navigation — this host does not. The page mirrors
     // {task, status, compact history} here as a run progresses, and the next
     // page asks it back to resume in-flight work. See bootstrap.js.
-    private String sessionTask;
-    private String sessionStatus;
-    private String sessionResult;
-    private String sessionHistory;
+    private Session session = new Session();
     // Shell appearance mirrored into the agent panel (Light/Dark + accent).
     private volatile boolean themeDark = true;
     private volatile String themeAccent = "#60A5FA";
@@ -121,6 +150,11 @@ public final class PageAgentHost {
 
     /** As above, painting the agent panel in the browser's current theme. */
     public static PageAgentHost install(WebView webView, Context context, boolean enabled, String language, boolean dark, String accent) {
+        return install(webView, context, enabled, language, dark, accent, null);
+    }
+
+    /** As above, keeping the agent's task session under {@code sessionKey} (the tab id). */
+    public static PageAgentHost install(WebView webView, Context context, boolean enabled, String language, boolean dark, String accent, String sessionKey) {
         if (webView == null || !enabled || !supported()) return null;
         try {
             String injection = cachedInjection(context);
@@ -128,6 +162,11 @@ public final class PageAgentHost {
             PageAgentHost host = new PageAgentHost(MAX_CALLS_DEFAULT);
             host.themeDark = dark;
             host.themeAccent = accent == null ? "#60A5FA" : accent;
+            if (sessionKey != null && !sessionKey.isEmpty()) {
+                Session existing = SESSIONS.get(sessionKey);
+                if (existing == null) { existing = new Session(); SESSIONS.put(sessionKey, existing); }
+                host.session = existing;
+            }
             JSONObject cfg = new JSONObject();
             cfg.put("bridge", JS_OBJECT);
             cfg.put("token", host.token);
@@ -158,6 +197,11 @@ public final class PageAgentHost {
         } catch (Throwable error) {
             return null;
         }
+    }
+
+    /** Drops a closed tab's task session. */
+    public static void forgetSession(String sessionKey) {
+        if (sessionKey != null) SESSIONS.remove(sessionKey);
     }
 
     /**
@@ -200,11 +244,11 @@ public final class PageAgentHost {
             if ("llm".equals(kind)) {
                 handleLlm(request, proxy);
             } else if ("state".equals(kind)) {
-                handleState(request);
-            } else if ("history".equals(kind)) {
-                handleHistory(request);
+                handleState(request, proxy);
+            } else if ("step".equals(kind)) {
+                handleStep(request, proxy);
             } else if ("restore".equals(kind)) {
-                handleRestore(proxy);
+                handleRestore(request, proxy);
             }
         } catch (Throwable error) {
             return;
@@ -230,32 +274,109 @@ public final class PageAgentHost {
         NETWORK.execute(() -> relay(id, body, proxy));
     }
 
-    // Mirrors the in-page agent's task/status so the next page can resume.
-    // Not an LLM call: it never counts toward the call cap.
-    private void handleState(JSONObject request) {
-        String task = request.optString("task", null);
-        if (task != null) sessionTask = task.length() > 2000 ? task.substring(0, 2000) : task;
-        String status = request.optString("status", null);
-        if (status != null) sessionStatus = status.length() > 40 ? status.substring(0, 40) : status;
-        String result = request.optString("result", null);
-        if (result != null) sessionResult = result.length() > 4000 ? result.substring(0, 4000) : result;
+    private static String cap(String value, int limit) {
+        if (value == null) return "";
+        return value.length() > limit ? value.substring(0, limit) : value;
     }
 
-    private void handleHistory(JSONObject request) {
-        String body = request.optString("body", "");
-        if (body.isEmpty()) return;
-        sessionHistory = body.length() > MAX_HISTORY_CHARS ? body.substring(0, MAX_HISTORY_CHARS) : body;
+    private static boolean terminal(String status) {
+        return "completed".equals(status) || "stopped".equals(status) || "error".equals(status);
     }
 
-    private void handleRestore(JavaScriptReplyProxy proxy) {
+    /** Tells a page that is not (or no longer) the driver of the run to stop. */
+    private void evict(JavaScriptReplyProxy proxy, String runId) {
         try {
             JSONObject response = new JSONObject();
             response.put("v", 1);
-            response.put("kind", "state-resp");
-            response.put("task", sessionTask == null ? "" : sessionTask);
-            response.put("status", sessionStatus == null ? "" : sessionStatus);
-            response.put("result", sessionResult == null ? "" : sessionResult);
-            response.put("history", sessionHistory == null ? "" : sessionHistory);
+            response.put("kind", "evict");
+            response.put("runId", runId == null ? "" : runId);
+            reply(proxy, response.toString());
+        } catch (Throwable ignored) {}
+    }
+
+    // Task / status / plan / notes of the run. Not an LLM call: never counts
+    // toward the call cap.
+    private void handleState(JSONObject request, JavaScriptReplyProxy proxy) {
+        Session s = session;
+        synchronized (s) {
+            String runId = request.optString("runId", "");
+            String pid = request.optString("pid", "");
+            String status = request.has("status") ? cap(request.optString("status", ""), 40) : null;
+            if ("idle".equals(status)) {
+                // New chat: forget everything.
+                s.clearRun();
+                s.runId = "";
+                s.task = "";
+                s.status = "";
+                s.result = "";
+                return;
+            }
+            if (!runId.equals(s.runId)) {
+                // Only a page starting a brand-new run may replace the session.
+                if (!"running".equals(status) || runId.isEmpty()) return;
+                s.clearRun();
+                s.runId = runId;
+                s.owner = pid;
+                s.result = "";
+                calls = 0; // the LLM call cap is per task run
+            } else if ("running".equals(s.status) && !s.owner.isEmpty() && !s.owner.equals(pid)) {
+                evict(proxy, runId);
+                return;
+            }
+            if (request.has("task")) s.task = cap(request.optString("task", ""), 2000);
+            if (request.has("result")) s.result = cap(request.optString("result", ""), 6000);
+            if (request.has("plan")) s.plan = cap(request.optString("plan", ""), 4000);
+            if (request.has("notes")) s.notes = cap(request.optString("notes", ""), 6000);
+            if (status != null) {
+                s.status = status;
+                // Stop / done / failure end the run: no page may resume it.
+                if (terminal(status)) s.clearRun();
+            }
+        }
+    }
+
+    /**
+     * One step record. Written once before the action runs (pending) and again
+     * with the result, keyed by its 1-based sequence number in the run, so
+     * duplicates and re-sends are idempotent.
+     */
+    private void handleStep(JSONObject request, JavaScriptReplyProxy proxy) {
+        Session s = session;
+        synchronized (s) {
+            String runId = request.optString("runId", "");
+            if (runId.isEmpty() || !runId.equals(s.runId) || !"running".equals(s.status)) return;
+            String pid = request.optString("pid", "");
+            if (!s.owner.isEmpty() && !s.owner.equals(pid)) { evict(proxy, runId); return; }
+            int seq = request.optInt("seq", 0);
+            String step = request.optString("step", "");
+            if (seq < 1 || step.isEmpty() || step.length() > MAX_STEP_CHARS) return;
+            if (seq <= s.steps.size()) s.steps.set(seq - 1, step);
+            else if (seq == s.steps.size() + 1 && s.steps.size() < MAX_STEPS) s.steps.add(step);
+        }
+    }
+
+    private void handleRestore(JSONObject request, JavaScriptReplyProxy proxy) {
+        try {
+            Session s = session;
+            JSONObject response = new JSONObject();
+            synchronized (s) {
+                boolean resume = "running".equals(s.status) && !s.runId.isEmpty() && !s.task.isEmpty();
+                // The newest document claims the run; any older page still
+                // holding it (bfcache, duplicate) is evicted on its next write.
+                if (resume) s.owner = request.optString("pid", "");
+                response.put("v", 1);
+                response.put("kind", "state-resp");
+                response.put("runId", s.runId);
+                response.put("task", s.task);
+                response.put("status", s.status);
+                response.put("result", s.result);
+                response.put("plan", s.plan);
+                response.put("notes", s.notes);
+                response.put("resume", resume);
+                org.json.JSONArray steps = new org.json.JSONArray();
+                for (String step : s.steps) steps.put(step);
+                response.put("steps", steps);
+            }
             // Current shell appearance, so a freshly navigated page paints the
             // agent panel in the user's theme (the document-start config only
             // carries the theme from when the tab was created).
